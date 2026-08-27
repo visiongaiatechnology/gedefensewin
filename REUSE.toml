@@ -1,0 +1,13 @@
+version = 1
+
+[[annotations]]
+path = ["src/**", "audit/**", "engine/**", "xdr/**", "installer/**", "build/**", "tools/**", "docs/**", ".github/**", "*.md", "*.txt", "VERSION", ".gitignore", ".gitattributes", "sbom/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 VisionGaia Technology"
+SPDX-License-Identifier = "AGPL-3.0-only"
+
+[[annotations]]
+path = ["branding/**", "src/**/gedefense-logo.png", "src/**/gedefense.ico"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 VisionGaia Technology"
+SPDX-License-Identifier = "LicenseRef-VGT-Trademark-Restricted"

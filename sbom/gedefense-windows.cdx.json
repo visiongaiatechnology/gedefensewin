@@ -1,0 +1,85 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:71c8bb78-96a0-4f73-b89f-1e66ff45a232",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-08-27T00:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@2.3.2",
+      "group": "VisionGaiaTechnology",
+      "name": "GeDefense-Windows",
+      "version": "2.3.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "AGPL-3.0-only"
+          }
+        }
+      ],
+      "purl": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@2.3.2"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/fyne.io/systray@v1.12.2",
+      "name": "fyne.io/systray",
+      "version": "v1.12.2",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "purl": "pkg:golang/fyne.io/systray@v1.12.2"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/github.com/jchv/go-webview2@56598839c808",
+      "name": "github.com/jchv/go-webview2",
+      "version": "56598839c808",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "purl": "pkg:golang/github.com/jchv/go-webview2@56598839c808"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/golang.org/x/sys@v0.35.0",
+      "name": "golang.org/x/sys",
+      "version": "v0.35.0",
+      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
+      "purl": "pkg:golang/golang.org/x/sys@v0.35.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/github.com/godbus/dbus/v5@v5.1.0",
+      "name": "github.com/godbus/dbus/v5",
+      "version": "v5.1.0",
+      "licenses": [{ "license": { "id": "BSD-2-Clause" } }],
+      "purl": "pkg:golang/github.com/godbus/dbus/v5@v5.1.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:golang/github.com/jchv/go-winloader@c1995be93bd1",
+      "name": "github.com/jchv/go-winloader",
+      "version": "c1995be93bd1",
+      "licenses": [{ "license": { "id": "ISC" } }],
+      "purl": "pkg:golang/github.com/jchv/go-winloader@c1995be93bd1"
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@2.3.2",
+      "dependsOn": [
+        "pkg:golang/fyne.io/systray@v1.12.2",
+        "pkg:golang/github.com/jchv/go-webview2@56598839c808",
+        "pkg:golang/golang.org/x/sys@v0.35.0"
+      ]
+    },
+    {
+      "ref": "pkg:golang/fyne.io/systray@v1.12.2",
+      "dependsOn": ["pkg:golang/github.com/godbus/dbus/v5@v5.1.0"]
+    },
+    {
+      "ref": "pkg:golang/github.com/jchv/go-webview2@56598839c808",
+      "dependsOn": ["pkg:golang/github.com/jchv/go-winloader@c1995be93bd1"]
+    }
+  ]
+}
+
