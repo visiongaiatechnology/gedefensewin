@@ -1,0 +1,7 @@
+/* STATUS: DIAMANT VGT SUPREME */
+.brand img {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 14px rgba(211, 170, 70, .24));
+}
