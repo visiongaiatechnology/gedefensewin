@@ -1,0 +1,11 @@
+{
+  "name": "VGT Isolation",
+  "version": "1.0.0",
+  "asrMode": "Enabled",
+  "cloudBlockLevel": "HighPlus",
+  "controlledFolderAccess": "Enabled",
+  "defaultOutboundAction": "Allow",
+  "disableUsbStorage": true,
+  "disableRemoteDesktop": true,
+  "preserveWindowsUpdate": true
+}

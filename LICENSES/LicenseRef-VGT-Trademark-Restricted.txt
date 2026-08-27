@@ -1,0 +1,8 @@
+VGT TRADEMARK-RESTRICTED ASSET TERMS
+
+Copyright © 2026 VisionGaia Technology. All trademark rights reserved.
+
+The graphical assets covered by this notice are not licensed under AGPL-3.0-only. Permission is granted to reproduce them in unmodified official VGT GeDefense source builds, local development builds, documentation, testing, research and truthful reporting.
+
+Publicly distributed modified or independently signed builds must remove or replace these assets unless VisionGaia Technology has granted separate written permission. Factual statements such as “Fork of VGT GeDefense” remain permitted. See TRADEMARKS.md for the complete repository policy.
+
