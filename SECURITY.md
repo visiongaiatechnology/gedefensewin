@@ -4,7 +4,8 @@
 
 | Version | Sicherheitsupdates |
 |---|---|
-| 2.3.x | Ja |
+| 4.0.x beta | Ja |
+| 2.3.x | Nur kritische Sicherheitskorrekturen während der V4-Beta |
 | kleiner als 2.3 | Nein |
 
 ## Vertrauliche Meldung

@@ -25,6 +25,20 @@ function Add-VgtFinding {
     $findings.Add([pscustomobject][ordered]@{Id=$id;TimestampUtc=[DateTime]::UtcNow.ToString('o');Severity=$Severity;Category=$Category;Title=$Title;Description=$Description;Entity=$Entity;Evidence=$Evidence})
 }
 
+
+function Get-VgtEvidenceMetadata {
+    param([AllowEmptyString()][string]$Text = '')
+    if ([string]::IsNullOrEmpty($Text)) { return 'sha256=;bytes=0' }
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+    return ("sha256={0};bytes={1}" -f $digest,$bytes.Length)
+}
+
 function Get-VgtExecutableFromCommand {
     param([AllowEmptyString()][string]$CommandLine = '')
     if ([string]::IsNullOrWhiteSpace($CommandLine)) { return '' }
@@ -62,7 +76,8 @@ foreach ($process in $processes) {
     $commandLine = [string]$process.CommandLine
     $pidKey = [string]$process.ProcessId
     if ($commandLine -match '(?i)(?:\s|^)-(?:e|en|enc|enco|encodedcommand)\s+[A-Za-z0-9+/=]{20,}|DownloadString\s*\(|FromBase64String\s*\(|Reflection\.Assembly') {
-        Add-VgtFinding 'High' 'Execution' 'Suspicious encoded or in-memory command line' 'A live process uses an execution pattern commonly associated with fileless payloads. Validate parentage and operator intent.' "$($process.Name) [$pidKey]" ($commandLine.Substring(0,[Math]::Min(800,$commandLine.Length)))
+        $commandEvidence = Get-VgtEvidenceMetadata $commandLine
+        Add-VgtFinding 'High' 'Execution' 'Suspicious encoded or in-memory command line' 'A live process uses an execution pattern commonly associated with fileless payloads. Validate parentage and operator intent.' "$($process.Name) [$pidKey]" $commandEvidence
     }
     if ($path -and (Test-VgtUserWritablePath $path) -and $connectionsByPid.ContainsKey($pidKey)) {
         $signature = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction SilentlyContinue
@@ -95,7 +110,13 @@ foreach ($location in $runLocations) {
 foreach ($consumerClass in 'CommandLineEventConsumer','ActiveScriptEventConsumer') {
     foreach ($consumer in @(Get-CimInstance -Namespace 'root\subscription' -ClassName $consumerClass -ErrorAction SilentlyContinue | Select-Object -First 100)) {
         $scanned++
-        $details = ($consumer | Select-Object Name,CommandLineTemplate,ExecutablePath,ScriptingEngine,ScriptText | ConvertTo-Json -Compress -Depth 3)
+        $sensitiveMaterial = (([string]$consumer.CommandLineTemplate) + "`n" + ([string]$consumer.ScriptText))
+        $details = [ordered]@{
+            class = $consumerClass
+            executablePath = [string]$consumer.ExecutablePath
+            scriptingEngine = [string]$consumer.ScriptingEngine
+            sensitiveEvidence = Get-VgtEvidenceMetadata $sensitiveMaterial
+        } | ConvertTo-Json -Compress
         $severity = if($consumerClass -eq 'ActiveScriptEventConsumer'){'High'}else{'Medium'}
         Add-VgtFinding $severity 'Persistence' 'Permanent WMI event consumer present' 'Permanent WMI consumers are a legitimate administration mechanism but also a durable persistence primitive. Verify provenance.' ([string]$consumer.Name) $details
     }
@@ -149,7 +170,7 @@ $medium = @($findings | Where-Object Severity -eq 'Medium').Count
 $low = @($findings | Where-Object Severity -eq 'Low').Count
 [ordered]@{
     TimestampUtc = [DateTime]::UtcNow.ToString('o')
-    Engine = 'VGT MHX 5.0 read-only XDR'
+    Engine = 'VGT MHX 7.0 read-only XDR'
     Scanned = $scanned
     Critical = $critical
     High = $high

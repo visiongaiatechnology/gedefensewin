@@ -33,13 +33,25 @@ func LoadOrCreateToken(path string) (string, error) {
 		return "", err
 	}
 	token := base64.RawURLEncoding.EncodeToString(secret)
-	temporary := path + ".new"
-	if err := os.WriteFile(temporary, []byte(token+"\n"), 0o600); err != nil {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return LoadOrCreateToken(path)
+	}
+	if err != nil {
 		return "", err
 	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
-		return "", err
+	_, writeErr := file.Write([]byte(token + "\n"))
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr != nil {
+		_ = os.Remove(path)
+		return "", writeErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(path)
+		return "", closeErr
 	}
 	return token, nil
 }

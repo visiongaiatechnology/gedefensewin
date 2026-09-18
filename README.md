@@ -1,775 +1,175 @@
-# VGT GeDefense Windows
+# VGT GeDefense Windows 4
 
-<div align="center">
+[![Status](https://img.shields.io/badge/status-v4.0.0--beta.1-4cc9ff?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-168bff?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin)
+[![License](https://img.shields.io/badge/license-AGPL--3.0--only-31d0aa?style=for-the-badge)](LICENSE)
+[![Security Standard](https://img.shields.io/badge/security-DIAMANT%20VGT%20SUPREME-blueviolet?style=for-the-badge)](ARCHITECTURE.md)
+[![Dependencies](https://img.shields.io/badge/dependencies-0%20Go%20Modules%20%7C%200%20CDNs-success?style=for-the-badge)](DEPENDENCIES.md)
 
-### Sovereign Security Fabric for Windows
-
-![Version](https://img.shields.io/badge/Version-2.3.2-D4AF37?style=for-the-badge)
-![Status](https://img.shields.io/badge/Status-PLATIN_RC-111111?style=for-the-badge)
-![Platform](https://img.shields.io/badge/Platform-Windows_11_Enterprise-0078D4?style=for-the-badge\&logo=windows)
-![License](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=for-the-badge)
-![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=for-the-badge\&logo=go)
-
-![MHX](https://img.shields.io/badge/MHX_XDR-6.0-D4AF37?style=for-the-badge)
-![Architecture](https://img.shields.io/badge/Architecture-Local--First-brightgreen?style=for-the-badge)
-![Cloud](https://img.shields.io/badge/Cloud_Control-None-success?style=for-the-badge)
-![Evidence](https://img.shields.io/badge/Evidence-HMAC--SHA--256-purple?style=for-the-badge)
-
-**LOCAL-FIRST · ZERO CLOUD CONTROL · MHX XDR · DEFENDER · ASR · APP CONTROL · WFP · SYSTEM HARDENING · FILE INTEGRITY · CRYPTOGRAPHIC EVIDENCE**
-
-</div>
+GeDefense Windows 4 ist die souveräne, lokal überprüfbare Endpoint-Defense- und Orchestrierungsplattform von VisionGaia Technology. Sie vereint Microsoft Defender Antivirus, Windows Filtering Platform (WFP), Attack Surface Reduction (ASR), Windows App Control (WDAC), Baseline-Systemhärtung, SafetySys Compliance Audit, MHX EDR/XDR, native TCP-zu-Prozess-Korrelation und dateibasierte Integritätsüberwachung in einer gemeinsamen, vollständig entkoppelten lokalen Control Plane.
 
 ---
 
-<img width="2560" height="1351" alt="image" src="https://github.com/user-attachments/assets/6345c3ef-f51e-49d4-9cf4-dfba7894088c" />
+## 🛡️ Für Security Researcher & System Architects
 
+> **Vollständige technische Systemspezifikation:**  
+> Die gesamte Architektur, alle Bedrohungsmodelle, Trust Boundaries, Win32-Syscalls, IPC-Verträge und State-Machines sind detailliert und erschöpfend in der [**ARCHITECTURE.md**](ARCHITECTURE.md) dokumentiert.
 
-## 🛡️ Sovereign Windows Security
+### Kern-Architektur-Prinzipien & Invarianten
 
-**VGT GeDefense Windows** ist ein lokales, überprüfbares Windows-Sicherheitszentrum von **VisionGaia Technology**.
-
-GeDefense ersetzt die etablierten Windows-Sicherheitsmechanismen nicht durch unnötige proprietäre Kernel-Hooks, sondern verbindet die von Microsoft vorgesehenen Schutzschichten mit einer eigenen lokalen Detection-, Hardening-, Integrity- und Evidence-Ebene.
-
-Das System orchestriert unter anderem:
-
-| Security Layer                  | Integration                              |
-| ------------------------------- | ---------------------------------------- |
-| 🧠 **MHX XDR 6.0**              | Realtime Detection & Context Analysis    |
-| 🛡️ **Microsoft Defender**      | Endpoint Protection & Antimalware        |
-| ⚔️ **Attack Surface Reduction** | Microsoft ASR Rules                      |
-| 🔒 **Windows App Control**      | Application Control & Code Integrity     |
-| 🔥 **Windows Firewall / WFP**   | Network Enforcement                      |
-| 🧬 **Drive Integrity Fabric**   | SHA-256 File Integrity Monitoring        |
-| 📊 **SafetySys**                | Windows Security Posture Audit           |
-| ⛓️ **Evidence Ledger v2**       | Cryptographic Audit Chain                |
-| ⚙️ **Hardening Engine**         | Reversible Windows Security Transactions |
-
-Das Security Center arbeitet ausschließlich über:
-
-```text
-127.0.0.1:17831
-```
-
-Die Benutzeroberfläche läuft in einem eigenen **WebView2-Fenster**.
-
-**Keine externe Control Plane. Keine Remote-UI. Kein CDN für das Security Center.**
+1. **Zero External Go Dependencies (Zero-Supply-Chain-Risk)**:  
+   Das Backend verzichtet vollständig auf externe Go-Module (`go.sum` hat exakt 0 Bytes, kein `require`-Block in `go.mod`). Sämtliche Interaktionen mit dem Betriebssystem erfolgen direkt über die Go-Standardbibliothek und native Windows-APIs (`kernel32.dll`, `advapi32.dll`, `user32.dll`, `shell32.dll`, `iphlpapi.dll`).
+2. **Zero External Frontend Dependencies (No Remote Ingestion)**:  
+   Die Benutzeroberfläche bindet keinerlei Remote-CDNs, externe Web-Fonts oder Drittanbieter-JavaScript-Bibliotheken ein. Sämtliche Assets sind nativ per `embed.FS` in die Binärdatei einkompiliert. Web Storage (`localStorage`, `sessionStorage`) sowie `eval()` sind strikt untersagt.
+3. **Loopback-Only Control Plane (`127.0.0.1:17831`)**:  
+   Der Dienst lauscht ausschließlich auf dem lokalen Loopback-Interface. Anfragen werden serverseitig über Client-Token-Authentifizierung (`dashboard.token`), Host-Header-, Origin- und RemoteAddr-Validierung sowie zeitbegrenzte, kryptografisch zufällige HttpOnly-/SameSite-Cookies verifiziert.
+4. **Kein proprietärer Kernel-Treiber (Delegierte Durchsetzung)**:  
+   Zur Vermeidung von Instabilitäten und Privilege-Escalation-Gefahren nutzt GeDefense keinen eigenen Third-Party-Kernel-Treiber. Tiefgreifende Durchsetzung (Process Block, Network Deny, Code Integrity) wird transaktional an die verifizierten Kernel-Subsysteme von Windows delegiert: Defender Antivirus, ASR, Windows Filtering Platform / Firewall und Windows App Control (WDAC).
+5. **Anti-PID-Reuse Host-Response-Autorität**:  
+   Reine Netzwerk-IOC-Matches besitzen niemals autonome Host-Kill-Rechte. Eine Prozessterminierung erfordert zwingend ein eigenständiges MHX-Verdikt sowie eine atomare Revalidierung des Prozess-Tripels `(PID, CreationTime, BinaryPath)`.
+6. **Kryptografisch verkettetes Evidence-Ledger (HMAC-SHA-256)**:  
+   Jede Konfigurationsänderung, jeder Audit-Befund, jede EDR-Blockade und jede Regelsynchronisation wird in einem manipulationssicheren, sequenziell verketteten JSONL-Ledger (`evidence.jsonl`) mit lokalem Authentifizierungsschlüssel verankert.
+7. **Privilegientrennung (Least Privilege)**:  
+   - Core Security Service (`gedefense-windows.exe`): Läuft als `LocalSystem` im Windows Service Control Manager (SCM).
+   - Operator UI Launcher (`GeDefenseCenter.exe`) & Tray (`GeDefenseTray.exe`): Laufen mit den Standardrechten des angemeldeten Benutzers.
+   - Wartungs- und Installationsskripte: Laufen strikt unter PowerShell mit `ExecutionPolicy AllSigned`.
 
 ---
 
-## ✨ Highlights
+## 🚀 Was hat sich in GeDefense Windows 4 geändert? (Delta zu V2 / V3)
 
-* Live-Security-Dashboard mit Schutzwert, Schutzdomänen und MHX-Telemetrie
-* Defender-, Firewall-, Secure-Boot-, TPM-, BitLocker-, VBS- und Update-Posture
-* MHX-XDR-Realtimeanalyse für PowerShell, Script Hosts und Windows LOLBins
-* automatische Base64-, UTF-16LE- und UTF-8-Analyse von PowerShell `EncodedCommand`
-* Payload-, Signatur-, Parent- und Prozesskettenanalyse
-* kontextabhängige Klassifikation statt stumpfer Dateinamen-Allowlist
-* guarded Prozess-Terminierung nach Risikobewertung
-* optionaler **Sovereign Mode** mit Outbound Default-Deny
-* Feodo- und Spamhaus-Threat-Intelligence
-* atomare Windows-Firewall-Updates
-* SafetySys-Auto-Audit mit **31 Windows-Sicherheitsprüfungen**
-* zwölf modulare Windows-Härtungskomponenten
-* optionaler SHA-256-Integrity-Scanner
-* HMAC-SHA-256-verkettete lokale Evidenz
-* reversible Security-Transaktionen
-* Windows-Dienst, natives Security Center und Systemtray
+GeDefense Windows 4 ist eine vollständige Neugestaltung des Windows-Sicherheitsagenten auf der V4-Architekturphilosophie:
 
----
-
-# 🏛️ Architektur
-
-```mermaid
-graph TD
-    User[Lokaler Administrator / Operator] -->|WebView2 / Localhost:17831| UI[GeDefense Security Center]
-
-    UI -->|Session / Anti-Replay| Srv[Go Local Gateway & API Engine]
-
-    Srv -->|HMAC-SHA-256| Ledger[(Evidence Ledger v2)]
-    Srv -->|Status & Baseline| Integrity[Drive Integrity Fabric]
-    Srv -->|Audit & Transaktionen| Hardening[Hardening Engine]
-    Srv -->|Realtime Detection| MHX[MHX XDR 6.0]
-
-    MHX -->|CIM Process Events| CIM[root/cimv2 Win32_ProcessStartTrace]
-    MHX -->|Security Events| Defender[Microsoft Defender]
-    MHX -->|Policy Context| AppControl[Windows App Control]
-    MHX -->|Network Enforcement| WFP[Windows Defender Firewall / WFP]
-
-    Hardening -->|Reversible Änderungen| WinSec[VBS / HVCI / LSASS / Credential Guard]
-```
-
-### Vertrauensdomänen
-
-| Komponente                       | Technologie           | Sicherheitsfunktion                                   | Kontext          |
-| -------------------------------- | --------------------- | ----------------------------------------------------- | ---------------- |
-| **Local Security Center Server** | Go / native x64       | REST-API, Sessions, Replay-Schutz, Asset Serving      | `SYSTEM`         |
-| **MHX XDR 6.0**                  | Go + CIM / PowerShell | Realtime-Prozessanalyse, Payload-Decoding, Provenance | `SYSTEM`         |
-| **Hardening Engine**             | PowerShell / `Vgt.*`  | Baselines, Hardening, Verification, Rollback          | Admin / `SYSTEM` |
-| **Drive Integrity Fabric**       | Go + Win32            | SHA-256 Baselines & FIM                               | `SYSTEM`         |
-| **Evidence Ledger v2**           | Go / HMAC-SHA-256     | Manipulationserkennbare lokale Audit-Kette            | `SYSTEM`         |
-| **Tray / Launch Broker**         | Go + Win32            | lokaler Bootstrap und Security-Center-Start           | Benutzer / Admin |
+| Bereich | Legacy (GeDefense Windows 2.3.2) | GeDefense Windows 4.0.0-beta.1 |
+| :--- | :--- | :--- |
+| **Go-Abhängigkeiten** | Externe Go-Module für Tray, Webview und Syscalls | **Zero Go Modules**. Reine Standardbibliothek + native WinAPI-Syscalls |
+| **Frontend Runtime** | Eingebettete Webview-Komponenten mit externen Bindings | **Native Browser-Orchestrierung** via Loopback-Server (`127.0.0.1:17831`) mit Strict CSP Nonce |
+| **Prozessreaktion** | Einfache PID-basierte Terminierung | **Anti-PID-Reuse-Engine**: Validierung von `PID`, `CreationTime` und `ExecutablePath` vor Terminierung |
+| **Netzwerk-Telemetrie** | Zeitverzögerte Netstat-Abfragen | **Native TCP Extended Table** (`iphlpapi.dll`) mit atomarer Owning-PID-Zuordnung in Echtzeit |
+| **XDR / Threat Intel** | Rohe Speicherung von Command-Lines | **Datensparsame Attack Stories**: Hash-basierte Evidenz, Base64/UTF-16LE EncodedCommand-Dekodierung |
+| **Threat-Intel-Feeds** | Einfache IP-Listen | **Präfix-Indexierte CIDR-Radix-Bäume**, harte Feed-Grenzen, Filterung privater/reservierter IP-Bereiche |
+| **Schutzstufen** | Statische Modi | **Guided Protection Lifecycle**: `Monitor` ➔ `Guarded` ➔ `Sovereign` mit serverseitiger Readiness-Gate |
+| **App Control** | Basale Software-Einschränkungen | **Windows App Control (WDAC / CiTool)** mit Kernel-Validierung und transaktionalen Audit-/Enforce-Regeln |
+| **Firewall-Kopplung** | Unabhängige Firewall-Skripte | **Atomare Synchronisation**; fehlgeschlagene Firewall-Verifikation versetzt den Feed-Status in `STALE` |
+| **Integritätsüberwachung** | Klassischer periodischer SHA-256-Scan | **Resilienter Fabric-Scanner**: Bounded Queue, Reparse-Point-Schutz, Mutation-during-hash-Erkennung |
+| **Installer & Trust** | Extern generierte Setup-Pakete | **Autarker Standalone-Installer** mit signiertem embedded Payload-Zip, Catalog-Prüfung (`vgt-payload.cat`) und `AllSigned`-Policy |
+| **UI-Design** | Früheres Dashboard | **Modernes VGT Ice-Blue Glassmorphism UI**, zustandsgetriebene Komponenten, Micro-Interactions |
 
 ---
 
-# 🛡️ Protection Profiles
-
-GeDefense verwendet drei klar getrennte Schutzprofile:
+## 🏗️ Systemkomponenten & Repository-Struktur
 
 ```text
-┌─────────────┐       ┌─────────────┐       ┌─────────────────┐
-│   MONITOR   │ ────► │   GUARDED   │ ────► │    SOVEREIGN    │
-│             │       │             │       │                 │
-│ Observe     │       │ Protect     │       │ Default Deny    │
-└─────────────┘       └─────────────┘       └─────────────────┘
-```
-
-| Schutzfunktion             | `Monitor` |    `Guarded`    |        `Sovereign`        |
-| -------------------------- | :-------: | :-------------: | :-----------------------: |
-| Realtime-Korrelation       |     ✅     |        ✅        |             ✅             |
-| Microsoft Defender         |     ✅     |        ✅        |             ✅             |
-| ASR                        |   Audit   |      Block      |           Block           |
-| Prozess-Terminierung       |   Audit   | Kontextabhängig | Priorisiertes Enforcement |
-| App Control                |   Audit   |      Audit      |          Enforce          |
-| Threat-Feed Firewall Rules |  Standard |        ✅        |             ✅             |
-| Outbound Default-Deny      |     ❌     |        ❌        |             ✅             |
-| Controlled Folder Access   |  optional |     optional    |             ✅             |
-| Operator Gate              |   normal  |      normal     |        **explizit**       |
-
-Der Sovereign-Modus erfordert die exakte Operator-Bestätigung:
-
-```text
-SOVEREIGN DEFAULT DENY
-```
-
-Damit wird verhindert, dass ein aggressives Default-Deny-Profil versehentlich aktiviert wird.
-
----
-
-# 🧠 MHX XDR 6.0
-
-## Realtime Detection Engine
-
-MHX bildet die verhaltensbasierte Detection- und Kontextschicht von GeDefense.
-
-### Process Telemetry
-
-Neue Prozesse werden ereignisbasiert über Windows CIM erfasst:
-
-```text
-root/cimv2
-└── Win32_ProcessStartTrace
-```
-
-Dadurch benötigt MHX keinen eigenen Kernel-Prozess-Hook.
-
----
-
-## PowerShell EncodedCommand Analysis
-
-MHX erkennt PowerShell-Aufrufe wie:
-
-```text
--enc
--EncodedCommand
-```
-
-und analysiert deren Payload.
-
-Unterstützt werden:
-
-* strikte Base64-Validierung
-* UTF-16LE-Decoding
-* UTF-8-Decoding
-* Payloads bis 1 MiB
-* In-Memory-Indikatoren
-* Parent-/Child-Lineage
-* Authenticode-Kontext
-* Publisher-/Subject-Analyse
-* LOLBin-Muster
-* Script-Host-Kontext
-
-Beispielhafte Indikatoren:
-
-```text
-IEX
-DownloadString
-VirtualAlloc
-AmsiUtils
-MiniDumpWriteDump
-vssadmin delete shadows
+GeDefense-Windows-4/
+├── ARCHITECTURE.md          # Umfassende technische System- & Architekturspezifikation
+├── README.md                # Projektübersicht & Schnellstart
+├── VERSION                  # Offizielle Release-Version (4.0.0-beta.1)
+├── TOOLCHAINS.lock          # Exakt gepinnte Toolchains (Go 1.26.4 / Go 1.27.1, PowerShell 5.1)
+├── src/GeDefense/windows/   # Go-Quellcode (Zero External Dependencies)
+│   ├── cmd/
+│   │   ├── gedefense-windows/   # Windows Service Daemon (LocalSystem Background Host)
+│   │   ├── gedefense-center/    # Desktop-Launcher & Mutex-Client
+│   │   ├── gedefense-tray/      # Windows System-Tray-Daemon
+│   │   └── gedefense-installer/ # Autarker Standalone-Installer
+│   └── internal/
+│       ├── mhx/                 # EDR-Realtime-Heuristik, Threat-Intel & EncodedCommand Unpacker
+│       ├── server/              # Lokale HTTP Control Plane & Session-Exchange
+│       ├── hardening/           # Schnittstelle zur Windows-Sicherheitsbaseline
+│       ├── integrity/           # Dateisystem-Integrität & Reparse-Detektion
+│       ├── evidence/            # HMAC-SHA-256 verkettetes Audit-Ledger
+│       ├── winapi/              # Direkte Win32 DLL-Syscall-Bindungen
+│       ├── monitor/             # Telemetrie- und Heartbeat-Aggregator
+│       └── winexec/             # Gehärteter Executor für signierte PowerShell-Transaktionen
+├── engine/                  # PowerShell-Härtungs-Engine & Sicherheits-Module
+│   ├── Invoke-VgtHardening.ps1
+│   └── Modules/                 # Vgt.Common, Vgt.Defender, Vgt.Identity, Vgt.Network, Vgt.System
+├── xdr/                     # EDR/XDR-Transaktionen & Firewall-Synchronisation
+│   ├── Invoke-VgtXdrScan.ps1
+│   ├── Set-VgtMhxProtection.ps1
+│   ├── Set-VgtMhxAppControl.ps1
+│   └── Sync-VgtMhxFirewall.ps1
+├── audit/                   # SafetySys Compliance-Audit Engine
+├── installer/               # Bootstrap-, Installations- und Bereinigungsskripte
+├── build/                   # Release-Gates, Build-Skripte & Standalone-Packager
+├── branding/                # Offizielle VGT-Design-Assets (Icons, Logos, Lockscreen)
+├── sbom/                    # CycloneDX SBOM (Nachweis: 0 Third-Party-Komponenten)
+└── tools/                   # Erweiterte Diagnose- & Tracing-Werkzeuge
 ```
 
 ---
 
-## Contextual Classification
+## ⚙️ Voraussetzungen
 
-Ein EncodedCommand ist nicht automatisch Malware.
+### Zielsystem (Laufzeit)
+- **Betriebssystem**: Windows 11 x64 (22H2 / 23H2 / 24H2 / LTSC)
+- **PowerShell**: Windows PowerShell 5.1 (integriert in Windows)
+- **Antivirus**: Microsoft Defender Antivirus (aktiviert)
+- **Rechte**: Administratorrechte für Erstinstallation und Aktivierung der Systemhärtung
 
-Deshalb analysiert MHX mehrere Ebenen:
-
-```text
-PROCESS
-   │
-   ├── Command Line
-   ├── Decoded Payload
-   ├── Parent Process
-   ├── Process Lineage
-   ├── Authenticode
-   ├── Publisher
-   └── Behavioral Indicators
-```
-
-Das erlaubt die Unterscheidung zwischen:
-
-```text
-MALICIOUS
-SUSPICIOUS
-BENIGN SUSPICIOUS
-KNOWN GOOD
-```
-
-ohne die ursprüngliche Detection abzuschalten.
-
-Auch legitime Entwickler- oder Administrationswerkzeuge mit Encoded PowerShell können dadurch anhand von Signatur, Prozesskette und Payload-Kontext korrekt eingeordnet werden.
+### Build-Umgebung
+- **Go-Compiler**: Go 1.26.4 oder Go 1.27.1 (64-Bit)
+- **PowerShell**: Windows PowerShell 5.1 (x64)
+- **Code-Signing**: Lokales oder Unternehmens-Code-Signing-Zertifikat mit Enhanced Key Usage (EKU) `1.3.6.1.5.5.7.3.3` (Code Signing)
 
 ---
 
-# 🌐 Threat Intelligence
+## 🔨 Build & Verifikation
 
-GeDefense kann Threat-Intelligence-Feeds lokal synchronisieren.
+Das gesamte Release wird über automatisierte PowerShell-Gates validiert und gebaut.
 
-| Feed                       | Zweck                              |
-| -------------------------- | ---------------------------------- |
-| **abuse.ch Feodo Tracker** | Botnet- und C2-Infrastruktur       |
-| **Spamhaus DROP**          | bekannte problematische IPv4-Netze |
-| **Spamhaus DROPv6**        | entsprechende IPv6-Netze           |
-
-Standardintervall:
-
-```text
-12 Stunden
-```
-
-Die Einträge werden lokal normalisiert und dedupliziert.
-
-Firewall-Updates erfolgen atomar, damit ein fehlgeschlagener Sync keinen teilweise aktualisierten Regelsatz hinterlässt.
-
----
-
-## Aktuelle Grenze in Version 2.3.2
-
-Threat-Intelligence-Adressen werden auf Netzwerkebene blockiert.
-
-Folgende vollständige Realtime-Korrelation ist noch **nicht** Bestandteil von Version 2.3.2:
-
-```text
-Remote IP
-   ↓
-Owning PID
-   ↓
-Process Tree
-   ↓
-XDR Context Analysis
-   ↓
-Automatic Process Tree Response
-```
-
-Diese Grenze wird bewusst dokumentiert.
-
----
-
-# 🔐 Windows Hardening Engine
-
-GeDefense unterstützt modulare und reversible Windows-Härtung.
-
-| Modul                    | Maßnahme                               | Enterprise |
-| ------------------------ | -------------------------------------- | :--------: |
-| `DefenderCloud`          | Cloud Protection, PUA, MAPS            |      ✅     |
-| `ASR`                    | 11 Defender ASR Rules im Block-Modus   |      ✅     |
-| `ControlledFolderAccess` | Schutz sensibler Benutzerverzeichnisse |      ✅     |
-| `Firewall`               | Profile aktiv, Inbound Block, Logging  |      ✅     |
-| `CredentialGuard`        | VBS & Credential Guard                 |      ✅     |
-| `MemoryIntegrity`        | HVCI & Vulnerable Driver Blocklist     |      ✅     |
-| `LSASS`                  | PPL / WDigest-Härtung                  |      ✅     |
-| `SMB`                    | SMBv1 deaktivieren, Signing erzwingen  |      ✅     |
-| `PowerShellLogging`      | Script Block & Module Logging          |      ✅     |
-| `UAC`                    | hohe UAC-Stufe & Secure Desktop        |      ✅     |
-| `USBStorage`             | USB-Massenspeicher deaktivieren        |   Opt-in   |
-| `RemoteDesktop`          | eingehendes RDP deaktivieren           |   Opt-in   |
-
----
-
-## Reversible Security Transactions
-
-Hardening wird nicht als irreversible Einbahnstraße behandelt.
-
-```text
-CURRENT STATE
-     ↓
-BASELINE
-     ↓
-APPLY
-     ↓
-VERIFY
-     ↓
-EVIDENCE
-     ↓
-ROLLBACK AVAILABLE
-```
-
-Vor sicherheitsrelevanten Änderungen wird der relevante Zustand erfasst.
-
-Dadurch können Maßnahmen kontrollierter wieder zurückgenommen werden.
-
----
-
-# 🧬 Drive Integrity Fabric
-
-Der optionale Integrity Scanner erstellt SHA-256-basierte Baselines lokaler Dateien und Laufwerke.
-
-### Eigenschaften
-
-* Full-Drive SHA-256 Baseline
-* `ADDED`
-* `MODIFIED`
-* `DELETED`
-* 256-Bucket-Partitionierung
-* Schutz vor Reparse Points
-* Schutz vor Junction-Rekursion
-* eigenes State-Verzeichnis ausgeschlossen
-* 12- oder 24-Stunden-Zyklus
-* Full Scan standardmäßig deaktiviert
-
-Beispiel:
-
-```text
-GENERATION 18
-
-ADDED       C:\Program Files\Example\new.dll
-MODIFIED    C:\Windows\System32\example.dll
-DELETED     C:\Program Files\Example\old.dll
-```
-
----
-
-# ⛓️ Evidence Ledger v2
-
-GeDefense führt eine lokale kryptographisch verkettete Evidence-Struktur.
-
-```text
-ENTRY N
-  │
-  ├── sequence
-  ├── timestamp
-  ├── action
-  ├── metadata
-  ├── previous_hmac
-  └── hmac
-        │
-        ▼
-ENTRY N+1
-```
-
-Die Verkettung basiert auf:
-
-```text
-HMAC-SHA-256
-```
-
-Der lokale Evidence-Key befindet sich unter:
-
-```text
-ProgramData\VGT\GeDefense\evidence.key
-```
-
-und wird über Windows-ACLs geschützt.
-
-> Eine gültige kryptographische Kette bestätigt die Integrität der gespeicherten Audit-Daten. Sie beweist nicht automatisch die Wahrheit einer externen Datenquelle.
-
----
-
-# 📊 SafetySys Audit
-
-SafetySys bewertet den lokalen Windows-Sicherheitszustand anhand von **31 Prüfungen**.
-
-Schutzdomänen umfassen unter anderem:
-
-```text
-Microsoft Defender
-Firewall
-Secure Boot
-TPM
-BitLocker
-VBS
-HVCI
-Credential Guard
-ASR
-UAC
-Windows Update
-PowerShell Security
-```
-
-Die Ergebnisse fließen in das lokale Security Center ein.
-
----
-
-# 🖥️ Local Security Center
-
-Das GeDefense Security Center benötigt:
-
-```text
-kein IIS
-kein Apache
-keinen externen Webserver
-keine Cloud-Control-Plane
-```
-
-## Endpoint
-
-```text
-http://127.0.0.1:17831
-```
-
-Die API wird ausschließlich an Loopback gebunden.
-
----
-
-## Session Bootstrap
-
-Beim Start über den Tray bzw. Launch Broker wird ein kurzlebiger kryptographischer Bootstrap-Code erzeugt.
-
-Dieser wird gegen eine lokale Session ausgetauscht.
-
-### Security Properties
-
-```text
-HttpOnly
-SameSite=Strict
-Loopback only
-Anti-Replay Request IDs
-No CDN
-No Remote UI
-```
-
-### HTTP Security Headers
-
-```http
-Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
-X-Frame-Options: DENY
-X-Content-Type-Options: nosniff
-Referrer-Policy: no-referrer
-Cross-Origin-Opener-Policy: same-origin
-Cross-Origin-Resource-Policy: same-origin
-```
-
-Zustandsändernde Requests verwenden zusätzlich:
-
-```text
-X-VGT-Request-ID
-```
-
-als Replay-Schutz.
-
----
-
-# 🧩 Warum kein eigener Kernel-Treiber?
-
-MHX enthält bewusst keinen eigenen proprietären Kernel-Treiber.
-
-Die Prozessaufnahme erfolgt über Windows-CIM.
-
-Kernelnahe Enforcement-Funktionen werden an bestehende Windows-Sicherheitsmechanismen delegiert:
-
-```text
-Microsoft Defender
-        +
-Attack Surface Reduction
-        +
-Windows App Control
-        +
-Windows Defender Firewall / WFP
-        +
-VBS / HVCI
-```
-
-Dadurch muss GeDefense keinen zusätzlichen Kernel-Hook einführen, wenn Windows bereits eine geeignete Schutzprimitive bereitstellt.
-
-Das reduziert zusätzliche Kernel-Angriffsfläche und lässt:
-
-```text
-Secure Boot
-Windows Resource Protection
-Windows Update
-Microsoft-signierte Systemdateien
-```
-
-unangetastet.
-
----
-
-# ⚙️ Sicherheitsrelevante Defaults
-
-| Einstellung                  | Standard                    |
-| ---------------------------- | --------------------------- |
-| **Protection Mode**          | `Guarded`                   |
-| **Sovereign Default-Deny**   | explizite Operator-Freigabe |
-| **Integrity Full Scan**      | deaktiviert                 |
-| **USB Storage Block**        | Opt-in                      |
-| **Controlled Folder Access** | nicht ungefragt             |
-| **API Binding**              | ausschließlich Loopback     |
-| **State Changes**            | Session + Replay Protection |
-| **Threat Intelligence Sync** | 12 Stunden                  |
-
----
-
-# 📁 Repository-Struktur
-
-```text
-src/GeDefense/windows/   Go-Dienst, Center, Tray, API, MHX und Integrity
-audit/                   SafetySys Audit
-engine/                  Windows-Härtungsprofile und PowerShell-Module
-xdr/                     MHX-, Firewall- und XDR-Transaktionen
-installer/               Installation, Bootstrap und Deinstallation
-build/                   reproduzierbarer Standalone-Build
-branding/                VGT-Markenmaterial
-tools/                   erhöhte Integrationsdiagnosen
-docs/                    Architektur, Build und Sicherheitsmodell
-LICENSES/                AGPL- und Drittanbieterlizenzen
-sbom/                    CycloneDX-Komponentenverzeichnis
-```
-
----
-
-# 💻 Voraussetzungen
-
-## Zielplattform
-
-| Parameter             | Minimum                                | Empfohlen                           |
-| --------------------- | -------------------------------------- | ----------------------------------- |
-| **Windows**           | Windows 10/11 x64                      | Windows 11 IoT Enterprise LTSC 2024 |
-| **Build**             | `19041+`                               | `26100.x`                           |
-| **Architektur**       | AMD64                                  | AMD64 + TPM 2.0 + Secure Boot       |
-| **RAM**               | 4 GB                                   | 8 GB+                               |
-| **Hardware Security** | unterstützte Windows Security Features | SLAT für VBS/HVCI                   |
-| **PowerShell**        | Windows PowerShell 5.1                 | aktuell gepatcht                    |
-| **UI Runtime**        | WebView2                               | aktuelle WebView2 Runtime           |
-| **Netzwerk**          | nicht erforderlich                     | optional für Threat Feeds           |
-
-## Entwicklung
-
-* Go `1.23+`
-* Windows PowerShell 5.1
-* Microsoft WebView2 Runtime
-* GNU `windres.exe`
-* MinGW-w64 oder kompatible Toolchain
-* Administratorrechte für systemweite Integrationstests
-
----
-
-# 🧪 Entwicklung & Tests
-
+### 1. Release-Verifikation ausführen (Gate-Prüfung)
 ```powershell
-Set-Location .\src\GeDefense\windows
-
-gofmt -w .\cmd .\internal
-go test -race ./...
-go vet ./...
-node --check .\internal\server\web\app.js
+& .\build\Test-GeDefenseRelease.ps1
 ```
+Dieser Gate verifiziert:
+- Go Code Formatting (`gofmt -l`)
+- Vollständige Race-Condition-Tests (`go test -race ./...`)
+- Statische Go-Code-Analyse (`go vet ./...`)
+- Zero-Go-Dependency-Garantie (`go list -m all` enthält ausschließlich GeDefense)
+- Frontend-Sicherheitsinvarianten (keine externen URLs, kein eval, kein Web Storage)
+- PowerShell AST-Parsing aller Skripte
+- Test-Kompilierung aller vier Windows-Binaries
 
-## MHX Integration Test
-
-```powershell
-& .\tools\Test-MhxWatcherIntegration.ps1
-```
-
-Die erhöhten Integrationstests sind Opt-in.
-
-Weitere Dokumentation:
-
-* [Build-Anleitung](docs/BUILDING.md)
-* [Architektur](docs/ARCHITECTURE.md)
-* [Threat Model](docs/THREAT-MODEL.md)
-
----
-
-# 📦 Standalone Installer
-
+### 2. Standalone-Installer kompilieren & signieren
 ```powershell
 & .\build\Build-GeDefenseStandalone.ps1
 ```
-
-Die Build-Pipeline erzeugt die vorgesehenen Artefakte unter:
-
-```text
-release\
-```
-
-Codesigning-Zertifikate, private Schlüssel und generierte Release-Artefakte gehören **nicht** in das öffentliche Repository.
-
-> **Community Builds sind keine offiziellen VisionGaia Technology Releases.**
+Dieser Befehl:
+1. Durchläuft alle Release-Gates.
+2. Kompiliert Service, Center und Tray in das Payload-Verzeichnis.
+3. Signiert alle Binärdateien und PowerShell-Module digital mit Authenticode (SHA-256).
+4. Erzeugt den signierten Windows-Katalog `vgt-payload.cat`.
+5. Bettet den Payload komprimiert in `cmd/gedefense-installer` ein.
+6. Kompiliert die autarke Setup-Datei `release\GeDefense-Setup-x64-v4.0.0-beta.1.exe` und signiert diese.
 
 ---
 
-# 🔏 Packaging & Release Integrity
+## 📦 Installation & Inbetriebnahme
 
-Die Release-Architektur unterstützt:
-
-* Authenticode
-* SHA-256
-* signierte Payloads
-* Windows-Dateikataloge
-* reproduzierbare Standalone-Builds
-* CycloneDX SBOM
-* optionale WIM-/ISO-Integration
-
-Ein Build ist nur dann ein offizieller VGT-Release, wenn die entsprechende Build- und Signaturkette von VisionGaia Technology kontrolliert wurde.
-
----
-
-# ↩️ Rollback & Deinstallation
-
-Der Uninstall-Workflow berücksichtigt nicht nur Programmdateien, sondern auch sicherheitsrelevante Konfigurationen:
-
-```text
-Windows Service
-App Control Policies
-Sovereign Firewall Rules
-ASR Baseline
-Network Baseline
-GeDefense State
-```
-
-Ziel ist ein kontrollierter Rückbau auf den zuvor dokumentierten Zustand.
+### Neuinstallation oder Upgrade von V2.x
+1. Starte die erstellte Datei als Administrator:
+   ```powershell
+   Start-Process .\release\GeDefense-Setup-x64-v4.0.0-beta.1.exe -Verb RunAs
+   ```
+2. Der Installer führt vollautomatisch folgende Schritte durch:
+   - Sauberes Beenden und Entfernen früherer GeDefense-Versionen (Dienst `VGTGeDefense` und Tray `GeDefenseTray`).
+   - Installation der V4-Binärdateien nach `C:\Program Files\VGT\GeDefense`.
+   - Konfiguration der Benutzergruppe `VGT GeDefense Operators` und Absicherung der Dateisystem-ACLs (`icacls`).
+   - Registrierung des Windows-Systemdienstes `VGTGeDefense` mit Starttyp `Automatic` (**startet direkt bei jedem Windows-Boot**).
+   - Eintrag in `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` zur automatischen Initialisierung des Tray-Icons beim Benutzer-Login.
+   - Starten des V4-Dienstes und Aktivierung der `Guarded`-Schutzrichtlinie.
 
 ---
 
-# ⚠️ Architekturgrenzen von 2.3.2
+## 🔒 Sicherheitsrichtlinien & Verantwortungsbewusste Offenlegung
 
-GeDefense ist ein Security-System — keine Sicherheitsgarantie.
-
-Aktuelle Grenzen:
-
-* kein eigener MHX-Kernel-Treiber
-* keine vollständige Remote-IP → PID → Process-Tree Realtime-Korrelation
-* externe Threat-Intelligence kann falsch oder veraltet sein
-* Full-Drive-Integrity-Scans können hohe I/O-Last erzeugen
-* aggressive Hardening-Regeln können legitime Anwendungen beeinträchtigen
-* Sovereign Default-Deny kann Netzwerkfunktionen unterbrechen
-* manche Schutzfunktionen hängen von Windows Edition, Build und Hardware ab
-
-Diese Einschränkungen werden bewusst dokumentiert statt durch Marketingformulierungen verborgen.
+Sicherheitsrelevante Schwachstellen, Design-Bugs oder kryptografische Feststellungen können gemäß unserer [SECURITY.md](SECURITY.md) direkt an das Security-Team von VisionGaia Technology gemeldet werden.
 
 ---
 
-# 🔒 Security Principles
+## 📄 Lizenz & Markenschutz
 
-```text
-LOCAL FIRST
-    ↓
-OPERATOR AUTHORITY
-    ↓
-NATIVE WINDOWS SECURITY BOUNDARIES
-    ↓
-VERIFY BEFORE TRUST
-    ↓
-EVIDENCE EVERYTHING
-    ↓
-ROLLBACK WHERE POSSIBLE
-```
+- **Quellcode & Dokumentation**: Lizenziert unter der **GNU Affero General Public License v3.0 only** (SPDX: `AGPL-3.0-only`). Siehe [LICENSE](LICENSE).
+- **Marken & Produktaufmachung**: Die Bezeichnungen „VGT“, „VisionGaia Technology“, „GeDefense“ sowie alle zugehörigen Logos unterliegen der gesonderten [TRADEMARKS.md](TRADEMARKS.md).
 
-### Local First
-
-Der zentrale Security-State bleibt lokal.
-
-### Operator Authority
-
-Kritische Schutzänderungen werden nicht still aktiviert.
-
-### Native Security Boundaries
-
-Bestehende Windows-Sicherheitsmechanismen werden bevorzugt.
-
-### Reversible by Design
-
-Der vorherige Zustand wird vor sicherheitsrelevanten Änderungen erfasst.
-
-### Evidence Driven
-
-Sicherheitsentscheidungen und Änderungen sollen nachvollziehbar bleiben.
-
----
-
-# 🛡️ Sicherheitslücken melden
-
-Bitte **keine unmittelbar ausnutzbaren Schwachstellen als öffentliches Issue veröffentlichen**.
-
-Das koordinierte Disclosure-Verfahren befindet sich unter:
-
-[**SECURITY.md**](SECURITY.md)
-
-Ein guter Security Report enthält nach Möglichkeit:
-
-```text
-Version
-Komponente
-Reproduktionsschritte
-Erwartetes Verhalten
-Tatsächliches Verhalten
-Security Impact
-Logs
-Proof of Concept
-```
-
-Keine Secrets, Zugangsdaten oder unnötigen personenbezogenen Daten veröffentlichen.
-
----
-
-# 📜 Lizenz
-
-Der Programmcode und die Projekt-Dokumentation stehen unter:
-
-## GNU Affero General Public License v3.0 only
-
-SPDX:
-
-```text
-AGPL-3.0-only
-```
-
-VGT-, VisionGaia- und GeDefense-Namen, Logos und Produktaufmachungen sind nicht pauschal unter AGPL lizenziert.
-
-Sie unterliegen:
-
-[TRADEMARKS.md](TRADEMARKS.md)
-
-Drittanbieter-Komponenten werden separat dokumentiert:
-
-* [LICENSE-MATRIX.md](LICENSE-MATRIX.md)
-* [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
-
----
-
-# 🏢 VisionGaia Technology
-
-**VisionGaia Technology** entwickelt souveräne, lokal kontrollierbare Sicherheits- und Softwaresysteme mit Fokus auf technische Nachvollziehbarkeit, Transparenz und Operator-Kontrolle.
-
-```text
-VisionGaia Technology
-Cologne, Germany
-© 2026
-```
-
----
-
-<div align="center">
-
-### VGT GEDEFENSE WINDOWS 2.3.2
-
-**SOVEREIGN SECURITY FABRIC**
-
-**MHX XDR 6.0 · WINDOWS DEFENDER · ASR · APP CONTROL · WFP · SAFETYSYS · DRIVE INTEGRITY · HMAC-SHA-256 EVIDENCE · LOCAL-FIRST · AGPLv3**
-
-**VisionGaia Technology — Sovereign Security Engineering**
-
-</div>
+Copyright © 2026 VisionGaia Technology. Alle Rechte vorbehalten.

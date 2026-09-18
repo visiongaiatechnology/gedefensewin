@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/audit"
@@ -75,20 +76,43 @@ func New(root, version string) (*App, error) {
 }
 
 func (a *App) Run(stop <-chan struct{}) error {
-	errCh := make(chan error, 1)
-	go a.monitor.Run(stop)
-	go a.mhx.Run(stop)
-	go a.integrity.Run(stop)
-	go func() { errCh <- a.server.ListenAndServe() }()
+	internalStop := make(chan struct{})
+	var stopOnce sync.Once
+	stopAll := func() { stopOnce.Do(func() { close(internalStop) }) }
+	var workers sync.WaitGroup
+	workers.Add(3)
+	go func() { defer workers.Done(); a.monitor.Run(internalStop) }()
+	go func() { defer workers.Done(); a.mhx.Run(internalStop) }()
+	go func() { defer workers.Done(); a.integrity.Run(internalStop) }()
+
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- a.server.ListenAndServe() }()
+
+	var result error
 	select {
-	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+	case err := <-serverErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			result = err
 		}
-		return err
+		stopAll()
 	case <-stop:
+		stopAll()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return a.server.Shutdown(ctx)
+		shutdownErr := a.server.Shutdown(ctx)
+		cancel()
+		if shutdownErr != nil {
+			result = shutdownErr
+		}
 	}
+
+	done := make(chan struct{})
+	go func() { workers.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(12 * time.Second):
+		if result == nil {
+			result = errors.New("security worker shutdown timed out")
+		}
+	}
+	return result
 }

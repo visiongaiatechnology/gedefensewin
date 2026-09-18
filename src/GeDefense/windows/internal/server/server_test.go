@@ -22,10 +22,14 @@ import (
 type fixedEngine struct{ result hardening.Result }
 type fixedAudit struct{ result audit.Result }
 type fixedXDR struct{ result xdr.Result }
-type fixedMHX struct{ mode string }
+type fixedMHX struct {
+	mode   string
+	status mhx.Status
+}
 type fixedIntegrity struct{ status integrity.Status }
 
 func (f fixedEngine) Audit(context.Context) (hardening.Result, error)           { return f.result, nil }
+func (f fixedEngine) Posture(context.Context) (hardening.Result, error)         { return f.result, nil }
 func (f fixedEngine) Enforce(context.Context, string) (hardening.Result, error) { return f.result, nil }
 func (f fixedEngine) Components(context.Context) ([]hardening.ComponentStatus, error) {
 	return []hardening.ComponentStatus{}, nil
@@ -37,10 +41,17 @@ func (f fixedEngine) Rollback(context.Context) (hardening.Result, error) { retur
 func (f fixedAudit) Run(context.Context) (audit.Result, error)           { return f.result, nil }
 func (f fixedXDR) Scan(context.Context) (xdr.Result, error)              { return f.result, nil }
 func (f fixedXDR) Last() xdr.Result                                      { return f.result }
-func (f *fixedMHX) Status() mhx.Status                                   { return mhx.Status{Engine: "test", ProtectionMode: f.mode} }
-func (f *fixedMHX) Analyses(int) []mhx.Analysis                          { return []mhx.Analysis{} }
-func (f *fixedMHX) SetMode(mode string) error                            { f.mode = mode; return nil }
-func (f *fixedMHX) SyncFeeds(context.Context) error                      { return nil }
+func (f *fixedMHX) Status() mhx.Status {
+	status := f.status
+	status.Engine = "test"
+	status.ProtectionMode = f.mode
+	return status
+}
+func (f *fixedMHX) Analyses(int) []mhx.Analysis                  { return []mhx.Analysis{} }
+func (f *fixedMHX) NetworkFindings(int) []mhx.NetworkFinding     { return []mhx.NetworkFinding{} }
+func (f *fixedMHX) AttackStories(int) []mhx.AttackStory          { return []mhx.AttackStory{} }
+func (f *fixedMHX) SetMode(_ context.Context, mode string) error { f.mode = mode; return nil }
+func (f *fixedMHX) SyncFeeds(context.Context) error              { return nil }
 func (f *fixedMHX) Applications(context.Context) ([]mhx.ApplicationAllow, error) {
 	return []mhx.ApplicationAllow{}, nil
 }
@@ -65,12 +76,13 @@ func newTestServer(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New("test", "01234567890123456789012345678901", fixedEngine{result: hardening.Result{Defender: true}}, fixedAudit{result: audit.Result{Checks: []audit.Check{}}}, fixedXDR{result: xdr.Result{Findings: []xdr.Finding{}}}, &fixedMHX{mode: "monitor"}, &fixedIntegrity{}, ledger)
+	return New("test", "01234567890123456789012345678901", fixedEngine{result: hardening.Result{Defender: true}}, fixedAudit{result: audit.Result{Checks: []audit.Check{}}}, fixedXDR{result: xdr.Result{Findings: []xdr.Finding{}}}, &fixedMHX{mode: "monitor", status: mhx.Status{Realtime: true, ProtectionHealth: "VERIFIED"}}, &fixedIntegrity{}, ledger)
 }
 
 func TestAPIRequiresBearerToken(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:17831/api/v1/status", nil)
 	request.Host = "127.0.0.1:17831"
+	request.RemoteAddr = "127.0.0.1:49152"
 	response := httptest.NewRecorder()
 	newTestServer(t).ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
@@ -81,6 +93,7 @@ func TestAPIRequiresBearerToken(t *testing.T) {
 func TestAuthorizedStatusHasSecurityHeaders(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:17831/api/v1/status", nil)
 	request.Host = "127.0.0.1:17831"
+	request.RemoteAddr = "127.0.0.1:49152"
 	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	response := httptest.NewRecorder()
 	newTestServer(t).ServeHTTP(response, request)
@@ -97,6 +110,7 @@ func TestMutationRejectsReplayedRequestID(t *testing.T) {
 	for attempt := 0; attempt < 2; attempt++ {
 		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17831/api/v1/evidence/verify", nil)
 		request.Host = "127.0.0.1:17831"
+		request.RemoteAddr = "127.0.0.1:49152"
 		request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 		request.Header.Set("X-VGT-Request-ID", "01234567-89ab-cdef-0123-456789abcdef")
 		response := httptest.NewRecorder()
@@ -114,6 +128,7 @@ func TestSovereignModeRequiresExactConfirmation(t *testing.T) {
 	handler := newTestServer(t)
 	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17831/api/v1/mhx/mode", bytes.NewReader([]byte(`{"mode":"sovereign","confirmation":"wrong"}`)))
 	request.Host = "127.0.0.1:17831"
+	request.RemoteAddr = "127.0.0.1:49152"
 	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-VGT-Request-ID", "22222222-2222-2222-2222-222222222222")
@@ -129,6 +144,7 @@ func TestApplicationAllowRejectsOversizedPath(t *testing.T) {
 	payload, _ := json.Marshal(map[string]string{"action": "Add", "path": "C:\\" + strings.Repeat("a", 1100) + ".exe"})
 	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17831/api/v1/mhx/applications", bytes.NewReader(payload))
 	request.Host = "127.0.0.1:17831"
+	request.RemoteAddr = "127.0.0.1:49152"
 	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-VGT-Request-ID", "33333333-3333-3333-3333-333333333333")
@@ -143,6 +159,7 @@ func TestBootstrapCodeIsSingleUseAndCreatesHttpOnlySession(t *testing.T) {
 	handler := newTestServer(t)
 	bootstrapRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17831/api/v1/session/bootstrap", bytes.NewReader([]byte("{}")))
 	bootstrapRequest.Host = "127.0.0.1:17831"
+	bootstrapRequest.RemoteAddr = "127.0.0.1:49152"
 	bootstrapRequest.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	bootstrapRequest.Header.Set("X-VGT-Request-ID", "11111111-1111-1111-1111-111111111111")
 	bootstrapResponse := httptest.NewRecorder()
@@ -160,6 +177,8 @@ func TestBootstrapCodeIsSingleUseAndCreatesHttpOnlySession(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{"code": payload.Code})
 		exchangeRequest := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17831/api/v1/session/exchange", bytes.NewReader(body))
 		exchangeRequest.Host = "127.0.0.1:17831"
+		exchangeRequest.RemoteAddr = "127.0.0.1:49152"
+		exchangeRequest.Header.Set("Origin", "http://127.0.0.1:17831")
 		exchangeRequest.Header.Set("Content-Type", "application/json")
 		exchangeResponse := httptest.NewRecorder()
 		handler.ServeHTTP(exchangeResponse, exchangeRequest)
@@ -170,5 +189,31 @@ func TestBootstrapCodeIsSingleUseAndCreatesHttpOnlySession(t *testing.T) {
 		} else if exchangeResponse.Code != http.StatusUnauthorized {
 			t.Fatalf("reused bootstrap code returned %d", exchangeResponse.Code)
 		}
+	}
+}
+
+func TestProtectionReadinessRejectsDegradedPolicy(t *testing.T) {
+	root := t.TempDir()
+	ledger, err := evidence.Open(filepath.Join(root, "evidence.jsonl"), filepath.Join(root, "evidence.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mhxEngine := &fixedMHX{mode: "monitor", status: mhx.Status{Realtime: true, ProtectionHealth: "DEGRADED"}}
+	handler := New("test", "01234567890123456789012345678901", fixedEngine{result: hardening.Result{Defender: true}}, fixedAudit{}, fixedXDR{}, mhxEngine, &fixedIntegrity{}, ledger)
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:17831/api/v1/protection/readiness?target=guarded", nil)
+	request.Host = "127.0.0.1:17831"
+	request.RemoteAddr = "127.0.0.1:49152"
+	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("got %d, want %d", response.Code, http.StatusOK)
+	}
+	var result readiness
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Ready {
+		t.Fatal("guarded readiness accepted degraded protection policy")
 	}
 }

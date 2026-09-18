@@ -1,29 +1,36 @@
 # Release-Prozess
 
+## Pflicht-Gates
+
+1. `VERSION` aktualisieren.
+2. `CHANGELOG.md`, SBOM, NOTICE und Dokumentation synchronisieren.
+3. `build/Test-GeDefenseRelease.ps1` vollständig bestehen.
+4. erhöhte Windows-Integrationstests auf isoliertem Testsystem ausführen.
+5. sauberen Standalone-Build erstellen.
+6. Manifest, SHA-256 und Authenticode-Status dokumentieren.
+7. Source-Archiv deterministisch mit `build/Build-SourceRelease.ps1` erzeugen und gegen `SOURCE-MANIFEST.sha256` verifizieren.
+
+## Zero-Dependency-Vertrag
+
+Ein Release wird abgelehnt, wenn `go.mod` einen `require`-Block enthält, `go.sum` nicht leer ist, `go list -m all` mehr als das GeDefense-Modul liefert oder externe Frontend-Runtimes/CDNs eingeführt werden.
+
 ## Community-Release
 
-1. Versionsnummer in allen vier Go-Binaries und Installer-Metadaten aktualisieren.
-2. `VERSION`, `CHANGELOG.md`, SBOM und Dokumentation synchronisieren.
-3. vollständige Race-, Vet-, JavaScript- und PowerShell-Prüfung durchführen.
-4. sauberen Standalone-Build erstellen.
-5. Manifest, SHA-256 und Authenticode-Status dokumentieren.
-6. Artefakt klar als Community-Build kennzeichnen.
+Community-Builds müssen klar als solche gekennzeichnet sein und ihre eigene Codesigning-Identität verwenden.
 
 ## Offizielles VGT-Release
 
-Ein offizielles Release benötigt zusätzlich:
+Zusätzlich erforderlich: kontrollierter Release-Runner, VGT-Codesigning-Schlüssel, Vier-Augen-Freigabe, unabhängige Hash-/Signaturprüfung, signiertes Git-Tag und veröffentlichte Corresponding Source.
 
-- kontrollierten, gehärteten Release-Runner
-- ausschließlich durch VGT kontrollierten Codesigning-Schlüssel
-- Vier-Augen-Freigabe des Source-Commits und der SBOM
-- unabhängige Prüfung von Hash und Signatur
-- signiertes Git-Tag
-- veröffentlichte Corresponding Source für exakt dieses Artefakt
-- bestätigte Threat-Feed- und Drittanbieterlizenzen
 
-Offizielle Schlüssel werden niemals in Repository, CI-Log, Build-ZIP oder Supportpaket gespeichert.
+## Release-Toolchain
 
-## AGPL-Quellangebot
+Offizielle VGT-Artefakte werden ausschließlich mit den in `TOOLCHAINS.lock` gepinnten Werkzeugen gebaut. Der Release-Gate bricht bei abweichender Go- oder PowerShell-Version ab. Das `go 1.23.0` in `go.mod` bleibt ausschließlich die minimale Quellkompatibilitätsgrenze.
 
-Zu jedem veröffentlichten Binärartefakt muss der vollständige bevorzugte Quellstand einschließlich Buildskripten verfügbar sein. Der Release-Eintrag verlinkt auf das unveränderliche Tag und dokumentiert den SHA-256 des Installers.
+## Reproduzierbarer Source-Release
 
+```powershell
+& .\build\Build-SourceRelease.ps1
+```
+
+Der Source-Builder leitet den ZIP-Zeitstempel aus dem aktuellen Changelog-Release-Datum ab, verwendet eine stabile Dateireihenfolge, speichert Einträge ohne kompressorabhängige Variabilität und erzeugt zusätzlich `SOURCE-MANIFEST.sha256` sowie eine SHA-256-Sidecar-Datei für das Archiv.

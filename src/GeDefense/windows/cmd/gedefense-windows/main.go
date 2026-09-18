@@ -10,10 +10,9 @@ import (
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/app"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/launcher"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/product"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/service"
 )
-
-const version = "2.3.2-vgt.win17"
 
 func main() {
 	console := flag.Bool("console", false, "run interactively")
@@ -21,7 +20,7 @@ func main() {
 	launch := flag.Bool("launch", false, "open the authenticated local security center")
 	flag.Parse()
 	if *showVersion {
-		fmt.Println(version)
+		fmt.Println(product.Version)
 		return
 	}
 	if *launch {
@@ -37,7 +36,7 @@ func main() {
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(executable), ".."))
 	runner := func(stop <-chan struct{}) error {
-		application, createErr := app.New(root, version)
+		application, createErr := app.New(root, product.Version)
 		if createErr != nil {
 			return createErr
 		}

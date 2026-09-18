@@ -80,24 +80,32 @@ $resolvedPayload = (Resolve-Path -LiteralPath $PayloadRoot -ErrorAction Stop).Pa
 if (-not (Test-Path -LiteralPath (Join-Path $resolvedPayload 'bin\gedefense-windows.exe') -PathType Leaf)) {
     throw [IO.FileNotFoundException]::new('GeDefense payload is incomplete.')
 }
+$versionPath = Join-Path $resolvedPayload 'VERSION'
+if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) { throw [IO.FileNotFoundException]::new('GeDefense release version metadata is missing.') }
+$releaseVersion = (Get-Content -LiteralPath $versionPath -Raw -Encoding UTF8).Trim()
+if ($releaseVersion -notmatch '^4\.0\.0-beta\.[1-9][0-9]*$') { throw [IO.InvalidDataException]::new('GeDefense release version metadata is invalid.') }
 $releaseCertificate = Join-Path $resolvedPayload 'vgt-release.cer'
 if (-not (Test-Path -LiteralPath $releaseCertificate -PathType Leaf)) { throw [IO.FileNotFoundException]::new('VGT release certificate is missing.') }
 $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($releaseCertificate)
-if ($certificate.Subject -ne 'CN=VisionGaia Technology VGT Release' -or $certificate.NotAfter -le [DateTime]::UtcNow.AddYears(1)) {
+$now = [DateTime]::UtcNow
+if ($certificate.NotBefore.ToUniversalTime() -gt $now -or $certificate.NotAfter.ToUniversalTime() -le $now.AddDays(30)) {
     throw [Security.SecurityException]::new('VGT release certificate validation failed.')
 }
-$bootstrapSignature = Get-AuthenticodeSignature -LiteralPath $PSCommandPath
-if (-not $bootstrapSignature.SignerCertificate -or $bootstrapSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
+$scriptSignature = Get-AuthenticodeSignature -LiteralPath $PSCommandPath
+if ($scriptSignature.Status -ne 'Valid' -or -not $scriptSignature.SignerCertificate -or $scriptSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
     throw [Security.SecurityException]::new('Installer trust anchor validation failed.')
 }
-Import-Certificate -FilePath $releaseCertificate -CertStoreLocation 'Cert:\LocalMachine\Root' | Out-Null
-Import-Certificate -FilePath $releaseCertificate -CertStoreLocation 'Cert:\LocalMachine\TrustedPublisher' | Out-Null
-$trustedBootstrapSignature = Get-AuthenticodeSignature -LiteralPath $PSCommandPath
-if ($trustedBootstrapSignature.Status -ne 'Valid') { throw [Security.SecurityException]::new('Installer signature validation failed.') }
 $catalogPath = Join-Path $resolvedPayload 'vgt-payload.cat'
 if (-not (Test-Path -LiteralPath $catalogPath -PathType Leaf)) { throw [IO.FileNotFoundException]::new('VGT payload catalog is missing.') }
+$catalogSignature = Get-AuthenticodeSignature -LiteralPath $catalogPath
+if ($catalogSignature.Status -ne 'Valid' -or -not $catalogSignature.SignerCertificate -or $catalogSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
+    throw [Security.SecurityException]::new('VGT payload catalog signer validation failed.')
+}
 $catalog = Test-FileCatalog -Path $resolvedPayload -CatalogFilePath $catalogPath -Detailed
 if ($catalog.Status -ne 'Valid') { throw [Security.SecurityException]::new('VGT payload catalog verification failed.') }
+# The signing chain must already be trusted. Only publisher trust is persisted so
+# LocalSystem can execute the signed GeDefense maintenance scripts under AllSigned.
+Import-Certificate -FilePath $releaseCertificate -CertStoreLocation 'Cert:\LocalMachine\TrustedPublisher' | Out-Null
 Write-VgtInstallPhase -Phase 'Trust' -State 'OK' -Detail $certificate.Thumbprint
 $resolvedInstaller = ''
 if ($InstallerPath) {
@@ -126,6 +134,7 @@ Copy-Item -LiteralPath (Join-Path $resolvedPayload 'bin') -Destination $installR
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'engine') -Destination $installRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'audit') -Destination $installRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'xdr') -Destination $installRoot -Recurse -Force
+Copy-Item -LiteralPath $versionPath -Destination (Join-Path $installRoot 'VERSION') -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'branding\vgt-lockscreen.jpg') -Destination (Join-Path $brandingRoot 'vgt-lockscreen.jpg') -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'branding\vgt-oem-logo.bmp') -Destination (Join-Path $brandingRoot 'vgt-oem-logo.bmp') -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'branding\gedefense-logo-v1.png') -Destination (Join-Path $brandingRoot 'gedefense-logo.png') -Force
@@ -185,6 +194,7 @@ $shortcut.TargetPath = $centerExecutable
 $shortcut.Arguments = ''
 $shortcut.WorkingDirectory = $installRoot
 $shortcut.Description = 'VGT GeDefense Security Center'
+$shortcut.IconLocation = (Join-Path $brandingRoot 'gedefense.ico')
 $shortcut.Save()
 
 $runKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
@@ -194,7 +204,7 @@ New-ItemProperty -Path $runKey -Name 'VGTGeDefenseTray' -Value ('"{0}" --tray' -
 $uninstallKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\VGTGeDefense'
 New-Item -Path $uninstallKey -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name DisplayName -Value 'VGT GeDefense Security Center' -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value '2.3.2' -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value $releaseVersion -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name Publisher -Value 'VisionGaia Technology' -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name InstallLocation -Value $installRoot -PropertyType String -Force | Out-Null
 if ($resolvedInstaller) {
@@ -245,4 +255,4 @@ Write-VgtInstallPhase -Phase 'MHXRealtime' -State 'OK' -Detail 'Guarded + Defend
 & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy AllSigned -File (Join-Path $installRoot 'xdr\Set-VgtMhxAppControl.ps1') -Action Audit | Out-Null
 if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new('Initial App Control audit policy deployment failed.') }
 Write-VgtInstallPhase -Phase 'AppControl' -State 'OK' -Detail 'Kernel audit policy deployed'
-Write-VgtInstallPhase -Phase 'Installer' -State 'COMPLETE' -Detail 'GeDefense 2.3.2 installed'
+Write-VgtInstallPhase -Phase 'Installer' -State 'COMPLETE' -Detail ("GeDefense {0} installed" -f $releaseVersion)

@@ -66,9 +66,12 @@ type ComponentStatus struct {
 
 type Engine struct {
 	mu            sync.Mutex
+	cacheMu       sync.RWMutex
 	script        string
 	operationRoot string
 	ledger        *evidence.Ledger
+	cached        Result
+	cachedAt      time.Time
 }
 
 func New(script, operationRoot string, ledger *evidence.Ledger) (*Engine, error) {
@@ -90,6 +93,16 @@ func New(script, operationRoot string, ledger *evidence.Ledger) (*Engine, error)
 
 func (e *Engine) Audit(ctx context.Context) (Result, error) {
 	return e.execute(ctx, "Audit", "EnterpriseBalanced", "")
+}
+
+func (e *Engine) Posture(ctx context.Context) (Result, error) {
+	e.cacheMu.RLock()
+	cached, cachedAt := e.cached, e.cachedAt
+	e.cacheMu.RUnlock()
+	if !cachedAt.IsZero() && time.Since(cachedAt) <= 30*time.Second {
+		return cached, nil
+	}
+	return e.Audit(ctx)
 }
 
 func (e *Engine) Enforce(ctx context.Context, profile string) (Result, error) {
@@ -156,6 +169,10 @@ func (e *Engine) execute(parent context.Context, mode, profile, component string
 	if err := json.Unmarshal(bytes.TrimPrefix(raw, []byte{0xef, 0xbb, 0xbf}), &result); err != nil {
 		return Result{}, errors.New("hardening result decoding failed")
 	}
+	e.cacheMu.Lock()
+	e.cached = result
+	e.cachedAt = time.Now()
+	e.cacheMu.Unlock()
 	if err := e.ledger.Append("hardening.operation", mode+":"+profile, "verified"); err != nil {
 		return Result{}, err
 	}

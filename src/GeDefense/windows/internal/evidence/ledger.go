@@ -67,8 +67,25 @@ func loadOrCreateKey(path string) ([]byte, error) {
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, []byte(base64.RawStdEncoding.EncodeToString(key)), 0o600); err != nil {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return loadOrCreateKey(path)
+	}
+	if err != nil {
 		return nil, err
+	}
+	_, writeErr := file.Write([]byte(base64.RawStdEncoding.EncodeToString(key)))
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr != nil {
+		_ = os.Remove(path)
+		return nil, writeErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(path)
+		return nil, closeErr
 	}
 	return key, nil
 }

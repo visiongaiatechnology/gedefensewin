@@ -1,4 +1,6 @@
 // STATUS: DIAMANT VGT SUPREME
+//go:build windows
+
 package launcher
 
 import (
@@ -11,10 +13,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/localhttp"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 )
 
 func Open() error {
@@ -22,12 +26,7 @@ func Open() error {
 	if err != nil {
 		return err
 	}
-	for _, candidate := range edgeCandidates() {
-		if info, statErr := os.Stat(candidate); statErr == nil && info.Mode().IsRegular() {
-			return exec.Command(candidate, "--app="+target, "--no-first-run").Start()
-		}
-	}
-	return exec.Command(filepath.Join(os.Getenv("SystemRoot"), "System32", "rundll32.exe"), "url.dll,FileProtocolHandler", target).Start()
+	return winapi.ShellOpenURL(target)
 }
 
 func BootstrapURL() (string, error) {
@@ -54,7 +53,7 @@ func BootstrapURL() (string, error) {
 		return "", err
 	}
 	request.Header.Set("X-VGT-Request-ID", requestID)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := localhttp.NewClient(8 * time.Second)
 	response, err := client.Do(request)
 	if err != nil {
 		return "", err
@@ -67,8 +66,14 @@ func BootstrapURL() (string, error) {
 	var payload struct {
 		Code string `json:"code"`
 	}
-	if err := json.Unmarshal(limited, &payload); err != nil || len(payload.Code) != 43 {
+	decoder := json.NewDecoder(bytes.NewReader(limited))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil || len(payload.Code) != 43 {
 		return "", errors.New("dashboard bootstrap response is invalid")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return "", errors.New("dashboard bootstrap response contains trailing data")
 	}
 	return "http://127.0.0.1:17831/#bootstrap=" + url.QueryEscape(payload.Code), nil
 }
@@ -80,11 +85,4 @@ func randomRequestID() (string, error) {
 	}
 	hexValue := hex.EncodeToString(raw)
 	return hexValue[0:8] + "-" + hexValue[8:12] + "-" + hexValue[12:16] + "-" + hexValue[16:20] + "-" + hexValue[20:32], nil
-}
-
-func edgeCandidates() []string {
-	return []string{
-		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
-		filepath.Join(os.Getenv("ProgramFiles"), "Microsoft", "Edge", "Application", "msedge.exe"),
-	}
 }

@@ -21,7 +21,9 @@ $catalogPath = Join-Path $resolvedPayload 'vgt-payload.cat'
 if (-not (Test-Path -LiteralPath $certificatePath -PathType Leaf) -or -not (Test-Path -LiteralPath $catalogPath -PathType Leaf)) { throw [IO.FileNotFoundException]::new('Signed uninstall payload is incomplete.') }
 $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath)
 $signature = Get-AuthenticodeSignature -LiteralPath $PSCommandPath
-if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) { throw [Security.SecurityException]::new('Uninstaller signature validation failed.') }
+if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) { throw [Security.SecurityException]::new('Uninstaller signature validation failed.') }
+$catalogSignature = Get-AuthenticodeSignature -LiteralPath $catalogPath
+if ($catalogSignature.Status -ne 'Valid' -or -not $catalogSignature.SignerCertificate -or $catalogSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) { throw [Security.SecurityException]::new('Uninstall catalog signer validation failed.') }
 $catalog = Test-FileCatalog -Path $resolvedPayload -CatalogFilePath $catalogPath -Detailed
 if ($catalog.Status -ne 'Valid') { throw [Security.SecurityException]::new('Uninstall payload catalog validation failed.') }
 
