@@ -2,35 +2,25 @@
 
 ## Go-Module
 
-Die kanonischen Versionen stehen in `src/GeDefense/windows/go.mod` und `go.sum`.
+GeDefense Windows 4 verwendet **keine externen Go-Module**. `src/GeDefense/windows/go.mod` enthält ausschließlich Modulpfad und Go-Version; `go.sum` ist absichtlich leer.
 
-| Modul | Verwendung | Version | Lizenz |
-|---|---|---:|---|
-| `fyne.io/systray` | Windows-Systemtray | 1.12.2 | Apache-2.0 |
-| `github.com/jchv/go-webview2` | natives Security-Center-Fenster | 56598839c808 | MIT |
-| `golang.org/x/sys` | Windows-Dienst, Handles und Sicherheits-APIs | 0.35.0 | BSD-3-Clause |
-| `github.com/godbus/dbus/v5` | indirekte Systray-Abhängigkeit | 5.1.0 | BSD-2-Clause |
-| `github.com/jchv/go-winloader` | indirekter Windows-Loader | c1995be93bd1 | ISC |
+Windows-spezifische Funktionen werden über kleine interne Wrapper gegen öffentliche Win32-APIs umgesetzt. Es entstehen keine transitiven Go-Abhängigkeiten und keine zusätzliche UI-Runtime.
 
-## Externe Laufzeiten
+## Laufzeit
 
-- Microsoft Windows 11
-- Microsoft Defender Antivirus
-- Microsoft WebView2 Runtime
+- Microsoft Windows 11 x64
+- Microsoft Defender Antivirus und verfügbare Windows-Sicherheitsfunktionen
+- Windows PowerShell 5.1 für signierte Hardening-/Systemtransaktionen
+
+## Build
+
+- Offizielle VGT-Release-Toolchain: Go 1.27.1 (siehe `TOOLCHAINS.lock`)
 - Windows PowerShell 5.1
-- Go Toolchain für Builds
-- MinGW-w64 `windres.exe` für Windows-Ressourcen
+- ein für den Go-Race-Detector geeignetes Windows-x64-Buildsystem für den vollständigen Release-Gate
 
-Diese Laufzeiten werden nicht unter AGPL relizenziert und nicht in diesem Repository gebündelt.
+## Dependency-Gate
 
-## Update-Regel
+Ein Release wird abgelehnt, wenn `go.mod` einen `require`-Block enthält, `go.sum` nicht leer ist, `go list -m all` mehr als das GeDefense-Modul ausgibt oder Frontend/Go-Code externe CDN- bzw. Script-Runtimes einführt.
 
-Ein Dependency-Update erfordert gemeinsam:
 
-1. Upstream-Release- und Security-Prüfung,
-2. Lizenzprüfung,
-3. Aktualisierung von `go.mod` und `go.sum`,
-4. Race-Tests und Vet,
-5. Aktualisierung von `THIRD-PARTY-NOTICES.md` und SBOM,
-6. Prüfung des finalen Binärimports und der Authenticode-Signatur.
-
+Der `go 1.23.0`-Eintrag in `go.mod` beschreibt die minimale Sprach-/Modulkompatibilität. Offizielle VGT-Artefakte werden ausschließlich mit der in `TOOLCHAINS.lock` gepinnten, unterstützten Go-Version gebaut.

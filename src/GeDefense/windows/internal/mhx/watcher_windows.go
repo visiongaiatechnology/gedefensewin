@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winexec"
 )
 
 const processTraceScript = `$ErrorActionPreference='Stop'
@@ -24,7 +24,7 @@ function Write-VgtWireMessage {
   [Console]::Out.Flush()
 }
 $targets = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-@('powershell.exe','pwsh.exe','cmd.exe','cscript.exe','wscript.exe','mshta.exe','rundll32.exe','regsvr32.exe','wmic.exe','certutil.exe','bitsadmin.exe','vssadmin.exe','schtasks.exe') | ForEach-Object { [void]$targets.Add($_) }
+@('powershell.exe','pwsh.exe','cmd.exe','cscript.exe','wscript.exe','mshta.exe','rundll32.exe','regsvr32.exe','wmic.exe','certutil.exe','bitsadmin.exe','vssadmin.exe','schtasks.exe','reg.exe','sc.exe','msiexec.exe','installutil.exe','msbuild.exe','regsvcs.exe','regasm.exe','forfiles.exe') | ForEach-Object { [void]$targets.Add($_) }
 Register-CimIndicationEvent -Namespace 'root/cimv2' -ClassName Win32_ProcessStartTrace -SourceIdentifier 'VGT_MHX_ProcessTrace' | Out-Null
 Write-VgtWireMessage ([ordered]@{ kind='ready'; timestampUtc=[DateTime]::UtcNow.ToString('o') })
 try {
@@ -58,7 +58,7 @@ try {
         $cursor = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f [uint32]$cursor.ParentProcessId) -ErrorAction SilentlyContinue
       }
       Write-VgtWireMessage ([ordered]@{ kind='event'; timestampUtc=[DateTime]::UtcNow.ToString('o'); event=[ordered]@{
-        timestampUtc=[DateTime]::UtcNow.ToString('o'); pid=$pidValue; parentPid=[uint32]$process.ParentProcessId
+        timestampUtc=[DateTime]::UtcNow.ToString('o'); creationUtc=if($process.CreationDate){$process.CreationDate.ToUniversalTime().ToString('o')}else{[DateTime]::UtcNow.ToString('o')}; pid=$pidValue; parentPid=[uint32]$process.ParentProcessId
         image=$name; imagePath=[string]$process.ExecutablePath; commandLine=$commandLine
         signerStatus=if($signature){[string]$signature.Status}else{'Unknown'}
         signerSubject=if($signature -and $signature.SignerCertificate){[string]$signature.SignerCertificate.Subject}else{''}
@@ -118,7 +118,7 @@ func (processWatcher) Run(ctx context.Context, output chan<- ProcessEvent, healt
 		}
 		deliverHealth(health, timestamp.UTC())
 		if message.Kind == "event" {
-			if message.Event == nil || message.Event.PID == 0 {
+			if message.Event == nil || message.Event.PID == 0 || message.Event.CreationUTC.IsZero() {
 				deliverFault(faults, errors.New("MHX process event validation failed"))
 				continue
 			}
@@ -145,17 +145,7 @@ func deliverHealth(health chan<- time.Time, timestamp time.Time) {
 }
 
 func windowsPowerShell() (string, error) {
-	if root := os.Getenv("SystemRoot"); filepath.IsAbs(root) {
-		path := filepath.Join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			return path, nil
-		}
-	}
-	path, err := exec.LookPath("powershell.exe")
-	if err == nil {
-		return path, nil
-	}
-	return "", errors.New("Windows PowerShell is unavailable")
+	return winexec.PowerShell()
 }
 
 func consumeErrors(ctx context.Context, reader io.Reader, faults chan<- error) {

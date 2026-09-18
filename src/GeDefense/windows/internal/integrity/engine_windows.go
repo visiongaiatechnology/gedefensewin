@@ -23,12 +23,13 @@ import (
 	"time"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence"
-	"golang.org/x/sys/windows"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 )
 
 const (
-	bucketCount       = 256
-	maximumAPIChanges = 5000
+	bucketCount          = 256
+	maximumAPIChanges    = 5000
+	maximumBucketRecords = 250000
 )
 
 type FileRecord struct {
@@ -82,6 +83,8 @@ type Engine struct {
 	mu         sync.RWMutex
 	status     Status
 	scanCancel context.CancelFunc
+	scanWG     sync.WaitGroup
+	closed     bool
 }
 
 func New(root string, ledger *evidence.Ledger) (*Engine, error) {
@@ -103,10 +106,13 @@ func (e *Engine) Run(stop <-chan struct{}) {
 		select {
 		case <-stop:
 			e.mu.Lock()
-			if e.scanCancel != nil {
-				e.scanCancel()
-			}
+			e.closed = true
+			cancel := e.scanCancel
 			e.mu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
+			e.scanWG.Wait()
 			return
 		case <-ticker.C:
 			status := e.Status()
@@ -155,6 +161,10 @@ func (e *Engine) Configure(enabled bool, intervalHours int) (Status, error) {
 
 func (e *Engine) Start() error {
 	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return errors.New("integrity engine is stopping")
+	}
 	if e.status.Running {
 		e.mu.Unlock()
 		return errors.New("integrity scan already running")
@@ -169,8 +179,12 @@ func (e *Engine) Start() error {
 	e.status.FilesHashed = 0
 	e.status.BytesHashed = 0
 	e.status.ReadErrors = 0
+	e.scanWG.Add(1)
 	e.mu.Unlock()
-	go e.scan(ctx)
+	go func() {
+		defer e.scanWG.Done()
+		e.scan(ctx)
+	}()
 	return nil
 }
 
@@ -277,6 +291,9 @@ type hashResult struct {
 }
 
 func (e *Engine) writeSnapshot(ctx context.Context, target string) (scanCounters, error) {
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	writers := make([]*bufio.Writer, bucketCount)
 	files := make([]*os.File, bucketCount)
 	for index := 0; index < bucketCount; index++ {
@@ -288,6 +305,7 @@ func (e *Engine) writeSnapshot(ctx context.Context, target string) (scanCounters
 		files[index] = file
 		writers[index] = bufio.NewWriterSize(file, 64<<10)
 	}
+
 	jobs := make(chan string, 256)
 	results := make(chan hashResult, 64)
 	var workers sync.WaitGroup
@@ -303,39 +321,58 @@ func (e *Engine) writeSnapshot(ctx context.Context, target string) (scanCounters
 		go func() {
 			defer workers.Done()
 			buffer := make([]byte, 1<<20)
-			for path := range jobs {
-				record, err := hashFile(ctx, path, buffer)
+			for {
 				select {
-				case results <- hashResult{record: record, err: err}:
-				case <-ctx.Done():
+				case <-workCtx.Done():
 					return
+				case path, ok := <-jobs:
+					if !ok {
+						return
+					}
+					record, err := hashFile(workCtx, path, buffer)
+					select {
+					case results <- hashResult{record: record, err: err}:
+					case <-workCtx.Done():
+						return
+					}
 				}
 			}
 		}()
 	}
+
 	var discovered atomic.Uint64
 	var walkErrors atomic.Uint64
 	walkDone := make(chan error, 1)
 	go func() {
 		defer close(jobs)
-		walkDone <- e.walkFixedDrives(ctx, jobs, &discovered, &walkErrors)
+		walkDone <- e.walkFixedDrives(workCtx, jobs, &discovered, &walkErrors)
 	}()
-	go func() { workers.Wait(); close(results) }()
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+
 	counters := scanCounters{}
+	var processingErr error
 	for result := range results {
 		if result.err != nil {
 			counters.errors++
 			continue
 		}
+		if processingErr != nil {
+			continue
+		}
 		payload, err := json.Marshal(result.record)
 		if err != nil {
-			closeBucketFiles(files, writers)
-			return counters, err
+			processingErr = err
+			cancel()
+			continue
 		}
 		bucket := pathBucket(result.record.Path)
 		if _, err := writers[bucket].Write(append(payload, '\n')); err != nil {
-			closeBucketFiles(files, writers)
-			return counters, err
+			processingErr = err
+			cancel()
+			continue
 		}
 		counters.hashed++
 		counters.bytes += uint64(result.record.Size)
@@ -343,15 +380,19 @@ func (e *Engine) writeSnapshot(ctx context.Context, target string) (scanCounters
 			e.updateProgress(discovered.Load(), counters.hashed, counters.bytes, counters.errors+walkErrors.Load())
 		}
 	}
+
 	walkErr := <-walkDone
 	counters.discovered = discovered.Load()
 	counters.errors += walkErrors.Load()
 	closeErr := closeBucketFiles(files, writers)
-	if walkErr != nil {
-		return counters, walkErr
+	if processingErr != nil {
+		return counters, processingErr
 	}
 	if ctx.Err() != nil {
 		return counters, ctx.Err()
+	}
+	if walkErr != nil && !errors.Is(walkErr, context.Canceled) {
+		return counters, walkErr
 	}
 	return counters, closeErr
 }
@@ -415,7 +456,7 @@ func shouldSkipDirectory(path, scannerRoot string, entry os.DirEntry) bool {
 }
 
 func fixedDriveRoots() ([]string, error) {
-	mask, err := windows.GetLogicalDrives()
+	mask, err := winapi.LogicalDrives()
 	if err != nil {
 		return nil, err
 	}
@@ -425,11 +466,11 @@ func fixedDriveRoots() ([]string, error) {
 			continue
 		}
 		root := fmt.Sprintf("%c:\\", 'A'+index)
-		pointer, err := windows.UTF16PtrFromString(root)
+		driveType, err := winapi.DriveType(root)
 		if err != nil {
 			return nil, err
 		}
-		if windows.GetDriveType(pointer) == windows.DRIVE_FIXED {
+		if driveType == winapi.DriveFixed {
 			roots = append(roots, root)
 		}
 	}
@@ -437,21 +478,24 @@ func fixedDriveRoots() ([]string, error) {
 }
 
 func hashFile(ctx context.Context, path string, buffer []byte) (FileRecord, error) {
-	file, err := os.Open(path)
+	file, before, err := winapi.OpenRegularFileNoReparse(path)
 	if err != nil {
 		return FileRecord{}, err
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return FileRecord{}, errors.New("file state unavailable")
-	}
 	hash := sha256.New()
 	reader := &contextReader{ctx: ctx, reader: file}
 	if _, err := io.CopyBuffer(hash, reader, buffer); err != nil {
 		return FileRecord{}, err
 	}
-	return FileRecord{Path: path, Size: info.Size(), ModifiedUnixNano: info.ModTime().UnixNano(), SHA256: hex.EncodeToString(hash.Sum(nil))}, nil
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return FileRecord{}, errors.New("file state unavailable after hashing")
+	}
+	if info.Size() != before.Size || info.ModTime().UnixNano() != before.ModifiedUnixNano {
+		return FileRecord{}, errors.New("file changed during hashing")
+	}
+	return FileRecord{Path: path, Size: before.Size, ModifiedUnixNano: before.ModifiedUnixNano, SHA256: hex.EncodeToString(hash.Sum(nil))}, nil
 }
 
 type contextReader struct {
@@ -541,7 +585,12 @@ func readBucket(path string) (map[string]FileRecord, error) {
 	records := make(map[string]FileRecord)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64<<10), 2<<20)
+	count := 0
 	for scanner.Scan() {
+		count++
+		if count > maximumBucketRecords {
+			return nil, errors.New("integrity bucket record boundary exceeded")
+		}
 		var record FileRecord
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil || record.Path == "" || len(record.SHA256) != 64 {
 			return nil, errors.New("integrity manifest validation failed")
@@ -654,13 +703,5 @@ func atomicWrite(path string, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	from, err := windows.UTF16PtrFromString(temporaryPath)
-	if err != nil {
-		return err
-	}
-	to, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return err
-	}
-	return windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+	return winapi.MoveFileReplace(temporaryPath, path)
 }

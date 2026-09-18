@@ -7,7 +7,7 @@ Operator
   │
   ▼
 GeDefenseCenter.exe / GeDefenseTray.exe
-  │  kurzlebiger Bootstrap, Loopback HTTP
+  │  lokaler Bootstrap / authentifizierte Loopback-Session
   ▼
 127.0.0.1:17831
   │
@@ -15,49 +15,70 @@ GeDefenseCenter.exe / GeDefenseTray.exe
 VGTGeDefense Windows Service (LocalSystem)
   ├─ Hardening Engine ── signierte PowerShell-Transaktionen
   ├─ SafetySys Audit ─── read-only Windows-Posture
-  ├─ MHX Engine ──────── Prozess- und Defender-Ereignisse
-  ├─ Feed Manager ────── Feodo/Spamhaus → Firewall-Regeln
+  ├─ MHX Engine ──────── Prozess-, Defender- und Netzwerk-Ereignisse
+  ├─ Native Network ──── TCP-Tabelle → Owning PID
+  ├─ Feed Manager ────── Threat Intel → bounded Prefix Index → Firewall
   ├─ Integrity Engine ── SHA-256-Snapshot-Generationen
   └─ Evidence Ledger ─── HMAC-SHA-256-Kette
 ```
 
-Die UI besitzt keine direkten Administratorrechte. Zustandsänderungen laufen ausschließlich über die authentifizierte Loopback-API und den als LocalSystem gestarteten Dienst.
+Die UI besitzt keine Administratorrechte. Zustandsänderungen laufen ausschließlich über die authentifizierte Loopback-API und den LocalSystem-Dienst.
+
+## Zero-Go-Dependency
+
+Die Windows-Integration verwendet Go-Standardbibliothek und interne Win32-Wrapper. Tray, Service Control Manager, Prozesshandles, Netzwerk-Telemetrie, Shell-Launch und Dateisystemprimitive benötigen keine externen Go-Module.
 
 ## Control Plane
 
 - Bindung ausschließlich an `127.0.0.1:17831`
-- Host- und Origin-Prüfung
-- zufälliges Dashboard-Token im geschützten ProgramData-Verzeichnis
-- einmaliger Bootstrap-Code für das native Center
-- Bearer-Sitzung und eindeutige Request-ID für zustandsändernde Operationen
-- keine externen UI-Ressourcen oder CDNs
+- RemoteAddr-, Host- und Origin-Prüfung
+- geschütztes Master-Token unter ProgramData
+- einmaliger Bootstrap-Code
+- HttpOnly/SameSite-Session
+- replay-geschützte Request-ID für Mutationen
+- bounded Replay-, Session-, Bootstrap- und Rate-State
+- strikte JSON-Größen- und Schema-Grenzen
+- keine externen UI-Ressourcen
 
-## MHX
+## MHX / XDR
 
-Der Windows-CIM-Provider beobachtet ausgewählte Script Hosts und LOLBins. Ereignisse enthalten Prozesspfad, Befehlszeile, Signaturstatus, Parent-Identität und begrenzte Prozesskette. EncodedCommand wird vor der effektiven Entscheidung dekodiert und inhaltlich bewertet.
+Prozessereignisse werden mit Authenticode, SHA-256, Parent und begrenzter Ancestry angereichert. PowerShell EncodedCommand wird bounded dekodiert; persistente Evidenz erhält Hash und Metadaten statt den dekodierten Inhalt.
 
-Die Modi sind:
+Native TCP-Telemetrie ordnet Remote-Verbindungen dem Owning PID zu. Eine Korrelation wird nur akzeptiert, wenn PID, Creation Time und Image des beobachteten Prozesses weiterhin übereinstimmen.
+
+```text
+Process signal
+   +
+Threat network destination
+   +
+stable process identity
+   ↓
+Attack Story
+```
+
+Netzwerkevidenz allein verleiht keine Host-Kill-Autorität.
+
+## Protection Modes
 
 - `monitor`: Analyse und Evidenz ohne MHX-Prozessterminierung
-- `guarded`: kontextuelle Blockade und Terminierung
-- `sovereign`: Guarded plus restriktive Netzwerk- und App-Control-Politik
+- `guarded`: kontextuelle Response nach unabhängiger Blockentscheidung
+- `sovereign`: Guarded plus App-Control-Enforcement und restriktive Netzwerkpolitik
 
-Windows App Control steht in Monitor und Guarded auf Audit. Sovereign kann nach expliziter Bestätigung Kernel-Enforcement aktivieren.
+Die UI führt durch Monitor → Guarded → Sovereign. Die Readiness-Entscheidung bleibt serverseitig.
 
 ## Integrity
 
-Der Scanner enumeriert feste Laufwerke, überspringt Reparse Points und systemkritische Verwaltungsverzeichnisse und schreibt 256 nach Pfad-Hash partitionierte Manifeste. Generationen werden erst nach vollständigem Schreiben atomar aktiviert. Vergleiche werden bucketweise gestreamt, um den Arbeitsspeicherbedarf zu begrenzen.
+Der Scanner enumeriert feste Laufwerke, öffnet Dateien reparse-sicher, verwendet bounded Worker/Channels, erkennt Änderungen während des Hashings, schreibt partitionierte Manifeste und aktiviert Generationen atomar.
 
 ## Persistenz
 
-Laufzeitdaten liegen unter `%ProgramData%\VGT\GeDefense` mit restriktiven ACLs. Programmdateien liegen unter `%ProgramFiles%\VGT\GeDefense`. Benutzer erhalten ausschließlich die für UI und Tray erforderlichen Leserechte.
+Laufzeitdaten liegen unter `%ProgramData%\VGT\GeDefense` mit restriktiven ACLs. Programmdateien liegen unter `%ProgramFiles%\VGT\GeDefense`.
 
 ## Fail-closed- und Fail-safe-Grenzen
 
-- ungültige Feed-Generationen werden nicht ausgerollt; die letzte gültige Generation bleibt aktiv
-- Sovereign benötigt eine exakte Bestätigungsphrase
-- nicht unterstützte Hardening-Komponenten werden abgelehnt
-- Integrity wird nicht automatisch aktiviert
-- Telemetrie ohne Heartbeat wird als `DEGRADED` gemeldet
-- eine Klassifikation `BLOCK` erhöht den Blockzähler erst nach erfolgreicher Prozessbeendigung
-
+- ungültige Feed-Generationen werden nicht ausgerollt
+- gefährlich breite, private, lokale und reservierte Threat-Intel-Netze werden abgelehnt
+- Sovereign benötigt serverseitige Readiness und explizite Bestätigung
+- Telemetrie ohne Heartbeat wird `DEGRADED`
+- ein Blockzähler steigt erst nach erfolgreicher, identitätsvalidierter Prozessbeendigung
+- PID-Reuse verhindert Korrelation und Response

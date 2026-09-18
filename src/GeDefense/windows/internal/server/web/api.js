@@ -1,0 +1,10 @@
+// STATUS: DIAMANT VGT SUPREME
+'use strict';
+let operatorToken = '';
+export function setOperatorToken(value){operatorToken=String(value||'').trim()}
+export function clearOperatorToken(){operatorToken=''}
+export function hasOperatorToken(){return operatorToken.length>0}
+function requestID(){if(globalThis.crypto?.randomUUID)return globalThis.crypto.randomUUID();const b=new Uint8Array(16);globalThis.crypto.getRandomValues(b);b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;const h=[...b].map(x=>x.toString(16).padStart(2,'0')).join('');return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`}
+export class APIError extends Error{constructor(message,id,status){super(message);this.name='APIError';this.errorId=id||'';this.status=status||0}}
+export async function api(path,options={}){const method=String(options.method||'GET').toUpperCase();const headers=new Headers({Accept:'application/json'});if(operatorToken)headers.set('Authorization',`Bearer ${operatorToken}`);let body;if(Object.prototype.hasOwnProperty.call(options,'json')){headers.set('Content-Type','application/json');body=JSON.stringify(options.json)}if(method!=='GET'&&method!=='HEAD')headers.set('X-VGT-Request-ID',requestID());const response=await fetch(path,{method,headers,body,credentials:'same-origin',cache:'no-store'});const payload=await response.json().catch(()=>({error:'Ungültige Serverantwort'}));if(!response.ok)throw new APIError(String(payload.error||`HTTP ${response.status}`),String(payload.errorId||''),response.status);return payload}
+export async function exchangeBootstrap(code){const response=await fetch('/api/v1/session/exchange',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code}),credentials:'same-origin',cache:'no-store'});const payload=await response.json().catch(()=>({error:'Bootstrap-Sitzung wurde abgelehnt'}));if(!response.ok)throw new APIError(String(payload.error||'Bootstrap-Sitzung wurde abgelehnt'),String(payload.errorId||''),response.status);return payload}

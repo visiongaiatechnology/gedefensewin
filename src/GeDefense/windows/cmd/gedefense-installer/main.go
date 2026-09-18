@@ -14,41 +14,48 @@ import (
 	"strings"
 	"syscall"
 
-	"golang.org/x/sys/windows"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/product"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winexec"
 )
 
 const (
-	version           = "2.3.2-vgt.win17"
 	maxArchiveFiles   = 512
 	maxExtractedBytes = 256 << 20
 )
 
 func main() {
 	uninstall := flag.Bool("uninstall", false, "remove GeDefense")
+	silent := flag.Bool("silent", false, "silent execution without GUI dialogs")
 	showVersion := flag.Bool("version", false, "show version")
 	flag.Parse()
 	if *showVersion {
-		notify("VGT GeDefense", version, windows.MB_ICONINFORMATION)
+		if !*silent {
+			notify("VGT GeDefense", product.Version, winapi.MBIconInformation)
+		} else {
+			fmt.Println(product.Version)
+		}
 		return
 	}
 	if err := execute(*uninstall, isElevated()); err != nil {
-		notify("VGT GeDefense", "Operation fehlgeschlagen: "+err.Error(), windows.MB_ICONERROR)
-		return
+		if !*silent {
+			notify("VGT GeDefense", "Operation fehlgeschlagen: "+err.Error(), winapi.MBIconError)
+		}
+		os.Exit(1)
 	}
 	if *uninstall {
-		notify("VGT GeDefense", "GeDefense wurde entfernt. Lokale Evidenzdaten wurden zur forensischen Nachvollziehbarkeit beibehalten.", windows.MB_ICONINFORMATION)
+		if !*silent {
+			notify("VGT GeDefense", "GeDefense wurde entfernt. Lokale Evidenzdaten wurden zur forensischen Nachvollziehbarkeit beibehalten.", winapi.MBIconInformation)
+		}
 		return
 	}
-	notify("VGT GeDefense", "Installation erfolgreich. Das Security Center ist jetzt im Startmenü verfügbar.", windows.MB_ICONINFORMATION)
+	if !*silent {
+		notify("VGT GeDefense", "Installation erfolgreich. Das Security Center ist jetzt im Startmenü verfügbar.", winapi.MBIconInformation)
+	}
 }
 
 func isElevated() bool {
-	var token windows.Token
-	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
-		return false
-	}
-	defer token.Close()
-	return token.IsElevated()
+	return winapi.IsProcessElevated()
 }
 
 func execute(uninstall, elevated bool) error {
@@ -72,28 +79,21 @@ func execute(uninstall, elevated bool) error {
 		return err
 	}
 	payloadRoot := filepath.Join(staging, "payload")
+	if _, err := os.Stat(filepath.Join(payloadRoot, "installer", "Bootstrap-GeDefense.ps1")); err != nil {
+		if _, errNested := os.Stat(filepath.Join(payloadRoot, "GeDefense", "installer", "Bootstrap-GeDefense.ps1")); errNested == nil {
+			payloadRoot = filepath.Join(payloadRoot, "GeDefense")
+		}
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	if !elevated {
-		operation := "Install"
-		if uninstall {
-			operation = "Uninstall"
-		}
-		bootstrap := filepath.Join(payloadRoot, "installer", "Bootstrap-GeDefense.ps1")
-		return runPowerShell(bootstrap, "-PayloadRoot", payloadRoot, "-Operation", operation, "-InstallerPath", executable)
-	}
-	scriptName := "Install-GeDefense.ps1"
+	operation := "Install"
 	if uninstall {
-		scriptName = "Uninstall-GeDefense.ps1"
+		operation = "Uninstall"
 	}
-	script := filepath.Join(payloadRoot, "installer", scriptName)
-	arguments := []string{"-PayloadRoot", payloadRoot}
-	if !uninstall {
-		arguments = append(arguments, "-InstallerPath", executable)
-	}
-	return runPowerShell(script, arguments...)
+	bootstrap := filepath.Join(payloadRoot, "installer", "Bootstrap-GeDefense.ps1")
+	return runBootstrap(bootstrap, "-PayloadRoot", payloadRoot, "-Operation", operation, "-InstallerPath", executable)
 }
 
 func installerCache(elevated bool) (string, error) {
@@ -130,12 +130,13 @@ func extractArchive(raw []byte, destination string) error {
 		if total > maxExtractedBytes {
 			return errors.New("Payload-Größenlimit überschritten")
 		}
-		cleanName := filepath.Clean(filepath.FromSlash(entry.Name))
-		if cleanName == "." || filepath.IsAbs(cleanName) || strings.HasPrefix(cleanName, ".."+string(os.PathSeparator)) {
-			return errors.New("Payload-Pfad wurde abgelehnt")
+		cleanName, err := safeArchiveRelativePath(entry.Name)
+		if err != nil {
+			return err
 		}
 		target := filepath.Join(destination, cleanName)
-		if !strings.HasPrefix(filepath.Clean(target), root) {
+		cleanTarget := filepath.Clean(target)
+		if !strings.HasPrefix(cleanTarget, root) {
 			return errors.New("Payload-Pfad hat das Zielverzeichnis verlassen")
 		}
 		key := strings.ToLower(target)
@@ -159,31 +160,99 @@ func extractArchive(raw []byte, destination string) error {
 	return nil
 }
 
-func extractFile(entry *zip.File, target string) error {
+func safeArchiveRelativePath(name string) (string, error) {
+	if name == "" || len(name) > 4096 || strings.IndexByte(name, 0) >= 0 {
+		return "", errors.New("Payload-Pfad wurde abgelehnt")
+	}
+	normalized := strings.ReplaceAll(name, `\`, "/")
+	if strings.HasPrefix(normalized, "/") {
+		return "", errors.New("Payload-Pfad wurde abgelehnt")
+	}
+	parts := strings.Split(normalized, "/")
+	cleanParts := make([]string, 0, len(parts))
+	for index, part := range parts {
+		if part == "" && index == len(parts)-1 {
+			continue
+		}
+		if part == "" || part == "." || part == ".." || len(part) > 255 || strings.HasSuffix(part, " ") || strings.HasSuffix(part, ".") {
+			return "", errors.New("Payload-Pfad wurde abgelehnt")
+		}
+		for _, char := range part {
+			if char < 0x20 || strings.ContainsRune(`<>:"|?*`, char) {
+				return "", errors.New("Payload-Pfad wurde abgelehnt")
+			}
+		}
+		device := strings.ToUpper(part)
+		if dot := strings.IndexByte(device, '.'); dot >= 0 {
+			device = device[:dot]
+		}
+		if device == "CON" || device == "PRN" || device == "AUX" || device == "NUL" ||
+			(len(device) == 4 && (strings.HasPrefix(device, "COM") || strings.HasPrefix(device, "LPT")) && device[3] >= '1' && device[3] <= '9') {
+			return "", errors.New("Payload-Pfad wurde abgelehnt")
+		}
+		cleanParts = append(cleanParts, part)
+	}
+	if len(cleanParts) == 0 {
+		return "", errors.New("Payload-Pfad wurde abgelehnt")
+	}
+	cleanName := filepath.Clean(filepath.Join(cleanParts...))
+	if cleanName == "." || filepath.IsAbs(cleanName) || filepath.VolumeName(cleanName) != "" || strings.HasPrefix(cleanName, ".."+string(os.PathSeparator)) {
+		return "", errors.New("Payload-Pfad wurde abgelehnt")
+	}
+	return cleanName, nil
+}
+
+func extractFile(entry *zip.File, target string) (err error) {
+	if entry.UncompressedSize64 > maxExtractedBytes {
+		return errors.New("Payload-Dateigröße wurde abgelehnt")
+	}
 	source, err := entry.Open()
 	if err != nil {
 		return err
 	}
 	defer source.Close()
+
 	destination, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(destination, io.LimitReader(source, maxExtractedBytes+1))
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(target)
+		}
+	}()
+
+	limit := int64(entry.UncompressedSize64) + 1
+	written, copyErr := io.Copy(destination, io.LimitReader(source, limit))
+	if copyErr == nil && uint64(written) != entry.UncompressedSize64 {
+		copyErr = errors.New("Payload-Dateigröße stimmt nicht mit dem Archiv überein")
+	}
+	if copyErr == nil {
+		copyErr = destination.Sync()
+	}
 	closeErr := destination.Close()
 	if copyErr != nil {
 		return copyErr
 	}
-	return closeErr
+	if closeErr != nil {
+		return closeErr
+	}
+	committed = true
+	return nil
 }
 
-func runPowerShell(script string, arguments ...string) error {
+func runBootstrap(script string, arguments ...string) error {
 	if info, err := os.Lstat(script); err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("signiertes Installationsskript fehlt")
 	}
-	commandArguments := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script}
+	commandArguments := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "AllSigned", "-File", script}
 	commandArguments = append(commandArguments, arguments...)
-	command := exec.Command(filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), commandArguments...)
+	powerShell, err := winexec.PowerShell()
+	if err != nil {
+		return err
+	}
+	command := exec.Command(powerShell, commandArguments...)
 	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -197,7 +266,5 @@ func runPowerShell(script string, arguments ...string) error {
 }
 
 func notify(title, message string, style uint32) {
-	caption, _ := windows.UTF16PtrFromString(title)
-	text, _ := windows.UTF16PtrFromString(message)
-	_, _ = windows.MessageBox(0, text, caption, windows.MB_OK|style)
+	_ = winapi.MessageBox(title, message, style)
 }

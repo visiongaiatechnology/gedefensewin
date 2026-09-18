@@ -20,12 +20,13 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sys/windows"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 )
 
 const (
-	feedInterval = 12 * time.Hour
-	maxFeedBytes = 4 << 20
+	feedInterval      = 12 * time.Hour
+	maxFeedBytes      = 4 << 20
+	maxFeedIndicators = 250000
 )
 
 type feedSource struct{ Name, URL, Format string }
@@ -34,6 +35,17 @@ var feedSources = []feedSource{
 	{Name: "abuse.ch Feodo Tracker", URL: "https://feodotracker.abuse.ch/downloads/ipblocklist.txt", Format: "plain"},
 	{Name: "Spamhaus DROP IPv4", URL: "https://www.spamhaus.org/drop/drop_v4.json", Format: "ndjson"},
 	{Name: "Spamhaus DROP IPv6", URL: "https://www.spamhaus.org/drop/drop_v6.json", Format: "ndjson"},
+}
+
+var nonPublicThreatRanges = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("2001:db8::/32"),
 }
 
 type feedSnapshot struct {
@@ -51,19 +63,20 @@ type FeedAttribution struct {
 }
 
 type FeedManager struct {
-	root     string
-	client   *http.Client
-	mu       sync.RWMutex
-	status   FeedStatus
-	prefixes []netip.Prefix
+	root        string
+	client      *http.Client
+	mu          sync.RWMutex
+	status      FeedStatus
+	prefixes    []netip.Prefix
+	prefixIndex map[int]map[netip.Addr]struct{}
 }
 
 func NewFeedManager(root string) (*FeedManager, error) {
 	if !filepath.IsAbs(root) {
 		return nil, errors.New("threat intelligence root must be absolute")
 	}
-	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ForceAttemptHTTP2: true, MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
-	manager := &FeedManager{root: root, client: &http.Client{Transport: transport, Timeout: 45 * time.Second}, status: FeedStatus{State: "INITIALIZING"}}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ForceAttemptHTTP2: true, MaxIdleConns: 4, MaxIdleConnsPerHost: 2, IdleConnTimeout: 30 * time.Second, ResponseHeaderTimeout: 15 * time.Second}
+	manager := &FeedManager{root: root, client: &http.Client{Transport: transport, Timeout: 45 * time.Second}, status: FeedStatus{State: "INITIALIZING"}, prefixIndex: make(map[int]map[netip.Addr]struct{})}
 	_ = manager.load()
 	return manager, nil
 }
@@ -104,6 +117,11 @@ func (m *FeedManager) Sync(ctx context.Context) error {
 		}
 		for _, prefix := range prefixes {
 			all[prefix.Masked()] = struct{}{}
+			if len(all) > maxFeedIndicators {
+				err = errors.New("threat feed indicator boundary exceeded")
+				m.fail(attempt, err)
+				return err
+			}
 		}
 		sources = append(sources, attribution)
 	}
@@ -126,8 +144,10 @@ func (m *FeedManager) Sync(ctx context.Context) error {
 		m.fail(attempt, err)
 		return err
 	}
+	index := buildPrefixIndex(prefixes)
 	m.mu.Lock()
 	m.prefixes = prefixes
+	m.prefixIndex = index
 	m.status = FeedStatus{LastAttemptUTC: attempt, LastSuccessUTC: attempt, NextSyncUTC: attempt.Add(feedInterval), Indicators: len(prefixes), Generation: hex.EncodeToString(digest[:]), State: "CURRENT"}
 	m.mu.Unlock()
 	return nil
@@ -140,7 +160,7 @@ func (m *FeedManager) fetch(ctx context.Context, source feedSource) ([]netip.Pre
 		return nil, attribution, err
 	}
 	req.Header.Set("Accept", "application/json, text/json, text/plain")
-	req.Header.Set("User-Agent", "VGT-GeDefense-MHX/6.0")
+	req.Header.Set("User-Agent", "VGT-GeDefense-MHX/7.0")
 	response, err := m.client.Do(req)
 	if err != nil {
 		return nil, attribution, fmt.Errorf("fetch %s: %w", source.Name, err)
@@ -177,7 +197,10 @@ func parsePlainFeed(body []byte) ([]netip.Prefix, error) {
 			continue
 		}
 		if address, err := netip.ParseAddr(line); err == nil {
-			result = append(result, netip.PrefixFrom(address, address.BitLen()))
+			prefix := netip.PrefixFrom(address.Unmap(), address.Unmap().BitLen())
+			if validThreatPrefix(prefix) {
+				result = append(result, prefix)
+			}
 		}
 	}
 	return result, scanner.Err()
@@ -198,7 +221,7 @@ func parseNDJSONFeed(body []byte) ([]netip.Prefix, error) {
 			continue
 		}
 		prefix, err := netip.ParsePrefix(record.CIDR)
-		if err != nil {
+		if err != nil || !validThreatPrefix(prefix) {
 			return nil, errors.New("threat feed CIDR validation failed")
 		}
 		result = append(result, prefix.Masked())
@@ -242,18 +265,84 @@ func parseNDJSONAttribution(body []byte, attribution FeedAttribution) (FeedAttri
 	return attribution, nil
 }
 
+func validThreatPrefix(prefix netip.Prefix) bool {
+	if !prefix.IsValid() {
+		return false
+	}
+	prefix = prefix.Masked()
+	address := prefix.Addr().Unmap()
+	bits := prefix.Bits()
+	if prefix.Addr().Is4In6() {
+		bits -= 96
+	}
+	if !address.IsValid() || !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsMulticast() || address.IsUnspecified() {
+		return false
+	}
+	if (address.Is4() && bits < 8) || (address.Is6() && bits < 16) {
+		return false
+	}
+	for _, reserved := range nonPublicThreatRanges {
+		if reserved.Contains(address) || prefix.Contains(reserved.Addr()) {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *FeedManager) Contains(address netip.Addr) bool {
+	if !address.IsValid() {
+		return false
+	}
+	address = address.Unmap()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	for _, prefix := range m.prefixes {
-		if prefix.Contains(address) {
+	for bits := address.BitLen(); bits >= 0; bits-- {
+		bucket := m.prefixIndex[bits]
+		if len(bucket) == 0 {
+			continue
+		}
+		candidate := netip.PrefixFrom(address, bits).Masked().Addr()
+		if _, ok := bucket[candidate]; ok {
 			return true
 		}
 	}
 	return false
 }
 
-func (m *FeedManager) Status() FeedStatus { m.mu.RLock(); defer m.mu.RUnlock(); return m.status }
+func buildPrefixIndex(prefixes []netip.Prefix) map[int]map[netip.Addr]struct{} {
+	index := make(map[int]map[netip.Addr]struct{}, 32)
+	for _, prefix := range prefixes {
+		if !prefix.IsValid() {
+			continue
+		}
+		prefix = prefix.Masked()
+		address := prefix.Addr().Unmap()
+		bits := prefix.Bits()
+		if prefix.Addr().Is4In6() {
+			bits -= 96
+		}
+		if bits < 0 || bits > address.BitLen() {
+			continue
+		}
+		bucket := index[bits]
+		if bucket == nil {
+			bucket = make(map[netip.Addr]struct{})
+			index[bits] = bucket
+		}
+		canonical := netip.PrefixFrom(address, bits).Masked().Addr()
+		bucket[canonical] = struct{}{}
+	}
+	return index
+}
+
+func (m *FeedManager) Status() FeedStatus {
+	if m == nil {
+		return FeedStatus{}
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.status
+}
 
 func (m *FeedManager) SnapshotPath() string { return filepath.Join(m.root, "threat-intelligence.json") }
 
@@ -278,14 +367,16 @@ func (m *FeedManager) load() error {
 	prefixes := make([]netip.Prefix, 0, len(snapshot.Indicators))
 	for _, value := range snapshot.Indicators {
 		prefix, parseErr := netip.ParsePrefix(value)
-		if parseErr != nil {
-			return parseErr
+		if parseErr != nil || !validThreatPrefix(prefix) {
+			return errors.New("cached threat intelligence validation failed")
 		}
 		prefixes = append(prefixes, prefix.Masked())
 	}
 	digest := sha256.Sum256(bytesTrimSpace(payload))
+	index := buildPrefixIndex(prefixes)
 	m.mu.Lock()
 	m.prefixes = prefixes
+	m.prefixIndex = index
 	m.status = FeedStatus{LastSuccessUTC: snapshot.GeneratedUTC, NextSyncUTC: snapshot.GeneratedUTC.Add(feedInterval), Indicators: len(prefixes), Generation: hex.EncodeToString(digest[:]), State: "CACHED"}
 	m.mu.Unlock()
 	return nil
@@ -315,15 +406,7 @@ func atomicWrite(path string, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	from, err := windows.UTF16PtrFromString(temporaryPath)
-	if err != nil {
-		return err
-	}
-	to, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return err
-	}
-	return windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+	return winapi.MoveFileReplace(temporaryPath, path)
 }
 
 func bytesTrimSpace(value []byte) []byte { return []byte(strings.TrimSpace(string(value))) }

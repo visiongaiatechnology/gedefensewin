@@ -44,7 +44,7 @@ func New(script, operationRoot string, ledger *evidence.Ledger) (*Engine, error)
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{runner: runner, ledger: ledger, last: Result{Engine: "VGT MHX 5.0", Findings: []Finding{}}}, nil
+	return &Engine{runner: runner, ledger: ledger, last: Result{Engine: "VGT MHX 7.0", Findings: []Finding{}}}, nil
 }
 
 func (e *Engine) Scan(ctx context.Context) (Result, error) {

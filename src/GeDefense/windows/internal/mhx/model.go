@@ -23,6 +23,7 @@ const (
 
 type ProcessEvent struct {
 	TimestampUTC   time.Time         `json:"timestampUtc"`
+	CreationUTC    time.Time         `json:"creationUtc"`
 	PID            uint32            `json:"pid"`
 	ParentPID      uint32            `json:"parentPid"`
 	Image          string            `json:"image"`
@@ -60,13 +61,17 @@ type Analysis struct {
 	Purpose           string      `json:"purpose"`
 	ConfidenceBasis   int         `json:"confidenceBasisPoints"`
 	PID               uint32      `json:"pid"`
+	CreationUTC       time.Time   `json:"creationUtc,omitempty"`
 	ParentPID         uint32      `json:"parentPid"`
 	Image             string      `json:"image"`
 	Parent            string      `json:"parent"`
 	Signer            string      `json:"signer"`
 	DecodedEncoding   string      `json:"decodedEncoding,omitempty"`
-	DecodedPayload    string      `json:"decodedPayload,omitempty"`
+	DecodedSHA256     string      `json:"decodedSha256,omitempty"`
+	DecodedBytes      int         `json:"decodedBytes,omitempty"`
 	Signals           []string    `json:"signals"`
+	SignalCategories  []string    `json:"signalCategories"`
+	ResponseAuthority bool        `json:"responseAuthority"`
 }
 
 type FeedStatus struct {
@@ -89,8 +94,42 @@ type Status struct {
 	AppControl            string     `json:"appControl"`
 	KernelEnforcement     bool       `json:"kernelEnforcement"`
 	ProtectionMode        string     `json:"protectionMode"`
+	ProtectionHealth      string     `json:"protectionHealth"`
+	ProtectionVerifiedUTC time.Time  `json:"protectionVerifiedUtc,omitempty"`
 	EventsEvaluated       uint64     `json:"eventsEvaluated"`
 	EventsBlocked         uint64     `json:"eventsBlocked"`
 	KnownBenign           uint64     `json:"knownBenign"`
 	ThreatIntelligence    FeedStatus `json:"threatIntelligence"`
+	NetworkTelemetry      string     `json:"networkTelemetry"`
+	NetworkConnections    uint64     `json:"networkConnections"`
+	ThreatNetworkHits     uint64     `json:"threatNetworkHits"`
+	AttackStories         uint64     `json:"attackStories"`
+}
+
+type NetworkFinding struct {
+	ID            string    `json:"id"`
+	TimestampUTC  time.Time `json:"timestampUtc"`
+	PID           uint32    `json:"pid"`
+	Image         string    `json:"image,omitempty"`
+	RemoteIP      string    `json:"remoteIp"`
+	RemotePort    uint16    `json:"remotePort"`
+	LocalPort     uint16    `json:"localPort"`
+	ThreatIntel   bool      `json:"threatIntel"`
+	Severity      Severity  `json:"severity"`
+	CorrelationID string    `json:"correlationId,omitempty"`
+	Response      string    `json:"response"`
+}
+
+type AttackStory struct {
+	ID                string    `json:"id"`
+	StartedUTC        time.Time `json:"startedUtc"`
+	UpdatedUTC        time.Time `json:"updatedUtc"`
+	PID               uint32    `json:"pid"`
+	Image             string    `json:"image"`
+	ProcessAnalysisID string    `json:"processAnalysisId,omitempty"`
+	Severity          Severity  `json:"severity"`
+	Signals           []string  `json:"signals"`
+	RemoteIP          string    `json:"remoteIp,omitempty"`
+	RemotePort        uint16    `json:"remotePort,omitempty"`
+	Response          string    `json:"response"`
 }

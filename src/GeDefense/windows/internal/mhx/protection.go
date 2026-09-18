@@ -46,6 +46,13 @@ type AppControlResult struct {
 	KernelEnforcement bool   `json:"KernelEnforcement"`
 }
 
+type protectionController interface {
+	ApplyThreatIntelligence(context.Context, string) (FirewallResult, error)
+	Applications(context.Context, string, string) (ApplicationAllowResult, error)
+	ApplyAppControl(context.Context, string) (AppControlResult, error)
+	Apply(context.Context, string) (ProtectionResult, error)
+}
+
 type protectionManager struct {
 	runner     *scriptengine.Engine
 	firewall   *scriptengine.Engine
