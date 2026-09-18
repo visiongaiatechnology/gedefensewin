@@ -3,7 +3,7 @@
 [![Status](https://img.shields.io/badge/status-v4.0.0--beta.1-4cc9ff?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-168bff?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-31d0aa?style=for-the-badge)](LICENSE)
-[![Security Standard](https://img.shields.io/badge/security-DIAMANT%20VGT%20SUPREME-blueviolet?style=for-the-badge)](ARCHITECTURE.md)
+[![Security Standard](https://img.shields.io/badge/security-VGT-blueviolet?style=for-the-badge)](ARCHITECTURE.md)
 [![Dependencies](https://img.shields.io/badge/dependencies-0%20Go%20Modules%20%7C%200%20CDNs-success?style=for-the-badge)](DEPENDENCIES.md)
 
 GeDefense Windows 4 ist die souveräne, lokal überprüfbare Endpoint-Defense- und Orchestrierungsplattform von VisionGaia Technology. Sie vereint Microsoft Defender Antivirus, Windows Filtering Platform (WFP), Attack Surface Reduction (ASR), Windows App Control (WDAC), Baseline-Systemhärtung, SafetySys Compliance Audit, MHX EDR/XDR, native TCP-zu-Prozess-Korrelation und dateibasierte Integritätsüberwachung in einer gemeinsamen, vollständig entkoppelten lokalen Control Plane.
