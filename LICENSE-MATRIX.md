@@ -11,4 +11,4 @@
 | abuse.ch Feodo Tracker | Laufzeit-Feed | Bedingungen des Anbieters; nicht gebündelt |
 | Spamhaus DROP | Laufzeit-Feed | Spamhaus-Nutzungsbedingungen; nicht gebündelt |
 
-GeDefense Windows 4.0.0-beta.1 besitzt keine externen Go-Module.
+GeDefense Windows 4.1.0-beta.1 besitzt keine externen Go-Module.

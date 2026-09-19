@@ -17,7 +17,7 @@ type fakeProtectionController struct {
 	kernelEnforce bool
 }
 
-func (f *fakeProtectionController) ApplyThreatIntelligence(context.Context, string) (FirewallResult, error) {
+func (f *fakeProtectionController) ApplyThreatIntelligence(context.Context, string, string, int) (FirewallResult, error) {
 	return FirewallResult{}, nil
 }
 func (f *fakeProtectionController) Applications(context.Context, string, string) (ApplicationAllowResult, error) {
@@ -117,7 +117,7 @@ type applicationProtectionController struct {
 	appErr    error
 }
 
-func (f *applicationProtectionController) ApplyThreatIntelligence(context.Context, string) (FirewallResult, error) {
+func (f *applicationProtectionController) ApplyThreatIntelligence(context.Context, string, string, int) (FirewallResult, error) {
 	return FirewallResult{}, nil
 }
 func (f *applicationProtectionController) Applications(_ context.Context, action, path string) (ApplicationAllowResult, error) {

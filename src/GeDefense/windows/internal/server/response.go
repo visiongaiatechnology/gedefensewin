@@ -11,10 +11,14 @@ import (
 )
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
-	if r.Body == nil || !contentTypeJSON(r) {
+	return decodeJSONBounded(w, r, target, 8192)
+}
+
+func decodeJSONBounded(w http.ResponseWriter, r *http.Request, target any, maximumBytes int64) error {
+	if r.Body == nil || !contentTypeJSON(r) || maximumBytes < 1 || maximumBytes > 1<<20 {
 		return errors.New("JSON body required")
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8192)
+	r.Body = http.MaxBytesReader(w, r.Body, maximumBytes)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {

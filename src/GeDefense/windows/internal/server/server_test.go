@@ -52,6 +52,12 @@ func (f *fixedMHX) NetworkFindings(int) []mhx.NetworkFinding     { return []mhx.
 func (f *fixedMHX) AttackStories(int) []mhx.AttackStory          { return []mhx.AttackStory{} }
 func (f *fixedMHX) SetMode(_ context.Context, mode string) error { f.mode = mode; return nil }
 func (f *fixedMHX) SyncFeeds(context.Context) error              { return nil }
+func (f *fixedMHX) ProtectedNetworkPolicy() mhx.ProtectedNetworkPolicy {
+	return mhx.ProtectedNetworkPolicy{}
+}
+func (f *fixedMHX) SetProtectedNetworkPolicy(context.Context, []string) (mhx.ProtectedNetworkPolicy, error) {
+	return mhx.ProtectedNetworkPolicy{}, nil
+}
 func (f *fixedMHX) Applications(context.Context) ([]mhx.ApplicationAllow, error) {
 	return []mhx.ApplicationAllow{}, nil
 }

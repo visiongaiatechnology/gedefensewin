@@ -3,7 +3,7 @@
 ```text
 // STATUS: DIAMANT VGT SUPREME
 // PLATFORM: Windows 11 x64
-// ARCHITECTURE MAP VERSION: 4.0.0-beta.1
+// ARCHITECTURE MAP VERSION: 4.1.0-beta.1
 // CONTROL PLANE: 127.0.0.1:17831
 ```
 
@@ -225,7 +225,7 @@ The following mapping links each physical file relative to the project root to i
 - `src/GeDefense/windows/cmd/gedefense-windows/main.go` → Service entrypoint; parses CLI flags (`--console`, `--launch`, `--version`) and invokes SCM.
 - `src/GeDefense/windows/internal/service/service_windows.go` → Pure Win32 Service Control Manager integration (`StartServiceCtrlDispatcherW`).
 - `src/GeDefense/windows/internal/app/app.go` → Main application composition root; instantiates engines, opens ledger, runs workers, starts HTTP server.
-- `src/GeDefense/windows/internal/product/version.go` → Embedded version constant (`Version = "4.0.0-beta.1"`).
+- `src/GeDefense/windows/internal/product/version.go` → Embedded version constant (`Version = "4.1.0-beta.1"`).
 - `src/GeDefense/windows/internal/server/router.go` → HTTP ServeMux configuration; asset file serving and API route registration.
 - `src/GeDefense/windows/internal/server/middleware.go` → Host, RemoteAddr, Origin, Rate-Limit, Replay Guard, and Security Header middleware.
 - `src/GeDefense/windows/internal/server/session.go` → One-time bootstrap code generation, exchange logic, session cookie management.
@@ -385,7 +385,7 @@ Runs in the operator's user session as a lightweight tray notification icon (`Ge
 ### 4.5 Standalone Installer & Release Packager Module
 
 #### Purpose
-Provides a self-contained, digitally signed Windows installation and uninstallation package (`GeDefense-Setup-x64-v4.0.0-beta.1.exe`).
+Provides a self-contained, digitally signed Windows installation and uninstallation package (`GeDefense-Setup-x64-v4.1.0-beta.1.exe`).
 
 #### Capabilities
 - Extracts embedded zip payloads (`payload.zip`) safely: guards against zip-slip attacks, symlink traversal, decompression bombs, and reserved device names.
@@ -1384,7 +1384,7 @@ sequenceDiagram
 | `src/GeDefense/windows/cmd/gedefense-windows/main.go` | `main` | `main()`: Service dispatcher & CLI parser |
 | `src/GeDefense/windows/internal/service/service_windows.go` | `Runner`, `serviceStatus`, `serviceTableEntry` | `Run()`, `RunConsole()`, `serviceMain()`, `serviceControlHandler()` |
 | `src/GeDefense/windows/internal/app/app.go` | `App` | `New()`, `Run()` |
-| `src/GeDefense/windows/internal/product/version.go` | None | `const Version = "4.0.0-beta.1"` |
+| `src/GeDefense/windows/internal/product/version.go` | None | `const Version = "4.1.0-beta.1"` |
 | `src/GeDefense/windows/internal/server/router.go` | None | `New()`: builds http.ServeMux with all route bindings |
 | `src/GeDefense/windows/internal/server/types.go` | `Server`, `HardeningEngine`, `AuditEngine`, `XDREngine`, `MHXEngine`, `IntegrityEngine` | Subsystem interface definitions |
 | `src/GeDefense/windows/internal/server/middleware.go` | `replayGuard`, `rateWindow` | `headers()`, `authorize()`, `masterAuthorize()`, `claim()`, `allowRequest()` |
@@ -1446,6 +1446,20 @@ During the complete audit of the repository, several distinct architectural patt
 
 ```text
 // ARCHITECTURE MAP COMPLETE
-// VERIFIED AGAINST VGT CODEBASE v4.0.0-beta.1
+// VERIFIED AGAINST VGT CODEBASE v4.1.0-beta.1
 // ZERO COMPROMISE · ZERO EXTERNAL GO DEPENDENCIES · ZERO CDN ASSETS
 ```
+
+---
+
+## 4.1 Addendum: Sovereign Threat Intelligence Control Plane
+
+GeDefense Windows 4.1 isolates Threat Intelligence into `internal/threatintel`. The catalog assigns immutable per-feed authority (`BLOCK`, `CORRELATE_ONLY`, `ANNOTATE_ONLY`); source data cannot promote its own authority. Per-feed source snapshots are canonicalized, bounded and fingerprinted. Lookup publication occurs through immutable `atomic.Pointer[Index]` generations. The same package owns the Protected-Network Safety Plane: a compact prefix trie subtracts authenticated management exceptions from the BLOCK projection before the WFP generation hash is computed, while the raw ThreatIndex remains unchanged for attribution and XDR correlation.
+
+The BLOCK projection is fingerprinted independently from the full correlation index. `Sync-VgtMhxFirewall.ps1` stages a complete Windows Firewall generation using Dynamic Keyword Addresses when available and a bounded static-rule fallback otherwise. A generation is considered active by MHX only after the returned rule count, shard count, indicator count and SHA-256 generation exactly match the desired snapshot. Sovereign readiness requires desired and active enforcement generations to match.
+
+`wfp_watcher_windows.go` consumes failure-only Security Event 5157 telemetry. Windows 11 `FilterOrigin` is preserved when present, and GeDefense Threat Intelligence firewall rules use `VGT-GeDefense-TI-*` identifiers to make GeDefense-originated drops distinguishable from unrelated WFP decisions. Block events are correlated back to the immutable ThreatIndex and recent PID-safe MHX process records before Attack Story creation.
+
+Network intelligence does not create autonomous process-kill authority. Host response remains gated by independent MHX `ResponseAuthority` plus PID, creation-time and binary-path revalidation.
+
+Canonical subsystem specification: `docs/THREAT-INTELLIGENCE.md`.

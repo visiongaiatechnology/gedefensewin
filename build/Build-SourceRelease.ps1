@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $version = (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION') -Raw -Encoding UTF8).Trim()
-if ($version -notmatch '^4\.0\.0-beta\.[1-9][0-9]*$') { throw [IO.InvalidDataException]::new('Release VERSION is invalid.') }
+if ($version -notmatch '^4\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*$') { throw [IO.InvalidDataException]::new('Release VERSION is invalid.') }
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = Join-Path $projectRoot 'release' }
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $projectPath = [IO.Path]::GetFullPath($projectRoot)
@@ -107,12 +107,11 @@ $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.T
     Archive = $archivePath
     SHA256 = $archiveHash
 }
-
 # SIG # Begin signature block
 # MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCC0+OgIbbg98795
-# Q/ZYHaUaTRedmiDVLRThswJPdY1Q8KCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCB6OK7XOLIgzYH
+# 5k21fFsqyUlvi6dLHgo7VjTCCWbl0qCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
 # m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
 # VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
 # MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
@@ -138,14 +137,14 @@ $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.T
 # ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
 # ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
 # AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCCuF4cJZlx2
-# ykx+p0wdGglXwS4JY7toifbWJDfuvmeNEzANBgkqhkiG9w0BAQEFAASCAYCg4di2
-# P4uLyqpzA7jDBVsKIhmbI5prAIlaYCVQEQDs4vB8U1/Z1KCG7y7YT2+KVN+fQSGP
-# 5wdc9t5tYfQNTlhFDRrMeZtSqTHbzEMLnHTM4kQ9UJoRNwv/NzDqU0SjkKWJu9/G
-# Ff8HDFuBBFiOKHWtjHNhwBuInx9nLw4D9UPGXLdvju84N90jqbSm2tFttWFccHOQ
-# OOp+hqnARNjabP/tnx0xBhjgbCCQYi88FLSHOoa4rV2AiLWwL4Zl8Ncjw/EltDvy
-# +1Sc/ivTEIbMCTiv9sGmCIkCyxmScfzbVIDhkGof2YvuBFJzeRNM8nS5b0hIXmOO
-# ISXoJnoh0839jCDJJeuyGjdh3oeLQBorp7whVseTjQIURb7BOuuADdhhvbWho1U9
-# dDShwLj8vVC0lGPt2Ut8as1+0CIqtO/q0wonWUqw+9tIm6KtPwGqYcYBe/Zli1rp
-# UilwUVkmlDE4UXeY/H4S9Zyu9X2qnEQbvY2XmM9XqlBOn0ZQZPVY2WifSIQ=
+# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCDKs923fSbk
+# h279AEr2iLpLjd8gFOvFhxXy+L9b84wrVTANBgkqhkiG9w0BAQEFAASCAYBVCoiv
+# EEZCq83zluHiirrlBKw/aL6gn3VzdwbRF3y6//KO1pYclF4u4cAHR4fx+d4tMHFM
+# MqJHY2MbATxl29eOeKO4NClivfCb6AEYCTiIujA1ZhjS0IeE58t0ngkeOB1m1ksb
+# /t6r9xhH8AoVIiQ/LymwAXEDGOyqFzBoBnWnJz4Ek4X33jOCnh4k5SLCO43cfi4r
+# zUoOek2lt0sZHkyj8n3r9kSP25H4BAiUVIsf7AWVhO15JVY5qyJ2Zyu6NOn1UoT0
+# HfBWudusqO71qBWAbVSWtdhKJRpfmOHSAVVNsPUg/hz3Utw8kXn5528bWtysFDpc
+# FAq2ILknI91QzvqNNkd9QyMtqryXJ9XTHAmZ0eQNoThCjXS1Axa+cAC1uPwTo1w/
+# +07zqzYw/ICVDDu/Q6IxEa0hMyMjXzAX3wwRMD4PLlrGYqaqePRYKogjcOzkbgHp
+# pI3xCg0ah22uOWF4+GU/qaIzr+VJuqWY5zbspSXg6mW0cJ7q+nnbF9wskro=
 # SIG # End signature block

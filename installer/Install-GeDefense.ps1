@@ -83,7 +83,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $resolvedPayload 'bin\gedefense-wind
 $versionPath = Join-Path $resolvedPayload 'VERSION'
 if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) { throw [IO.FileNotFoundException]::new('GeDefense release version metadata is missing.') }
 $releaseVersion = (Get-Content -LiteralPath $versionPath -Raw -Encoding UTF8).Trim()
-if ($releaseVersion -notmatch '^4\.0\.0-beta\.[1-9][0-9]*$') { throw [IO.InvalidDataException]::new('GeDefense release version metadata is invalid.') }
+if ($releaseVersion -notmatch '^4\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*$') { throw [IO.InvalidDataException]::new('GeDefense release version metadata is invalid.') }
 $releaseCertificate = Join-Path $resolvedPayload 'vgt-release.cer'
 if (-not (Test-Path -LiteralPath $releaseCertificate -PathType Leaf)) { throw [IO.FileNotFoundException]::new('VGT release certificate is missing.') }
 $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($releaseCertificate)
@@ -218,6 +218,9 @@ Write-VgtInstallPhase -Phase 'ApplicationRegistration' -State 'OK' -Detail ("cen
 
 $mhxStateRoot = Join-Path $dataRoot 'mhx'
 New-Item -Path $mhxStateRoot -ItemType Directory -Force | Out-Null
+$intelligenceRoot = Join-Path $mhxStateRoot 'intelligence'
+New-Item -Path $intelligenceRoot -ItemType Directory -Force | Out-Null
+Invoke-IcaclsChecked -Target $intelligenceRoot -Phase 'ThreatIntelACL' -Arguments @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F')
 $mhxModePath = Join-Path $mhxStateRoot 'mode.json'
 $mhxModeTemporary = "$mhxModePath.$PID.tmp"
 [ordered]@{ mode = 'guarded'; updatedUtc = [DateTime]::UtcNow.ToString('o') } |
@@ -256,3 +259,45 @@ Write-VgtInstallPhase -Phase 'MHXRealtime' -State 'OK' -Detail 'Guarded + Defend
 if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new('Initial App Control audit policy deployment failed.') }
 Write-VgtInstallPhase -Phase 'AppControl' -State 'OK' -Detail 'Kernel audit policy deployed'
 Write-VgtInstallPhase -Phase 'Installer' -State 'COMPLETE' -Detail ("GeDefense {0} installed" -f $releaseVersion)
+
+# SIG # Begin signature block
+# MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCA+Dj1D+And/1jh
+# K/hNnBPAXa2Q8ljVhqONqeBN/Ws/hqCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
+# m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
+# VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
+# MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
+# ZWFzZTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGBAL5pFqzqfhSchgN3
+# OSKoeRbHXQIUtVwI7Q5go/7UvOFVMV0d/Au5Q5yPFOr351VqQyZlLWehwPG88Wdh
+# TEPxfzYXDeJFgG6MwdjVaA10WklxDzSu8XQQzQKvoSOtf6b76xYswPdR8WaUOvYL
+# NVYHG38cZCE/Vmt8W29/+8bT0SFoMv8S++3YUL3BaTTVBj5wcunaQYu7bcBUFz8M
+# wCWGaqZUwWi/7sZPb5Ix0KKnMarxxAAM/y1GaRnWDQavGSuFZ18LmMh+Agd6znFZ
+# 6pH1USuu0NreFUOWNg2ANEmGAO4XTnst3ILT4Eab/Jsjmw4nRm8rckRaWVKJxcRc
+# P7ukJJi3cV11JegdsYSBGKvZ8TUNiSRuVI0MGg1IJl4ga/dir1crp0DnqezcC/6y
+# 9mxsnxuJLpW8I1nLdRLjE1ow5VshhvEMFjPoYbcowpcI0EUFj/clBpA+rHjPjkYF
+# jw8oow+tYqnEK/GkrYkzGwGxpApKcECh5GGHgQ5iSgKuNTPueQIDAQABo0YwRDAO
+# BgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwMwHQYDVR0OBBYEFDBP
+# H8Z9qi6vrLw8FPD3k/kz+c1gMA0GCSqGSIb3DQEBCwUAA4IBgQBIQe+HN5spItMd
+# 884eV6JR3H8xGr8DeNpgjuhQnRnQqWB60Et6ehQwQFDg5Ft8iU4sGzdEQB4U+q79
+# 9oReJ6G1CuV6yXXqDe/Ljr5DGfGr+Wah4RuRi/QGhUUeIyyn8h5kXwOgGWz4VA5I
+# 9CmN+onZHRLnv3Lu9mKyUqo7ll5WaWEd/r3hvBqe30Rg0IanD8qpWXEbshlayTux
+# 8WMgjW3nA7tEWXmToCJpRk8DsaGU5m6rNxVa6zSS7qF2JiMWnZZBsr76cQsMYvTk
+# ZgshPz+OTsl84mR7i/BalTIyuI74TWd+8LdcBB+FpmhXvYmKAPQKQg25dHGWbVlB
+# E7kK29X38hvaQBO6lVT7mtTOPx2auMTmas6LLU+1XGFNm4zvwuydpf/4ltPSYlNp
+# K8Ij5vkp2DjXOaJF02BoqBkZt6w4wQPuCdu3OOTH3A3hymQrVD0tP408qNkLuzd5
+# xI+m7oTQCw6SYCxeEUEOooR7XMWuxE1R/KyLlPRCI1zi9DjhLawxggJyMIICbgIB
+# ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
+# ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
+# AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
+# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCDsGLtgE46I
+# KU6ZRRWeGhygisr5xUfxWEKifJ6R6iDf8DANBgkqhkiG9w0BAQEFAASCAYBjzHHP
+# dpek0CigdwyZiMrsIOJ5zF80OcerDiS9m7voUQgAqGsTH8HqZLYPv7iI3UVOgCab
+# L2ND5qvXo/WM01a+M3S3+tOUwHLqnm58obMtsaC9MeBcoX3gttfAb14kyOArGMWc
+# Ts+WLzMLV40dKHfnICnGQef9PcsuWgEi/FIcQxwolXqTKur5HP4N2ncv87D5X46P
+# JWDHnf68NZ9vRSzUosocdPNuGjhH3wGoApptOVFh7ImcSYrVMRL8oIJGXYAcAcMH
+# HSJazMVA6OxmSJTd9VFPWmX2UWWJlIbxwvTVbn9QY+gmntF7evhfNh9odDJU6IH0
+# FujjTnLebWgUDmRTaeYY9BBcFjLutNEq+y4vXyAqkFCHShxLhyoBsZka0AWGoVLy
+# kru7YWokzgXMA6ojvKgEuXZOjEP+mXNCp9yPTW8jOaDmFIbGXUjPrh66Tn7oECfR
+# DnXpZ5o0LuFSPUGj7bh/JetHXIxBqVzeMDOW0WdCItEFkYGukRK45/IWuBk=
+# SIG # End signature block

@@ -11,16 +11,25 @@ import (
 )
 
 func TestProcessTracePowerShellSyntax(t *testing.T) {
+	assertPowerShellSyntax(t, processTraceScript)
+}
+
+func TestWFPBlockTracePowerShellSyntax(t *testing.T) {
+	assertPowerShellSyntax(t, wfpBlockTraceScript)
+}
+
+func assertPowerShellSyntax(t *testing.T, source string) {
+	t.Helper()
 	powerShell, err := windowsPowerShell()
 	if err != nil {
 		t.Fatal(err)
 	}
 	parser := `$source=[Console]::In.ReadToEnd();$tokens=$null;$errors=$null;[void][System.Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors);if($errors.Count){$errors|ForEach-Object{[Console]::Error.WriteLine($_.Message)};exit 1}`
 	command := exec.Command(powerShell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", parser)
-	command.Stdin = strings.NewReader(processTraceScript)
+	command.Stdin = strings.NewReader(source)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
-		t.Fatalf("process trace script parse failed: %v: %s", err, stderr.String())
+		t.Fatalf("PowerShell trace script parse failed: %v: %s", err, stderr.String())
 	}
 }

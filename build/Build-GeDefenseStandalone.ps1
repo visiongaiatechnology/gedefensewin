@@ -15,7 +15,7 @@ $embeddedBundleDirectory = Join-Path $sourceRoot 'cmd\gedefense-installer\bundle
 $embeddedBundle = Join-Path $embeddedBundleDirectory 'payload.zip'
 $releaseRoot = Join-Path $projectRoot 'release'
 $version = (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION') -Raw -Encoding UTF8).Trim()
-if ($version -notmatch '^4\.0\.0-beta\.[1-9][0-9]*$') { throw [IO.InvalidDataException]::new('Release VERSION is invalid.') }
+if ($version -notmatch '^4\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*$') { throw [IO.InvalidDataException]::new('Release VERSION is invalid.') }
 $releaseExecutable = Join-Path $releaseRoot ("GeDefense-Setup-x64-v{0}.exe" -f $version)
 $releaseManifest = Join-Path $releaseRoot ("GeDefense-Setup-x64-v{0}.json" -f $version)
 $thumbprintFile = Join-Path $projectRoot 'certificates\release-thumbprint.txt'
@@ -77,12 +77,11 @@ $release | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $releaseManifest -
 if (Test-Path -LiteralPath $embeddedBundle) { Remove-Item -LiteralPath $embeddedBundle -Force }
 if (Test-Path -LiteralPath $bundleRoot) { Remove-Item -LiteralPath $bundleRoot -Recurse -Force }
 $release
-
 # SIG # Begin signature block
 # MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCA322D7oopLeIuG
-# k9sY0r15kYuD3tvieEstMp5i+U4lC6CCBCwwggQoMIICkKADAgECAhBc5F62BB+R
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCgYKpXlcx+F7nu
+# pjfgBv7aGZqILaDO0Ccj7P4kiR3l/KCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
 # m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
 # VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
 # MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
@@ -108,14 +107,14 @@ $release
 # ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
 # ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
 # AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCAIng16VwYo
-# F/nS3ZpXyrabsedic7Xf8bORgW+dnNS/4zANBgkqhkiG9w0BAQEFAASCAYBsgPiL
-# 7FCblVP4Avjhy8g77omzsqofvKxkWoYl6AygN9l2uWU+n6C09+O+Eb0GvJt1tI1B
-# lI4fapltpe8BEZRXICSRW1AAaDmFeK4sxCbhKMF2jPdMUdVrffD7Ef98pOUrxAFl
-# ruppfkqsXAVQQCbLQJWapQQ0b68EbTHuZB/3n9wC9+JWxK6TfkN8Z3TA0aWnMxbE
-# cBpzDVuSAkPIM0wi3gDgEKIDdQ5BVhc/HBoHLIGBmIuK2DEWClHn2z519UAaRF+5
-# whoBc6kKNQ6PllyUwGTwjLSYpjj+w7urvxVlAEP940riY0GDawg/6HlzLZtdTsnr
-# kvQPteAEnqLYLMQT02Y/88Lc+nMvjFTu/anq2Ty6GaNbP3qCDnBJy91l7d+54UU3
-# Anqa7yeMWu6Kr3B1+y+pWUEAq690d1fSTSzjzLYlByMpv6u2a8VnMe2EByG6AHh2
-# 9cWn+pJkZiGBm2xlMrrkvLJ0Ya7iPrjleYq3rCIs65yLLpMLrmtzJibDAAU=
+# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCD2D662Sbht
+# MFyfU839CUMdk+WwCF4VAN/Q8gxvcQ022jANBgkqhkiG9w0BAQEFAASCAYAGTCsY
+# hGgRc7/+7B3B3IO+jT84CUhL1JJXyEkt1UubhXoyJAJQFcffV8mhOCbbHk8/J8DN
+# +szaGwfrGruHTdavdLngdK74puoUDNew5ZmB/sQDzK/WmdArnRa0qY92wnaSUXOl
+# vsuoKUDNOz4htc5+bw7Gdp3izMc7u2Ue8FK8FseOFlKICWLXVOkxhVVEU7ytNsuC
+# /SCY8MRTvVDfzUZzOTsz17WJCtQuxcFCC6o+2/FAobJS5zzu0AFqkt3Xe+1XC6IN
+# FizRRNiK+x8dru3Y4ulxa1mfhWIpz/8lrF/1Of7BlgaGJxL+Qp4ZkcTs+Y7yewGh
+# 5kOZ8QqhWyHINfQk8YOFlB5QKLLF5r739oOafBuFJefgjmswaOOIv8xQst1giehu
+# VTgiMQfAdG2rga1IIRIAQLcb8R+r7UOsj905NJci9tPAg67/p5c/A3ZRpjDkO5zV
+# yEF1Faka95KoEDEOYhHhXBGCwusZgRR2fgktlZpdqWsj0YGW0agwRsY6Li0=
 # SIG # End signature block

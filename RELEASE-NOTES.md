@@ -1,53 +1,51 @@
-# VGT GeDefense Windows 4.0.0-beta.1
+# VGT GeDefense Windows 4.1.0-beta.1
 
-Release-Datum: 2026-09-18
+Release-Datum: 2026-09-19
 
-## Generation 4
+## Generation 4.1: Sovereign Threat Intelligence
 
-GeDefense Windows 4 hebt den Windows-Agent auf dieselbe Architekturphilosophie wie GeDefense Linux V4: minimale Abhängigkeiten, getrennte Detection-/Response-Autorität, bounded State, nachvollziehbare Attack Stories und ein modernes lokales Protection Center.
+GeDefense Windows 4.1 erweitert MHX/XDR um eine action-aware 9-Feed-Threat-Intelligence-Schicht und koppelt sie verifiziert an Windows Filtering Platform / Windows Firewall, ohne einen proprietären Kernel-Treiber einzuführen.
 
 ### Kernänderungen
 
-- externe Go-Module vollständig entfernt
-- eigene schlanke Win32-Wrapper für Service, Tray, Handles, Shell und Netzwerk
-- native TCP → Owning PID → Prozessidentität-Korrelation
-- PID-Reuse-sichere Prozessreaktion
-- Threat-Intel-Prefix-Index mit harten Feed- und Netzgrenzen
-- Attack Stories aus Prozess-, Netzwerk- und Threat-Intel-Signalen
-- Host-Response nur mit expliziter ResponseAuthority und erneuter Identitätsprüfung
-- XDR-Datenminimierung: verdächtige Command Lines und Scriptmaterial werden als Hash/Metadaten statt Rohpayload persistiert
-- gehärteter Integrity-Lifecycle mit Reparse- und Mutationserkennung
-- modularisierte lokale Control Plane mit bounded Replay-/Session-/Rate-State
-- Guided Protection Activation: Monitor → Guarded → Sovereign
-- komplett modernisierte Ice-Blue-Glassmorphism-UI ohne CDN oder Framework
-- signierter Installerpfad mit expliziter Catalog- und Zielskript-Signerprüfung
-- global serialisierte Windows-Policy-Mutationen mit verifiziertem Protection-Health-State
-- Threat-Intel-Status fällt bei fehlgeschlagener Firewall-Verifikation fail-closed auf `STALE`
-- Bootstrap und erhöhte Skripttransaktionen laufen ausschließlich unter `ExecutionPolicy AllSigned`
-- offizielle Release-Toolchain auf Go 1.27.1 gepinnt
-- privilegierte PowerShell-Prozesse werden ausschließlich über den validierten System32-Pfad gestartet, niemals über `PATH`
-- Sovereign-Allow-Transaktionen gelten erst nach bestätigter App-Control-Kernelverifikation als gesund
-- deterministischer Source-Release-Pfad mit internem SHA-256-Manifest und festen ZIP-Zeitstempeln
+- neun Threat-Intelligence-Feeds mit expliziter Autorität: `BLOCK`, `CORRELATE_ONLY`, `ANNOTATE_ONLY`
+- nur Feodo Tracker und Spamhaus DROP IPv4/IPv6 dürfen Firewall-Blockgenerationen erzeugen
+- CINS Army, blocklist.de, Emerging Threats, IPsum und FireHOL bleiben reine Korrelationsquellen
+- Tor Exit Nodes bleiben strikt `ANNOTATE_ONLY`
+- unabhängige Last-Known-Good-Generationen pro Feed mit SHA-256-Fingerprints
+- TLS-gehärteter Fetcher mit Redirect-Verbot, DNS/SSRF-Adressfilter, Header-/Body-Grenzen und HTML-Rejection
+- strikte IP/CIDR-Canonicalisierung und Filterung privater, reservierter, Link-Local-, Multicast-, Metadata- und überbreiter Präfixe
+- Catastrophic-Shrink-Gate gegen fehlerhafte oder manipulierte Feed-Leerläufe
+- immutable, lock-free ThreatIndex-Snapshots für MHX/XDR
+- separate SHA-256-Enforcement-Generation ausschließlich für `BLOCK`-Vektoren
+- Protected-Network-Safety-Plane: öffentliche Management-IP/CIDR werden vor der Firewall-Publikation exakt aus BLOCK-Prefixen subtrahiert, ohne Threat-Attribution aus XDR zu entfernen
+- HMAC-SHA-256-authentifizierte Protected-Network-Policy mit eigener Generation, expliziter Operator-Bestätigung und Evidence-Preflight
+- Windows Firewall Dynamic Keyword Address Sharding mit transaktionaler Generation-Promotion
+- verifizierter statischer Firewall-Fallback auf Systemen ohne Dynamic Keyword Address Support; hartes 25.000-Indicator-Limit verhindert Firewall-Regel-Explosion
+- gewünschte und tatsächlich aktive Firewall-Generation werden getrennt geführt und für Sovereign Readiness abgeglichen
+- WFP Security Event 5157 wird als Block-Telemetrie mit PID, Richtung, Ziel, Port, Filter-ID und FilterOrigin in MHX korreliert
+- GeDefense-Firewallregeln erhalten deterministische `VGT-GeDefense-TI-*` Rule-IDs für Filter-Origin-Zuordnung
+- blockierte und zugelassene Verbindungen fließen gemeinsam in Attack Stories und das Evidence Ledger
+- Netzwerk-IOC-Treffer behalten die bestehende Invariante: keine Prozess-Termination ohne unabhängige MHX ResponseAuthority plus PID/CreationTime/Image-Revalidierung
+- XDR-/Network-UI zeigt Feed-Matrix, Aktionsklasse, LKG-Zustand, WFP-Events sowie Desired/Active Generation
+- Protected-Network-Editor im lokalen XDR-Dashboard; Änderungen werden CIDR-validiert, bounded kompiliert und unmittelbar gegen WFP reconciled
+- Threat-Intel-Laufzeitdaten erhalten eine eigene SYSTEM/Administrators-only ACL
+- MHX Engine auf 7.1 angehoben
 
 ## Dependency-Vertrag
 
-`go.mod` besitzt keinen `require`-Block, `go.sum` ist leer und `go list -m all` liefert ausschließlich das GeDefense-Modul.
+`go.mod` besitzt weiterhin keinen `require`-Block. Der neue Threat-Intelligence-Core verwendet ausschließlich die Go-Standardbibliothek und vorhandene Windows-/PowerShell-Systemkomponenten. Es wurden keine externen Go- oder Frontend-Abhängigkeiten ergänzt.
 
-## Verifikation in der Source-Release-Umgebung
+## In dieser Source-Release-Umgebung verifiziert
 
-Bestanden:
-
-- `gofmt` vollständig sauber
+- `go test ./internal/threatintel`
 - Cross-Windows-Testkompilierung aller Go-Packages und Tests
 - Cross-Windows `go vet ./...`
-- Cross-Windows-Build von Service, Center, Tray und Installer
-- Race Detector für plattformunabhängige Core-Packages
-- JavaScript-Syntaxprüfung aller UI-Module
-- Zero-Go-Dependency-Graph
-- SBOM-/Versionskonsistenz
-- Frontend-Scan auf externe URLs, eval, dynamische Function-Konstruktion, Web Storage und Debug-Ausgaben
-- produktiver Baum frei von den entfernten Legacy-Go-/UI-Abhängigkeiten
+- JavaScript-Syntaxprüfung des aktualisierten Frontends
+- Source-Manifest nach allen Änderungen neu erzeugt
 
 ## Windows-native Final-Gates
 
-Der Repository-Gate `build/Test-GeDefenseRelease.ps1` führt auf Windows zusätzlich vollständige `go test -race ./...`, PowerShell-AST-Parsing und native Windows-Buildverifikation aus. Erhöhte Integrationstests für reale Prozess-, Defender-, App-Control- und Policy-Pfade bleiben absichtlich auf isolierte Windows-Testsysteme beschränkt.
+Vor einem produktiven Release müssen auf Windows zusätzlich `build/Test-GeDefenseRelease.ps1`, PowerShell-AST-Parsing, `go test -race ./...`, reale Dynamic-Keyword- und Static-Fallback-Transaktionen, Security-Event-5157-Ingestion sowie installierter Service-/Firewall-Reconcile gegen ein isoliertes Testsystem ausgeführt werden. Der Beta-Status bleibt bestehen, bis diese Windows-native Laufzeitverifikation abgeschlossen ist.
+
+Technische Details: [docs/THREAT-INTELLIGENCE.md](docs/THREAT-INTELLIGENCE.md)

@@ -48,6 +48,8 @@ func New(version, token string, engine HardeningEngine, auditEngine AuditEngine,
 	mux.HandleFunc("GET /api/v1/mhx/network", s.authorize(s.mhxNetwork))
 	mux.HandleFunc("GET /api/v1/mhx/stories", s.authorize(s.mhxStories))
 	mux.HandleFunc("POST /api/v1/mhx/feeds/sync", s.authorize(s.mhxSyncFeeds))
+	mux.HandleFunc("GET /api/v1/mhx/threat-intelligence/protected-networks", s.authorize(s.mhxProtectedNetworks))
+	mux.HandleFunc("POST /api/v1/mhx/threat-intelligence/protected-networks", s.authorize(s.mhxSetProtectedNetworks))
 	mux.HandleFunc("POST /api/v1/mhx/mode", s.authorize(s.mhxSetMode))
 	mux.HandleFunc("GET /api/v1/mhx/applications", s.authorize(s.mhxApplications))
 	mux.HandleFunc("POST /api/v1/mhx/applications", s.authorize(s.mhxSetApplication))
