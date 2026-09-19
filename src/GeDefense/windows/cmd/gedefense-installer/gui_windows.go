@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +21,7 @@ import (
 
 const (
 	wmDestroy        = 0x0002
+	wmSize           = 0x0005
 	wmClose          = 0x0010
 	wmSetFont        = 0x0030
 	wmCommand        = 0x0111
@@ -32,16 +34,24 @@ const (
 	wsCaption      = 0x00C00000
 	wsSysMenu      = 0x00080000
 	wsMinimizeBox  = 0x00020000
+	wsMaximizeBox  = 0x00010000
+	wsThickFrame   = 0x00040000
 	wsClipChildren = 0x02000000
 	wsChild        = 0x40000000
 	wsVisible      = 0x10000000
 	wsDisabled     = 0x08000000
 	wsTabStop      = 0x00010000
+	wsVScroll      = 0x00200000
+	wsBorder       = 0x00800000
 
 	ssLeft       = 0x00000000
 	ssRight      = 0x00000002
 	ssEtchedHorz = 0x00000010
 	ssNoPrefix   = 0x00000080
+
+	esMultiline   = 0x0004
+	esAutoVScroll = 0x0040
+	esReadOnly    = 0x0800
 
 	bsDefPushButton = 0x00000001
 	pbsSmooth       = 0x00000001
@@ -52,9 +62,12 @@ const (
 	colorBtnFace = 15
 
 	idActionButton = 201
+	idErrorBox     = 202
 
-	wizardWidth  = 540
-	wizardHeight = 380
+	defaultWidth  = 580
+	defaultHeight = 400
+	minWidth      = 540
+	minHeight     = 380
 )
 
 var (
@@ -79,6 +92,7 @@ var (
 	procSetWindowTextW                = user32.NewProc("SetWindowTextW")
 	procEnableWindow                  = user32.NewProc("EnableWindow")
 	procGetSystemMetrics              = user32.NewProc("GetSystemMetrics")
+	procMoveWindow                    = user32.NewProc("MoveWindow")
 	procLoadCursorW                   = user32.NewProc("LoadCursorW")
 	procLoadIconW                     = user32.NewProc("LoadIconW")
 	procGetSysColorBrush              = user32.NewProc("GetSysColorBrush")
@@ -132,14 +146,18 @@ type initCommonControlsEx struct {
 }
 
 type setupWizard struct {
-	hwnd         uintptr
-	hwndTitle    uintptr
-	hwndSubtitle uintptr
-	hwndStatus   uintptr
-	hwndDetail   uintptr
-	hwndProgress uintptr
-	hwndPercent  uintptr
-	hwndButton   uintptr
+	hwnd          uintptr
+	hwndTitle     uintptr
+	hwndSubtitle  uintptr
+	hwndSepTop    uintptr
+	hwndStatus    uintptr
+	hwndDetail    uintptr
+	hwndProgress  uintptr
+	hwndPercent   uintptr
+	hwndErrorBox  uintptr
+	hwndSepBottom uintptr
+	hwndBrand     uintptr
+	hwndButton    uintptr
 
 	fontTitle   uintptr
 	fontHeader  uintptr
@@ -154,19 +172,20 @@ type setupWizard struct {
 	success    bool
 	errMessage string
 	uninstall  bool
+	currentW   int32
+	currentH   int32
 }
 
 func initCommonControls() {
 	icce := initCommonControlsEx{
 		Size: uint32(unsafe.Sizeof(initCommonControlsEx{})),
-		ICC:  0x00000020 | 0x00004000, // ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES
+		ICC:  0x00000020 | 0x00004000,
 	}
 	_, _, _ = procInitCommonControlsEx.Call(uintptr(unsafe.Pointer(&icce)))
 }
 
 func setDPIAwareness() {
 	if procSetProcessDpiAwarenessContext.Find() == nil {
-		// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 		_, _, _ = procSetProcessDpiAwarenessContext.Call(^uintptr(3))
 	}
 }
@@ -181,9 +200,9 @@ func createFont(name string, height int32, weight int32) uintptr {
 		0, 0, 0,
 		uintptr(weight),
 		0, 0, 0,
-		1, // DEFAULT_CHARSET
+		1,
 		0, 0,
-		5, // CLEARTYPE_QUALITY
+		5,
 		0,
 		uintptr(unsafe.Pointer(ptr)),
 	)
@@ -196,6 +215,14 @@ func setupWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	activeWizardMu.Unlock()
 
 	switch msg {
+	case wmSize:
+		if w != nil {
+			width := int32(lParam & 0xFFFF)
+			height := int32((lParam >> 16) & 0xFFFF)
+			w.layout(width, height)
+		}
+		return 0
+
 	case wmSetupUpdate:
 		if w != nil {
 			w.handleUpdate()
@@ -220,7 +247,7 @@ func setupWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 
 	case wmCtlColorStatic:
 		hdc := wParam
-		_, _, _ = procSetBkMode.Call(hdc, 1) // TRANSPARENT
+		_, _, _ = procSetBkMode.Call(hdc, 1)
 		brush, _, _ := procGetSysColorBrush.Call(colorBtnFace)
 		return brush
 
@@ -310,6 +337,8 @@ func (w *setupWizard) handleComplete() {
 	success := w.success
 	errMsg := w.errMessage
 	isUninstall := w.uninstall
+	curW := w.currentW
+	curH := w.currentH
 	w.mu.Unlock()
 
 	if success {
@@ -338,18 +367,132 @@ func (w *setupWizard) handleComplete() {
 	} else {
 		stPtr, _ := syscall.UTF16PtrFromString("Installation fehlgeschlagen")
 		_, _, _ = procSetWindowTextW.Call(w.hwndStatus, uintptr(unsafe.Pointer(stPtr)))
-		displayErr := errMsg
-		if len(displayErr) > 280 {
-			displayErr = displayErr[:280] + "..."
+
+		fullErrorText := "FEHLERDETAILS:\r\n" + errMsg + "\r\n"
+		// Append tail from diagnostic log if present
+		localAppData := os.Getenv("LOCALAPPDATA")
+		if localAppData != "" {
+			diagLog := filepath.Join(localAppData, "VGT", "InstallerDiagnostics", "latest-transaction.log")
+			if content, readErr := readDiagnosticLogTail(diagLog, 20); readErr == nil && len(content) > 0 {
+				fullErrorText += "\r\nDIAGNOSE-PROTOKOLL:\r\n" + strings.Join(content, "\r\n")
+			}
 		}
-		dtPtr, _ := syscall.UTF16PtrFromString(displayErr)
-		_, _, _ = procSetWindowTextW.Call(w.hwndDetail, uintptr(unsafe.Pointer(dtPtr)))
+
+		errTextPtr, _ := syscall.UTF16PtrFromString(fullErrorText)
+		_, _, _ = procSetWindowTextW.Call(w.hwndErrorBox, uintptr(unsafe.Pointer(errTextPtr)))
+
 		btnPtr, _ := syscall.UTF16PtrFromString("Schließen")
 		_, _, _ = procSetWindowTextW.Call(w.hwndButton, uintptr(unsafe.Pointer(btnPtr)))
 	}
 
+	w.layout(curW, curH)
+
 	if w.hwndButton != 0 {
 		_, _, _ = procEnableWindow.Call(w.hwndButton, 1)
+	}
+}
+
+func readDiagnosticLogTail(path string, maxLines int) ([]string, error) {
+	file, err := openSharedFileForRead(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return lines, scanner.Err()
+}
+
+func (w *setupWizard) layout(width, height int32) {
+	if width <= 0 || height <= 0 {
+		return
+	}
+	w.mu.Lock()
+	w.currentW = width
+	w.currentH = height
+	hasError := !w.success && w.completed
+	w.mu.Unlock()
+
+	contentW := width - 56
+	if contentW < 100 {
+		contentW = 100
+	}
+
+	if w.hwndTitle != 0 {
+		_, _, _ = procMoveWindow.Call(w.hwndTitle, 24, 18, uintptr(contentW), 26, 1)
+	}
+	if w.hwndSubtitle != 0 {
+		_, _, _ = procMoveWindow.Call(w.hwndSubtitle, 24, 46, uintptr(contentW), 20, 1)
+	}
+	if w.hwndSepTop != 0 {
+		_, _, _ = procMoveWindow.Call(w.hwndSepTop, 0, 72, uintptr(width), 2, 1)
+	}
+	if w.hwndStatus != 0 {
+		_, _, _ = procMoveWindow.Call(w.hwndStatus, 28, 92, uintptr(contentW), 22, 1)
+	}
+
+	bottomY := height - 52
+	sepBottomY := height - 64
+
+	if hasError {
+		if w.hwndProgress != 0 {
+			_, _, _ = procShowWindow.Call(w.hwndProgress, 0)
+		}
+		if w.hwndPercent != 0 {
+			_, _, _ = procShowWindow.Call(w.hwndPercent, 0)
+		}
+		if w.hwndDetail != 0 {
+			_, _, _ = procShowWindow.Call(w.hwndDetail, 0)
+		}
+		if w.hwndErrorBox != 0 {
+			errH := sepBottomY - 120
+			if errH < 80 {
+				errH = 80
+			}
+			_, _, _ = procShowWindow.Call(w.hwndErrorBox, 5)
+			_, _, _ = procMoveWindow.Call(w.hwndErrorBox, 28, 118, uintptr(contentW), uintptr(errH), 1)
+		}
+	} else {
+		if w.hwndErrorBox != 0 {
+			_, _, _ = procShowWindow.Call(w.hwndErrorBox, 0)
+		}
+		if w.hwndDetail != 0 {
+			_, _, _ = procShowWindow.Call(w.hwndDetail, 5)
+			_, _, _ = procMoveWindow.Call(w.hwndDetail, 28, 120, uintptr(contentW), 38, 1)
+		}
+		if w.hwndProgress != 0 {
+			_, _, _ = procShowWindow.Call(w.hwndProgress, 5)
+			_, _, _ = procMoveWindow.Call(w.hwndProgress, 28, 168, uintptr(contentW), 24, 1)
+		}
+		if w.hwndPercent != 0 {
+			_, _, _ = procShowWindow.Call(w.hwndPercent, 5)
+			_, _, _ = procMoveWindow.Call(w.hwndPercent, 28, 198, uintptr(contentW), 18, 1)
+		}
+	}
+
+	if w.hwndSepBottom != 0 {
+		_, _, _ = procMoveWindow.Call(w.hwndSepBottom, 0, uintptr(sepBottomY), uintptr(width), 2, 1)
+	}
+	if w.hwndBrand != 0 {
+		brandW := width - 180
+		if brandW < 50 {
+			brandW = 50
+		}
+		_, _, _ = procMoveWindow.Call(w.hwndBrand, 28, uintptr(bottomY+6), uintptr(brandW), 20, 1)
+	}
+	if w.hwndButton != 0 {
+		btnX := width - 138
+		_, _, _ = procMoveWindow.Call(w.hwndButton, uintptr(btnX), uintptr(bottomY), 110, 32, 1)
 	}
 }
 
@@ -395,13 +538,13 @@ func runSetupWizard(uninstall, elevated bool) error {
 		return fmt.Errorf("GetModuleHandleW failed: %w", callErr)
 	}
 
-	cursor, _, _ := procLoadCursorW.Call(0, uintptr(32512)) // IDC_ARROW
-	icon, _, _ := procLoadIconW.Call(0, uintptr(32512))     // IDI_APPLICATION
+	cursor, _, _ := procLoadCursorW.Call(0, uintptr(32512))
+	icon, _, _ := procLoadIconW.Call(0, uintptr(32512))
 	classNamePtr, _ := syscall.UTF16PtrFromString("VGTGeDefenseSetupWizardV4")
 
 	wc := wndClassEx{
 		Size:       uint32(unsafe.Sizeof(wndClassEx{})),
-		Style:      0x0003, // CS_HREDRAW | CS_VREDRAW
+		Style:      0x0003,
 		WndProc:    setupCallback,
 		Instance:   instance,
 		Icon:       icon,
@@ -412,14 +555,14 @@ func runSetupWizard(uninstall, elevated bool) error {
 	}
 
 	atom, _, regErr := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
-	if atom == 0 && regErr != syscall.Errno(1410) { // 1410 = ERROR_CLASS_ALREADY_EXISTS
+	if atom == 0 && regErr != syscall.Errno(1410) {
 		return fmt.Errorf("RegisterClassExW failed: %w", regErr)
 	}
 
 	screenWidth, _, _ := procGetSystemMetrics.Call(0)
 	screenHeight, _, _ := procGetSystemMetrics.Call(1)
-	x := (int32(screenWidth) - wizardWidth) / 2
-	y := (int32(screenHeight) - wizardHeight) / 2
+	x := (int32(screenWidth) - defaultWidth) / 2
+	y := (int32(screenHeight) - defaultHeight) / 2
 	if x < 0 {
 		x = 0
 	}
@@ -437,11 +580,11 @@ func runSetupWizard(uninstall, elevated bool) error {
 		0,
 		uintptr(unsafe.Pointer(classNamePtr)),
 		uintptr(unsafe.Pointer(titlePtr)),
-		wsOverlapped|wsCaption|wsSysMenu|wsMinimizeBox|wsClipChildren,
+		wsOverlapped|wsCaption|wsSysMenu|wsMinimizeBox|wsMaximizeBox|wsThickFrame|wsClipChildren,
 		uintptr(x),
 		uintptr(y),
-		uintptr(wizardWidth),
-		uintptr(wizardHeight),
+		uintptr(defaultWidth),
+		uintptr(defaultHeight),
 		0, 0, instance, 0,
 	)
 	if hwnd == 0 {
@@ -451,6 +594,8 @@ func runSetupWizard(uninstall, elevated bool) error {
 	wizard := &setupWizard{
 		hwnd:        hwnd,
 		uninstall:   uninstall,
+		currentW:    defaultWidth,
+		currentH:    defaultHeight,
 		fontTitle:   createFont("Segoe UI", -20, 700),
 		fontHeader:  createFont("Segoe UI", -14, 600),
 		fontRegular: createFont("Segoe UI", -12, 400),
@@ -469,9 +614,9 @@ func runSetupWizard(uninstall, elevated bool) error {
 
 	staticClass, _ := syscall.UTF16PtrFromString("STATIC")
 	buttonClass, _ := syscall.UTF16PtrFromString("BUTTON")
+	editClass, _ := syscall.UTF16PtrFromString("EDIT")
 	progressClass, _ := syscall.UTF16PtrFromString("msctls_progress32")
 
-	// Header Banner: Title
 	headerText := "VGT GeDefense 4.1 Setup Wizard"
 	subText := "Sovereign Endpoint Protection — DIAMANT VGT SUPREME"
 	if uninstall {
@@ -484,7 +629,7 @@ func runSetupWizard(uninstall, elevated bool) error {
 	hTitle, _, _ := procCreateWindowExW.Call(
 		0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(headerPtr)),
 		wsChild|wsVisible|ssLeft|ssNoPrefix,
-		24, 18, 490, 26,
+		24, 18, uintptr(defaultWidth-48), 26,
 		hwnd, 101, instance, 0,
 	)
 	wizard.hwndTitle = hTitle
@@ -495,7 +640,7 @@ func runSetupWizard(uninstall, elevated bool) error {
 	hSub, _, _ := procCreateWindowExW.Call(
 		0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(subPtr)),
 		wsChild|wsVisible|ssLeft|ssNoPrefix,
-		24, 46, 490, 20,
+		24, 46, uintptr(defaultWidth-48), 20,
 		hwnd, 102, instance, 0,
 	)
 	wizard.hwndSubtitle = hSub
@@ -503,16 +648,15 @@ func runSetupWizard(uninstall, elevated bool) error {
 		_, _, _ = procSendMessageW.Call(hSub, wmSetFont, wizard.fontRegular, 1)
 	}
 
-	// Separator 1
 	emptyPtr, _ := syscall.UTF16PtrFromString("")
-	_, _, _ = procCreateWindowExW.Call(
+	hSepTop, _, _ := procCreateWindowExW.Call(
 		0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(emptyPtr)),
 		wsChild|wsVisible|ssEtchedHorz,
-		0, 72, uintptr(wizardWidth), 2,
+		0, 72, uintptr(defaultWidth), 2,
 		hwnd, 103, instance, 0,
 	)
+	wizard.hwndSepTop = hSepTop
 
-	// Status headline
 	initStatus := "Vorbereitung..."
 	if uninstall {
 		initStatus = "Deinstallation wird vorbereitet..."
@@ -521,7 +665,7 @@ func runSetupWizard(uninstall, elevated bool) error {
 	hStatus, _, _ := procCreateWindowExW.Call(
 		0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(initStatusPtr)),
 		wsChild|wsVisible|ssLeft|ssNoPrefix,
-		28, 96, 480, 22,
+		28, 92, uintptr(defaultWidth-56), 22,
 		hwnd, 104, instance, 0,
 	)
 	wizard.hwndStatus = hStatus
@@ -529,13 +673,12 @@ func runSetupWizard(uninstall, elevated bool) error {
 		_, _, _ = procSendMessageW.Call(hStatus, wmSetFont, wizard.fontHeader, 1)
 	}
 
-	// Detail ticker
 	initDetail := "Systemumgebung wird initialisiert..."
 	initDetailPtr, _ := syscall.UTF16PtrFromString(initDetail)
 	hDetail, _, _ := procCreateWindowExW.Call(
 		0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(initDetailPtr)),
 		wsChild|wsVisible|ssLeft|ssNoPrefix,
-		28, 122, 480, 38,
+		28, 120, uintptr(defaultWidth-56), 38,
 		hwnd, 105, instance, 0,
 	)
 	wizard.hwndDetail = hDetail
@@ -543,11 +686,10 @@ func runSetupWizard(uninstall, elevated bool) error {
 		_, _, _ = procSendMessageW.Call(hDetail, wmSetFont, wizard.fontRegular, 1)
 	}
 
-	// Progress bar
 	hProgress, _, _ := procCreateWindowExW.Call(
 		0, uintptr(unsafe.Pointer(progressClass)), uintptr(unsafe.Pointer(emptyPtr)),
 		wsChild|wsVisible|pbsSmooth,
-		28, 168, 472, 24,
+		28, 168, uintptr(defaultWidth-56), 24,
 		hwnd, 106, instance, 0,
 	)
 	wizard.hwndProgress = hProgress
@@ -556,12 +698,11 @@ func runSetupWizard(uninstall, elevated bool) error {
 		_, _, _ = procSendMessageW.Call(hProgress, pbmSetPos, 0, 0)
 	}
 
-	// Percentage label
 	pctZeroPtr, _ := syscall.UTF16PtrFromString("0%")
 	hPct, _, _ := procCreateWindowExW.Call(
 		0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(pctZeroPtr)),
 		wsChild|wsVisible|ssRight|ssNoPrefix,
-		28, 198, 472, 18,
+		28, 198, uintptr(defaultWidth-56), 18,
 		hwnd, 107, instance, 0,
 	)
 	wizard.hwndPercent = hPct
@@ -569,34 +710,45 @@ func runSetupWizard(uninstall, elevated bool) error {
 		_, _, _ = procSendMessageW.Call(hPct, wmSetFont, wizard.fontRegular, 1)
 	}
 
-	// Separator 2
-	_, _, _ = procCreateWindowExW.Call(
+	// Multi-line Error Box (hidden by default, shown on failure)
+	hErrorBox, _, _ := procCreateWindowExW.Call(
+		0, uintptr(unsafe.Pointer(editClass)), uintptr(unsafe.Pointer(emptyPtr)),
+		wsChild|wsVScroll|wsBorder|esMultiline|esReadOnly|esAutoVScroll,
+		28, 118, uintptr(defaultWidth-56), 200,
+		hwnd, idErrorBox, instance, 0,
+	)
+	wizard.hwndErrorBox = hErrorBox
+	if wizard.fontRegular != 0 && hErrorBox != 0 {
+		_, _, _ = procSendMessageW.Call(hErrorBox, wmSetFont, wizard.fontRegular, 1)
+	}
+
+	hSepBottom, _, _ := procCreateWindowExW.Call(
 		0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(emptyPtr)),
 		wsChild|wsVisible|ssEtchedHorz,
-		0, 270, uintptr(wizardWidth), 2,
+		0, uintptr(defaultHeight-64), uintptr(defaultWidth), 2,
 		hwnd, 108, instance, 0,
 	)
+	wizard.hwndSepBottom = hSepBottom
 
-	// Brand footer
 	brandText := "VisionGaia Technology © 2026 | DIAMANT VGT SUPREME"
 	brandPtr, _ := syscall.UTF16PtrFromString(brandText)
 	hBrand, _, _ := procCreateWindowExW.Call(
 		0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(brandPtr)),
 		wsChild|wsVisible|ssLeft|ssNoPrefix,
-		28, 290, 340, 20,
+		28, uintptr(defaultHeight-46), uintptr(defaultWidth-180), 20,
 		hwnd, 109, instance, 0,
 	)
+	wizard.hwndBrand = hBrand
 	if wizard.fontSmall != 0 && hBrand != 0 {
 		_, _, _ = procSendMessageW.Call(hBrand, wmSetFont, wizard.fontSmall, 1)
 	}
 
-	// Action button
 	btnWaitText := "Bitte warten..."
 	btnWaitPtr, _ := syscall.UTF16PtrFromString(btnWaitText)
 	hButton, _, _ := procCreateWindowExW.Call(
 		0, uintptr(unsafe.Pointer(buttonClass)), uintptr(unsafe.Pointer(btnWaitPtr)),
 		wsChild|wsVisible|wsTabStop|bsDefPushButton|wsDisabled,
-		390, 284, 110, 32,
+		uintptr(defaultWidth-138), uintptr(defaultHeight-52), 110, 32,
 		hwnd, idActionButton, instance, 0,
 	)
 	wizard.hwndButton = hButton
@@ -604,11 +756,9 @@ func runSetupWizard(uninstall, elevated bool) error {
 		_, _, _ = procSendMessageW.Call(hButton, wmSetFont, wizard.fontRegular, 1)
 	}
 
-	// Show and update window
-	_, _, _ = procShowWindow.Call(hwnd, 5) // SW_SHOW = 5
+	_, _, _ = procShowWindow.Call(hwnd, 5)
 	_, _, _ = procUpdateWindow.Call(hwnd)
 
-	// Background worker
 	var workerErr error
 	go func() {
 		workerErr = execute(uninstall, elevated, func(percent int, status, detail string) {
@@ -617,7 +767,6 @@ func runSetupWizard(uninstall, elevated bool) error {
 		wizard.Complete(workerErr)
 	}()
 
-	// Message loop
 	var msg msgStruct
 	for {
 		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
@@ -631,6 +780,33 @@ func runSetupWizard(uninstall, elevated bool) error {
 	return workerErr
 }
 
+func openSharedFileForRead(path string) (*os.File, error) {
+	ptr, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	const (
+		genericRead     = 0x80000000
+		fileShareRead   = 0x00000001
+		fileShareWrite  = 0x00000002
+		fileShareDelete = 0x00000004
+		openExisting    = 3
+	)
+	h, err := syscall.CreateFile(
+		ptr,
+		genericRead,
+		fileShareRead|fileShareWrite|fileShareDelete,
+		nil,
+		openExisting,
+		0,
+		0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(h), path), nil
+}
+
 func monitorDiagnosticLog(stop <-chan struct{}, update ProgressCallback) {
 	localAppData := os.Getenv("LOCALAPPDATA")
 	if localAppData == "" {
@@ -639,7 +815,7 @@ func monitorDiagnosticLog(stop <-chan struct{}, update ProgressCallback) {
 	logPath := filepath.Join(localAppData, "VGT", "InstallerDiagnostics", "latest-transaction.log")
 	_ = os.Remove(logPath)
 
-	ticker := time.NewTicker(80 * time.Millisecond)
+	ticker := time.NewTicker(60 * time.Millisecond)
 	defer ticker.Stop()
 
 	var file *os.File
@@ -657,7 +833,7 @@ func monitorDiagnosticLog(stop <-chan struct{}, update ProgressCallback) {
 			return
 		case <-ticker.C:
 			if file == nil {
-				f, err := os.Open(logPath)
+				f, err := openSharedFileForRead(logPath)
 				if err != nil {
 					continue
 				}
@@ -668,6 +844,9 @@ func monitorDiagnosticLog(stop <-chan struct{}, update ProgressCallback) {
 			for {
 				line, err := reader.ReadString('\n')
 				if err != nil {
+					if err == io.EOF {
+						break
+					}
 					break
 				}
 				line = strings.TrimSpace(line)

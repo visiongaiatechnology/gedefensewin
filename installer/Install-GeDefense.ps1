@@ -29,7 +29,14 @@ function Write-VgtInstallPhase {
     New-Item -Path $dataRoot -ItemType Directory -Force | Out-Null
     $safeDetail = $Detail.Replace("`r",' ').Replace("`n",' ')
     $line = '{0}|{1}|{2}|{3}' -f [DateTime]::UtcNow.ToString('o'),$Phase,$State,$safeDetail
-    if ($resolvedDiagnosticLog) { Add-Content -LiteralPath $resolvedDiagnosticLog -Value $line -Encoding UTF8 }
+    if ($resolvedDiagnosticLog) {
+        try {
+            Add-Content -LiteralPath $resolvedDiagnosticLog -Value $line -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            Start-Sleep -Milliseconds 50
+            try { Add-Content -LiteralPath $resolvedDiagnosticLog -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+        }
+    }
     try {
         Add-Content -LiteralPath $installLog -Value $line -Encoding UTF8 -ErrorAction Stop
     } catch {
@@ -38,8 +45,9 @@ function Write-VgtInstallPhase {
 }
 
 trap {
-    Write-VgtInstallPhase -Phase 'Installer' -State 'FAILED' -Detail $_.Exception.Message
-    Write-Error ('GeDefense installation failed: {0}' -f $_.Exception.Message)
+    try {
+        Write-VgtInstallPhase -Phase 'Installer' -State 'FAILED' -Detail $_.Exception.Message
+    } catch {}
     exit 90
 }
 
@@ -263,8 +271,8 @@ Write-VgtInstallPhase -Phase 'Installer' -State 'COMPLETE' -Detail ("GeDefense {
 # SIG # Begin signature block
 # MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCA+Dj1D+And/1jh
-# K/hNnBPAXa2Q8ljVhqONqeBN/Ws/hqCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAGxIz0Ys9jQS+f
+# 2xErJdjBf0OC3RDkJCvzP5MNYGKPuqCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
 # m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
 # VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
 # MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
@@ -290,14 +298,14 @@ Write-VgtInstallPhase -Phase 'Installer' -State 'COMPLETE' -Detail ("GeDefense {
 # ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
 # ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
 # AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCDsGLtgE46I
-# KU6ZRRWeGhygisr5xUfxWEKifJ6R6iDf8DANBgkqhkiG9w0BAQEFAASCAYBjzHHP
-# dpek0CigdwyZiMrsIOJ5zF80OcerDiS9m7voUQgAqGsTH8HqZLYPv7iI3UVOgCab
-# L2ND5qvXo/WM01a+M3S3+tOUwHLqnm58obMtsaC9MeBcoX3gttfAb14kyOArGMWc
-# Ts+WLzMLV40dKHfnICnGQef9PcsuWgEi/FIcQxwolXqTKur5HP4N2ncv87D5X46P
-# JWDHnf68NZ9vRSzUosocdPNuGjhH3wGoApptOVFh7ImcSYrVMRL8oIJGXYAcAcMH
-# HSJazMVA6OxmSJTd9VFPWmX2UWWJlIbxwvTVbn9QY+gmntF7evhfNh9odDJU6IH0
-# FujjTnLebWgUDmRTaeYY9BBcFjLutNEq+y4vXyAqkFCHShxLhyoBsZka0AWGoVLy
-# kru7YWokzgXMA6ojvKgEuXZOjEP+mXNCp9yPTW8jOaDmFIbGXUjPrh66Tn7oECfR
-# DnXpZ5o0LuFSPUGj7bh/JetHXIxBqVzeMDOW0WdCItEFkYGukRK45/IWuBk=
+# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCCOuMWhCnPi
+# pnD0u8hOyhmyKzNjUi+RBuegaNzjuyVfSTANBgkqhkiG9w0BAQEFAASCAYC7OlJ2
+# /TXgBhl1ZlF7DP+k4qTHVpOGv9OL7Ns1OnRqqJmTcVC4DsX8BVU3zQ6k7RrRrv//
+# 94PQUPwObv9Eq9rmnuAtV5YD18fHQi1q5y7CbZxDx3iCE80Mfl5O76sVXI9LCKsS
+# lP9hwygS4U7AOfp2ycLm17TZhjgBKEW7QcaHLsNf4tkwpBsYE+MgcwKgx8YB1fsf
+# 8cyde71NIC7Fhxe4eGB5EkXTIgGS322VhcibNBu+O99zsCySwmzD+q59aL0H7ja8
+# DHwxNKvdDoDi29/Gku0wpPYzTNfA/KkfyKRWVl0NYevP7uRutVyATUj+bK0aGHzc
+# OLBzOxjFJnDTyGvM6bS/UPFxuQdCKCE4JFNqwMlNFGlG29HA2rpfIMrfIOcxptN6
+# etyZGfS5vaTqpBKSDfk3Z29MHxV+/oGgODcyGa0yW1ecfvzKUnKXeFYESM0BEriK
+# qUGIPkOGGSL+2nWJLwKxBuTJYIx1ToanjwrzgsVN3T71vomQI8snkg7ZF+g=
 # SIG # End signature block
