@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -45,6 +46,36 @@ func (s *Server) mhxSyncFeeds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, s.mhx.Status().ThreatIntelligence)
+}
+
+func (s *Server) mhxProtectedNetworks(w http.ResponseWriter, _ *http.Request) {
+	s.writeJSON(w, http.StatusOK, s.mhx.ProtectedNetworkPolicy())
+}
+
+func (s *Server) mhxSetProtectedNetworks(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Prefixes     []string `json:"prefixes"`
+		Confirmation string   `json:"confirmation"`
+		Reason       string   `json:"reason"`
+	}
+	if err := decodeJSONBounded(w, r, &input, 32<<10); err != nil || input.Confirmation != "UPDATE PROTECTED NETWORKS" || validateReason(input.Reason) != nil || len(input.Prefixes) > 256 {
+		s.writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	reason := strings.TrimSpace(input.Reason)
+	digest := sha256.Sum256([]byte(reason))
+	if err := s.ledger.Append("threat-intelligence.policy", "protected-networks", "operator-confirmed; count="+fmt.Sprintf("%d", len(input.Prefixes))+"; reason-sha256="+hex.EncodeToString(digest[:])); err != nil {
+		s.writeError(w, http.StatusInternalServerError, "protected network evidence preflight failed")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Minute)
+	defer cancel()
+	policy, err := s.mhx.SetProtectedNetworkPolicy(ctx, input.Prefixes)
+	if err != nil {
+		s.writeError(w, http.StatusConflict, "protected network policy rejected")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, policy)
 }
 
 func (s *Server) mhxSetMode(w http.ResponseWriter, r *http.Request) {
@@ -101,9 +132,15 @@ func (s *Server) modeReady(target string) readiness {
 			result.Ready = false
 			result.Blockers = append(result.Blockers, "Guarded protection must be active before Sovereign mode")
 		}
-		if status.ThreatIntelligence.Indicators == 0 || (status.ThreatIntelligence.State != "CURRENT" && status.ThreatIntelligence.State != "CACHED") {
+		ti := status.ThreatIntelligence
+		if ti.BlockingIndicators == 0 || ti.BlockingFeedsTotal == 0 || ti.BlockingFeedsReady != ti.BlockingFeedsTotal || (ti.State != "CURRENT" && ti.State != "CACHED" && ti.State != "DEGRADED") {
 			result.Ready = false
-			result.Blockers = append(result.Blockers, "Threat-intelligence snapshot is not ready")
+			result.Blockers = append(result.Blockers, "Threat-intelligence blocking coverage is not ready")
+		}
+		enforcement := status.ThreatEnforcement
+		if (enforcement.State != "VERIFIED" && enforcement.State != "VERIFIED_CLEANUP_PENDING") || enforcement.ActiveGeneration == "" || enforcement.ActiveGeneration != ti.EnforcementGeneration {
+			result.Ready = false
+			result.Blockers = append(result.Blockers, "Threat-intelligence firewall generation is not verified")
 		}
 	}
 	return result

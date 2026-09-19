@@ -1,4 +1,4 @@
-﻿# STATUS: DIAMANT VGT SUPREME
+# STATUS: DIAMANT VGT SUPREME
 [CmdletBinding()]
 param()
 
@@ -12,7 +12,7 @@ $headers = @{
     Accept = "application/vnd.github+json"
 }
 
-$tag = "v4.0.0-beta.1"
+$tag = "v4.1.0-beta.1"
 $release = try {
     Invoke-RestMethod -Uri "https://api.github.com/repos/visiongaiatechnology/gedefensewin/releases/tags/$tag" -Headers $headers -Method Get
 } catch {
@@ -21,9 +21,9 @@ $release = try {
 
 if (-not $release) {
     $body = @"
-# VGT GeDefense Windows 4.0.0-beta.1
+# VGT GeDefense Windows 4.1.0-beta.1
 
-Offizielles Standalone-Release für **VGT GeDefense Windows 4 (Version 4.0.0-beta.1)** von VisionGaia Technology.
+Offizielles Standalone-Release für **VGT GeDefense Windows 4 (Version 4.1.0-beta.1)** von VisionGaia Technology.
 
 Für Security Researcher und System-Architekten ist die vollständige technische Systemspezifikation in der [**ARCHITECTURE.md**](https://github.com/visiongaiatechnology/gedefensewin/blob/main/ARCHITECTURE.md) hinterlegt.
 
@@ -46,10 +46,10 @@ Für Security Researcher und System-Architekten ist die vollständige technische
 
 | Eigenschaft | Wert |
 | :--- | :--- |
-| **Datei** | ``GeDefense-Setup-x64-v4.0.0-beta.1.exe`` |
+| **Datei** | ``GeDefense-Setup-x64-v4.1.0-beta.1.exe`` |
 | **Architektur** | Windows 11 x64 |
-| **Dateigröße** | 15.014.712 Bytes |
-| **SHA-256** | ``A8E2E6DD619190C1CDA2787608A75AD1EA013C94E7EE32949654FF897348E425`` |
+| **Dateigröße** | 15.127.352 Bytes |
+| **SHA-256** | ``3D1FA121493C32A2C2FBDE30CF8F7CC7696F2E969C8B9CA6298B5F6EE75DF9A7`` |
 | **Signatur-Status** | Valid (Authenticode SHA-256) |
 | **Signer Thumbprint** | ``1E7B1641FC2E8EB82735216829C13721E3B9D895`` |
 | **Signer Subject** | ``CN=VisionGaia Technology VGT Release`` |
@@ -58,7 +58,7 @@ Für Security Researcher und System-Architekten ist die vollständige technische
 
 ## Installation & Upgrade
 
-1. Lade die Datei ``GeDefense-Setup-x64-v4.0.0-beta.1.exe`` herunter.
+1. Lade die Datei ``GeDefense-Setup-x64-v4.1.0-beta.1.exe`` herunter.
 2. Starte die Datei mit Administratorrechten ("Als Administrator ausführen").
 3. Der Installer ersetzt frühere Versionen (z. B. 2.3.2), installiert die V4-Binaries nach ``C:\Program Files\VGT\GeDefense``, registriert den Dienst ``VGTGeDefense`` mit Startmodus ``Automatic`` (**startet direkt bei jedem Windows-Boot**) und richtet den Autostart für das System-Tray ein.
 "@
@@ -66,7 +66,7 @@ Für Security Researcher und System-Architekten ist die vollständige technische
     $releasePayload = @{
         tag_name = $tag
         target_commitish = "main"
-        name = "VGT GeDefense Windows 4.0.0-beta.1"
+        name = "VGT GeDefense Windows 4.1.0-beta.1"
         body = $body
         draft = $false
         prerelease = $true
@@ -88,7 +88,7 @@ foreach ($asset in $existingAssets) {
 }
 
 # Upload .exe
-$exePath = (Resolve-Path ".\release\GeDefense-Setup-x64-v4.0.0-beta.1.exe").Path
+$exePath = (Resolve-Path ".\release\GeDefense-Setup-x64-v4.1.0-beta.1.exe").Path
 $exeName = [System.IO.Path]::GetFileName($exePath)
 $exeBytes = [System.IO.File]::ReadAllBytes($exePath)
 $exeUploadUrl = "$($uploadUrlBase)?name=$($exeName)"
@@ -102,7 +102,7 @@ $exeAsset = Invoke-RestMethod -Uri $exeUploadUrl -Headers $uploadExeHeaders -Met
 Write-Host "Uploaded $($exeName) -> $($exeAsset.browser_download_url)"
 
 # Upload .json manifest
-$jsonPath = (Resolve-Path ".\release\GeDefense-Setup-x64-v4.0.0-beta.1.json").Path
+$jsonPath = (Resolve-Path ".\release\GeDefense-Setup-x64-v4.1.0-beta.1.json").Path
 $jsonName = [System.IO.Path]::GetFileName($jsonPath)
 $jsonBytes = [System.IO.File]::ReadAllBytes($jsonPath)
 $jsonUploadUrl = "$($uploadUrlBase)?name=$($jsonName)"
@@ -116,12 +116,11 @@ $jsonAsset = Invoke-RestMethod -Uri $jsonUploadUrl -Headers $uploadJsonHeaders -
 Write-Host "Uploaded $($jsonName) -> $($jsonAsset.browser_download_url)"
 
 Write-Host "SUCCESS: Release published at $($release.html_url)"
-
 # SIG # Begin signature block
 # MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBfO/p0diuOq+Zq
-# TrtuBcPaHUxKYmugUTLqmI0V8hGPyKCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDMj0Am95UOjcg9
+# P9uta185NAXLVsmokPaRdK+epowK/aCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
 # m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
 # VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
 # MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
@@ -147,14 +146,14 @@ Write-Host "SUCCESS: Release published at $($release.html_url)"
 # ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
 # ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
 # AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCBFGAT2oXHC
-# l8poG6Vu5p+N7ocRYYKRLTGly1PBI1l5fDANBgkqhkiG9w0BAQEFAASCAYC421Cy
-# TxOxxLU802bmJ/HuGxfyHATiMkygIqlDGkibqaHM9RSAPeBZ/tZZJtIQV5F+VawS
-# ZcXD7K6bu3SLgEfzBTskrLRz2tqGi3tHRjgFkAQImQyGSLti3YimKJ3w6KsVxx78
-# fkADnErjcN0L0SvkSeuZSe9LhymViL8FvXTFDC6SdY000V4GBJJjSsw0TEO83Pac
-# wWfcJ4DDCiQim3ydasK4017svpvur0nDAYVjZ+0TLoYfg2Wr5RA5HdU12jW4SKEg
-# euLCxfbYm0pM4qxbkzI5Mb0O6Q7KuqWZMruJQ2YFhqwg06WsjjXi2EOSlTZurmyS
-# 1jWCK/O7SJNyaWKKhzIHm4lVsyTxT6rElrluyx3ey/9vJd8lQU2eCJEBEZEEtB2k
-# VD407DU1OwoyxxPglH9DK8BTQwTPAQgyaHQK4HzI/CeQ181SwYYtcXp68hVbsHHQ
-# F6DUKVt3e8k7HhGO1nScxDxS8A+tCNFFz7XoZGRahJYYRT6hloQdo76EyCs=
+# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCDRRaUj2dbv
+# JTSk1uN2FRpwaBG2Six3hAS4euEngmcKojANBgkqhkiG9w0BAQEFAASCAYAd+VlO
+# NHP76LKdHLmwJtkSEgFYOaVi/06xXuJUbBYocB//CMON9AAYwvGBqc+BurgAtg7G
+# ESiLDdfmZ4rLDzfUj7XW7oEG186oLyplcHGZqsau+U83MosSPmjlFZKWD7ENWjsk
+# w44bnUDBROuXj4WP+Swy73A6kxLAdUQqeHJahH/cMXEoUo/r1l6QSGj/aTySIjOi
+# TdpTHc7FMDrY7WVL0qyrBXOxplx9C+CUD4nuMWy9ahW3I+6hcYexj6LKht6UYnr1
+# u/LhlAQs2xzthdISXKOcou5JFpow7tsaDMqCsoyNJRi2aPvYed1VJuIkplCpOYOS
+# XeGRUIHZ17+Hp08IPvxRx8jE8EKcxA2CQcdSRNpK74n5j023AGLiYCge9Gq4j2gz
+# VsTSvfdtfPTtpLU5CITpDXAnhlL46GHW0BUGex5Hk22801n0DX40CncgR6rh2iVw
+# v83MdVEGyuNA1OMnVml9bbTEe3eFHfMlXjpMtxAT67g9OPAVarFx8+HV+lQ=
 # SIG # End signature block

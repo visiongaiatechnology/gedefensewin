@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/product"
@@ -23,6 +24,8 @@ const (
 	maxArchiveFiles   = 512
 	maxExtractedBytes = 256 << 20
 )
+
+type ProgressCallback func(percent int, status, detail string)
 
 func main() {
 	uninstall := flag.Bool("uninstall", false, "remove GeDefense")
@@ -37,20 +40,14 @@ func main() {
 		}
 		return
 	}
-	if err := execute(*uninstall, isElevated()); err != nil {
-		if !*silent {
-			notify("VGT GeDefense", "Operation fehlgeschlagen: "+err.Error(), winapi.MBIconError)
-		}
-		os.Exit(1)
-	}
-	if *uninstall {
-		if !*silent {
-			notify("VGT GeDefense", "GeDefense wurde entfernt. Lokale Evidenzdaten wurden zur forensischen Nachvollziehbarkeit beibehalten.", winapi.MBIconInformation)
+	if *silent {
+		if err := execute(*uninstall, isElevated(), nil); err != nil {
+			os.Exit(1)
 		}
 		return
 	}
-	if !*silent {
-		notify("VGT GeDefense", "Installation erfolgreich. Das Security Center ist jetzt im Startmenü verfügbar.", winapi.MBIconInformation)
+	if err := runSetupWizard(*uninstall, isElevated()); err != nil {
+		os.Exit(1)
 	}
 }
 
@@ -58,7 +55,14 @@ func isElevated() bool {
 	return winapi.IsProcessElevated()
 }
 
-func execute(uninstall, elevated bool) error {
+func execute(uninstall, elevated bool, progress ProgressCallback) error {
+	report := func(percent int, status, detail string) {
+		if progress != nil {
+			progress(percent, status, detail)
+		}
+	}
+
+	report(5, "Vorbereitung...", "Initialisiere Installer-Cache...")
 	stagingParent, err := installerCache(elevated)
 	if err != nil {
 		return err
@@ -71,11 +75,16 @@ func execute(uninstall, elevated bool) error {
 		return err
 	}
 	defer os.RemoveAll(staging)
+
+	report(10, "Dateien werden extrahiert...", "Lade eingebettetes Payload-Archiv...")
 	archive, err := installerPayload()
 	if err != nil {
 		return err
 	}
-	if err := extractArchive(archive, staging); err != nil {
+	if err := extractArchiveWithProgress(archive, staging, func(current, total int, entryName string) {
+		pct := 10 + int(float64(current)/float64(total)*25.0)
+		report(pct, "Dateien werden extrahiert...", entryName)
+	}); err != nil {
 		return err
 	}
 	payloadRoot := filepath.Join(staging, "payload")
@@ -93,7 +102,29 @@ func execute(uninstall, elevated bool) error {
 		operation = "Uninstall"
 	}
 	bootstrap := filepath.Join(payloadRoot, "installer", "Bootstrap-GeDefense.ps1")
-	return runBootstrap(bootstrap, "-PayloadRoot", payloadRoot, "-Operation", operation, "-InstallerPath", executable)
+
+	report(36, "Installationstransaktion wird gestartet...", "Prüfe Systemberechtigungen...")
+
+	stopTail := make(chan struct{})
+	var wg sync.WaitGroup
+	if progress != nil && !uninstall {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			monitorDiagnosticLog(stopTail, report)
+		}()
+	}
+
+	bootstrapErr := runBootstrap(bootstrap, "-PayloadRoot", payloadRoot, "-Operation", operation, "-InstallerPath", executable)
+	close(stopTail)
+	wg.Wait()
+
+	if bootstrapErr != nil {
+		return bootstrapErr
+	}
+
+	report(100, "Vorgang abgeschlossen", "Alle Komponenten wurden erfolgreich konfiguriert.")
+	return nil
 }
 
 func installerCache(elevated bool) (string, error) {
@@ -112,6 +143,10 @@ func installerCache(elevated bool) (string, error) {
 }
 
 func extractArchive(raw []byte, destination string) error {
+	return extractArchiveWithProgress(raw, destination, nil)
+}
+
+func extractArchiveWithProgress(raw []byte, destination string, onEntry func(current, total int, entryName string)) error {
 	reader, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
 		return errors.New("eingebettetes Payload-Archiv ist ungültig")
@@ -122,7 +157,11 @@ func extractArchive(raw []byte, destination string) error {
 	root := filepath.Clean(destination) + string(os.PathSeparator)
 	var total uint64
 	seen := make(map[string]struct{}, len(reader.File))
-	for _, entry := range reader.File {
+	totalFiles := len(reader.File)
+	for index, entry := range reader.File {
+		if onEntry != nil {
+			onEntry(index+1, totalFiles, entry.Name)
+		}
 		if entry.FileInfo().Mode()&os.ModeSymlink != 0 || entry.UncompressedSize64 > maxExtractedBytes {
 			return errors.New("unsicherer Payload-Eintrag wurde abgelehnt")
 		}

@@ -8,7 +8,7 @@ lokale Evidenzdaten.
 
 ```powershell
 git add .
-git commit -S -m 'Initial open-source release of GeDefense Windows 4.0.0-beta.1'
+git commit -S -m 'Initial open-source release of GeDefense Windows 4.1.0-beta.1'
 git remote add origin https://github.com/VisionGaiaTechnology/GeDefense-Windows.git
 git push -u origin main
 ```

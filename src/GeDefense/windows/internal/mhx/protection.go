@@ -3,6 +3,7 @@ package mhx
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/scriptengine"
@@ -15,13 +16,19 @@ type ProtectionResult struct {
 	NetworkDefaultDeny     bool   `json:"NetworkDefaultDeny"`
 	ScriptObfuscationBlock bool   `json:"ScriptObfuscationBlock"`
 	ProcessTelemetry       bool   `json:"ProcessTelemetry"`
+	WfpBlockTelemetry      bool   `json:"WfpBlockTelemetry"`
 }
 
 type FirewallResult struct {
-	TimestampUTC string `json:"TimestampUtc"`
-	Indicators   int    `json:"Indicators"`
-	Rules        int    `json:"Rules"`
-	Generation   string `json:"Generation"`
+	TimestampUTC         string `json:"TimestampUtc"`
+	Indicators           int    `json:"Indicators"`
+	Rules                int    `json:"Rules"`
+	Shards               int    `json:"Shards"`
+	Generation           string `json:"Generation"`
+	Mode                 string `json:"Mode"`
+	CleanupPending       bool   `json:"CleanupPending"`
+	ProtectionGeneration string `json:"ProtectionGeneration"`
+	ProtectedPrefixCount int    `json:"ProtectedPrefixCount"`
 }
 
 type ApplicationAllow struct {
@@ -47,7 +54,7 @@ type AppControlResult struct {
 }
 
 type protectionController interface {
-	ApplyThreatIntelligence(context.Context, string) (FirewallResult, error)
+	ApplyThreatIntelligence(context.Context, string, string, int) (FirewallResult, error)
 	Applications(context.Context, string, string) (ApplicationAllowResult, error)
 	ApplyAppControl(context.Context, string) (AppControlResult, error)
 	Apply(context.Context, string) (ProtectionResult, error)
@@ -80,8 +87,8 @@ func newProtectionManager(script, firewallScript, allowScript, appControlScript,
 	return &protectionManager{runner: runner, firewall: firewall, allows: allows, appControl: appControl}, nil
 }
 
-func (m *protectionManager) ApplyThreatIntelligence(ctx context.Context, path string) (FirewallResult, error) {
-	return scriptengine.RunJSON[FirewallResult](m.firewall, ctx, "mhx-firewall", "-IndicatorPath", path)
+func (m *protectionManager) ApplyThreatIntelligence(ctx context.Context, path, generation string, indicators int) (FirewallResult, error) {
+	return scriptengine.RunJSON[FirewallResult](m.firewall, ctx, "mhx-firewall", "-IndicatorPath", path, "-ExpectedGeneration", generation, "-ExpectedIndicators", fmt.Sprintf("%d", indicators))
 }
 
 func (m *protectionManager) Applications(ctx context.Context, action, path string) (ApplicationAllowResult, error) {

@@ -73,6 +73,8 @@ type MHXEngine interface {
 	AttackStories(int) []mhx.AttackStory
 	SetMode(context.Context, string) error
 	SyncFeeds(context.Context) error
+	ProtectedNetworkPolicy() mhx.ProtectedNetworkPolicy
+	SetProtectedNetworkPolicy(context.Context, []string) (mhx.ProtectedNetworkPolicy, error)
 	Applications(context.Context) ([]mhx.ApplicationAllow, error)
 	SetApplication(context.Context, string, string) ([]mhx.ApplicationAllow, error)
 }

@@ -7,10 +7,10 @@
     "timestamp": "2026-09-18T00:00:00Z",
     "component": {
       "type": "application",
-      "bom-ref": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@4.0.0-beta.1",
+      "bom-ref": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@4.1.0-beta.1",
       "group": "VisionGaiaTechnology",
       "name": "GeDefense-Windows",
-      "version": "4.0.0-beta.1",
+      "version": "4.1.0-beta.1",
       "licenses": [
         {
           "license": {
@@ -18,13 +18,13 @@
           }
         }
       ],
-      "purl": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@4.0.0-beta.1"
+      "purl": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@4.1.0-beta.1"
     }
   },
   "components": [],
   "dependencies": [
     {
-      "ref": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@4.0.0-beta.1",
+      "ref": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@4.1.0-beta.1",
       "dependsOn": []
     }
   ]
