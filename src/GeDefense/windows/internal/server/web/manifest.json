@@ -1,0 +1,15 @@
+{
+  "name": "GeDefense 4 · Windows Security Center",
+  "short_name": "GeDefense",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#040914",
+  "theme_color": "#040914",
+  "icons": [
+    {
+      "src": "/assets/gedefense-logo.png",
+      "sizes": "192x192 512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -52,6 +52,7 @@ func openDedicatedWindow(target string) error {
 		"--app=" + target,
 		"--user-data-dir=" + userDataDir,
 		"--window-size=1280,820",
+		"--disable-features=Translate",
 		"--no-first-run",
 		"--no-default-browser-check",
 	}
