@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -244,5 +245,45 @@ func TestMHXPolicyReconcile(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("got %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+}
+
+func TestWindowControlEndpoints(t *testing.T) {
+	root := t.TempDir()
+	ledger, err := evidence.Open(filepath.Join(root, "evidence.jsonl"), filepath.Join(root, "evidence.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mhxEngine := &fixedMHX{mode: "guarded", status: mhx.Status{Realtime: true, ProtectionHealth: "VERIFIED"}}
+	handler := New("test", "01234567890123456789012345678901", fixedEngine{result: hardening.Result{Defender: true}}, fixedAudit{}, fixedXDR{}, mhxEngine, &fixedIntegrity{}, ledger)
+
+	endpoints := []string{
+		"/api/v1/window/minimize",
+		"/api/v1/window/maximize",
+		"/api/v1/window/close",
+	}
+
+	for i, ep := range endpoints {
+		postReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17831"+ep, nil)
+		postReq.Host = "127.0.0.1:17831"
+		postReq.RemoteAddr = "127.0.0.1:49152"
+		postReq.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
+		postReq.Header.Set("X-VGT-Request-ID", fmt.Sprintf("11111111-2222-3333-4444-%012d", i+1))
+		postRec := httptest.NewRecorder()
+		handler.ServeHTTP(postRec, postReq)
+		if postRec.Code != http.StatusOK {
+			t.Fatalf("%s POST got %d, want %d: %s", ep, postRec.Code, http.StatusOK, postRec.Body.String())
+		}
+	}
+
+	// Test GET /api/v1/window/state
+	stateReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:17831/api/v1/window/state", nil)
+	stateReq.Host = "127.0.0.1:17831"
+	stateReq.RemoteAddr = "127.0.0.1:49152"
+	stateReq.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
+	stateRec := httptest.NewRecorder()
+	handler.ServeHTTP(stateRec, stateReq)
+	if stateRec.Code != http.StatusOK {
+		t.Fatalf("/api/v1/window/state got %d, want %d: %s", stateRec.Code, http.StatusOK, stateRec.Body.String())
 	}
 }

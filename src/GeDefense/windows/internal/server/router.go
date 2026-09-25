@@ -58,5 +58,9 @@ func New(version, token string, engine HardeningEngine, auditEngine AuditEngine,
 	mux.HandleFunc("GET /api/v1/integrity/changes", s.authorize(s.integrityChanges))
 	mux.HandleFunc("POST /api/v1/integrity/configuration", s.authorize(s.integrityConfiguration))
 	mux.HandleFunc("POST /api/v1/integrity/scan", s.authorize(s.integrityScan))
+	mux.HandleFunc("POST /api/v1/window/minimize", s.authorize(s.windowMinimize))
+	mux.HandleFunc("POST /api/v1/window/maximize", s.authorize(s.windowMaximize))
+	mux.HandleFunc("POST /api/v1/window/close", s.authorize(s.windowClose))
+	mux.HandleFunc("GET /api/v1/window/state", s.authorize(s.windowState))
 	return s.headers(mux)
 }

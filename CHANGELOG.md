@@ -3,6 +3,11 @@
 ## [4.1.1] - 2026-09-25
 
 ### Added
+- **Eigene Win32 Non-Client Titelleiste & Glassmorphism Window Controls**:
+  - Vollintegrierte Glassmorphism-Titelleiste im GeDefense-Cyberdesign mit VGT-Logo, pulsierendem Live-Status-Badge (`SOVEREIGN // OPTIMAL`), zentrierter Drag-Zone und Custom-Fensterknöpfen für Minimieren (`_`), Maximieren/Wiederherstellen (`□`) und Schließen (`✕`).
+  - Neue Loopback-API-Endpunkte `POST /api/v1/window/minimize`, `POST /api/v1/window/maximize`, `POST /api/v1/window/close` und `GET /api/v1/window/state` mit nativer Win32 `ShowWindow` / `PostMessage` Steuerung und sicherem Browser-Fallback.
+  - Neues Win32-Paket `internal/winframe` zur Realisierung randloser Non-Client-Frames (`WM_NCCALCSIZE` mit 0 Non-Client-Pixels, `WM_NCHITTEST` für nahtloses Windows 11 Aero Snap / Dragging und DWM Immersive Dark Mode / Mica / Acrylic).
+- **Threat Intelligence Feed-Promotion**: FireHOL Level 1 (`firehol_l1`) von `CORRELATE_ONLY` auf `BLOCK` befördert. Gefährliche IP-Ranges aus FireHOL fließen nun direkt in die verifizierte Windows Filtering Platform / Windows Firewall Block-Generation ein.
 - **Dediziertes Anwendungsfenster**: GeDefense Center startet als eigenständiges, isoliertes Anwendungsfenster (Chromium Application Mode mit separatem `%LocalAppData%\VGT\GeDefense\WebWindow`-Profil) mit nativer Titelleiste ("GeDefense 4 · Windows Security Center"), eigenem Taskleisten-Eintrag und ohne störende Browser-Tabs. Automatische Erkennung über Microsoft Edge, EdgeCore, Google Chrome und Brave mit defensivem `ShellOpenURL`-Fallback.
 - **On-Demand Policy-Synchronisierung**: Neuer HTTP-Endpunkt `POST /api/v1/mhx/policy/reconcile` und interaktive Cyber-Glass-Schaltflächen ("Policy synchronisieren") im Protection Center und der Übersichtsseite zur sofortigen serverseitigen Re-Verifikation aller Sicherheitsrichtlinien.
 - **Sovereign Cyber-Dark Glassmorphism Setup Wizard**: Vollständige optische Überarbeitung des nativen Setup Wizards mit Windows 11 DWM Acrylic Glass (`DWMWA_SYSTEMBACKDROP_TYPE = 3`), Immersive Dark Titlebar, Electric-Cyan Glow, flackerfreiem Double-Buffered GDI Canvas und interaktivem Pill-Button.
