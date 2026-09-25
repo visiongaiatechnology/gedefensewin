@@ -77,6 +77,7 @@ type MHXEngine interface {
 	SetProtectedNetworkPolicy(context.Context, []string) (mhx.ProtectedNetworkPolicy, error)
 	Applications(context.Context) ([]mhx.ApplicationAllow, error)
 	SetApplication(context.Context, string, string) ([]mhx.ApplicationAllow, error)
+	ReconcilePolicy(context.Context) error
 }
 
 type IntegrityEngine interface {

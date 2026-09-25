@@ -15,7 +15,7 @@ $embeddedBundleDirectory = Join-Path $sourceRoot 'cmd\gedefense-installer\bundle
 $embeddedBundle = Join-Path $embeddedBundleDirectory 'payload.zip'
 $releaseRoot = Join-Path $projectRoot 'release'
 $version = (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION') -Raw -Encoding UTF8).Trim()
-if ($version -notmatch '^4\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*$') { throw [IO.InvalidDataException]::new('Release VERSION is invalid.') }
+if ($version -notmatch '^4\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') { throw [IO.InvalidDataException]::new('Release VERSION is invalid.') }
 $releaseExecutable = Join-Path $releaseRoot ("GeDefense-Setup-x64-v{0}.exe" -f $version)
 $releaseManifest = Join-Path $releaseRoot ("GeDefense-Setup-x64-v{0}.json" -f $version)
 $thumbprintFile = Join-Path $projectRoot 'certificates\release-thumbprint.txt'

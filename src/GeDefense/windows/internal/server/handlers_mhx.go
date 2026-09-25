@@ -174,3 +174,17 @@ func (s *Server) mhxSetApplication(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, http.StatusOK, result)
 }
+
+func (s *Server) mhxReconcilePolicy(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
+	defer cancel()
+	if err := s.mhx.ReconcilePolicy(ctx); err != nil {
+		s.writeError(w, http.StatusConflict, fmt.Sprintf("policy reconciliation failed: %v", err))
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "verified",
+		"mhx":     s.mhx.Status(),
+		"message": "Protection policy reconciled and verified",
+	})
+}

@@ -1,3 +1,32 @@
+# VGT GeDefense Windows 4.1.1
+
+Release-Datum: 2026-09-25
+
+## Generation 4.1.1: Dedicated Application Window & Sovereign Resilience
+
+GeDefense Windows 4.1.1 liefert ein dediziertes, isoliertes Anwendungsfenster für das Windows Security Center, beseitigt Policy-Synchronisationslücken in Windows App Control (WDAC), führt den neuen VGT Ice-Blue Glassmorphism Setup Wizard ein und optimiert die Härtungs- und Dienstresilienz unter Windows 11.
+
+### Kernänderungen in 4.1.1
+
+- **Dediziertes Anwendungsfenster (Standalone Window Experience)**:
+  - Automatischer Start des GeDefense Security Centers in einem eigenständigen, tab- und adressleistenfreien Fenster via Chromium Application Mode (`--app`).
+  - Native Farbkopplung der Windows-Fensterleiste via Dark-Mode `<meta name="theme-color" content="#050b14">`.
+  - Isoliertes Benutzerprofil unter `%LocalAppData%\VGT\GeDefense\WebWindow`, um Cache-Konflikte mit normalen Browser-Sessions auszuschließen.
+  - Native Erkennungskette für Edge, Chrome, Brave und EdgeCore über Standardpfade und Windows-Registry.
+- **Windows App Control (WDAC / MHX) & Policy-Reconciliation**:
+  - Resiliente Fehlerbehandlung in `Set-VgtMhxAppControl.ps1`: Graceful Tolerance von `0x80070002` (`ERROR_FILE_NOT_FOUND`) beim Entfernen nicht mehr vorhandener Richtlinien-GUIDs.
+  - Aktive Policy-Cache-Prüfung in `CiPolicies\Active`, um redundante 30-Sekunden-Vollscans zu verhindern.
+  - Neuer Endpoint `POST /api/v1/mhx/policy/reconcile` zur direkten, manuellen Policy-Neusynchronisation bei Status `DEGRADED`.
+  - Dedizierte Synchronisierungs-Buttons im Protection Center und der Übersichts-Kachel mit Live-Feedback.
+- **VGT Glassmorphism Setup Wizard**:
+  - Moderner, transparenter Glassmorphism-Look mit feinen Ice-Blue-Akzenten und flüssigen Micro-Transitions.
+  - Resiliente Administrator-Elevation und transaktionale Installationsüberwachung.
+- **Dienst- und Härtungs-Resilienz**:
+  - Getestete und signierte PowerShell-Module unter `ExecutionPolicy AllSigned`.
+  - Aktualisierte Versionierung und SBOM nach CycloneDX 1.6.
+
+---
+
 # VGT GeDefense Windows 4.1.0-beta.1
 
 Release-Datum: 2026-09-19

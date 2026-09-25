@@ -53,6 +53,7 @@ func New(version, token string, engine HardeningEngine, auditEngine AuditEngine,
 	mux.HandleFunc("POST /api/v1/mhx/mode", s.authorize(s.mhxSetMode))
 	mux.HandleFunc("GET /api/v1/mhx/applications", s.authorize(s.mhxApplications))
 	mux.HandleFunc("POST /api/v1/mhx/applications", s.authorize(s.mhxSetApplication))
+	mux.HandleFunc("POST /api/v1/mhx/policy/reconcile", s.authorize(s.mhxReconcilePolicy))
 	mux.HandleFunc("GET /api/v1/integrity/status", s.authorize(s.integrityStatus))
 	mux.HandleFunc("GET /api/v1/integrity/changes", s.authorize(s.integrityChanges))
 	mux.HandleFunc("POST /api/v1/integrity/configuration", s.authorize(s.integrityConfiguration))

@@ -13,9 +13,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/localhttp"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
@@ -26,7 +29,114 @@ func Open() error {
 	if err != nil {
 		return err
 	}
+	if err := openDedicatedWindow(target); err == nil {
+		return nil
+	}
 	return winapi.ShellOpenURL(target)
+}
+
+func openDedicatedWindow(target string) error {
+	browserPath := findChromiumBrowser()
+	if browserPath == "" {
+		return errors.New("no supported Chromium browser found for dedicated window")
+	}
+	localAppData := os.Getenv("LocalAppData")
+	if localAppData == "" || !filepath.IsAbs(localAppData) {
+		return errors.New("LocalAppData unavailable")
+	}
+	userDataDir := filepath.Join(filepath.Clean(localAppData), "VGT", "GeDefense", "WebWindow")
+	if err := os.MkdirAll(userDataDir, 0700); err != nil {
+		return err
+	}
+	args := []string{
+		"--app=" + target,
+		"--user-data-dir=" + userDataDir,
+		"--window-size=1280,820",
+		"--no-first-run",
+		"--no-default-browser-check",
+	}
+	cmd := exec.Command(browserPath, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+	return nil
+}
+
+func findChromiumBrowser() string {
+	candidates := []string{
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		filepath.Join(os.Getenv("ProgramFiles"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		filepath.Join(os.Getenv("LocalAppData"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		filepath.Join(os.Getenv("ProgramFiles"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("LocalAppData"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("ProgramFiles"), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+		filepath.Join(os.Getenv("LocalAppData"), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+	}
+	for _, c := range candidates {
+		if isExecutableFile(c) {
+			return c
+		}
+	}
+	for _, pattern := range []string{
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Microsoft", "EdgeCore", "*", "msedge.exe"),
+		filepath.Join(os.Getenv("ProgramFiles"), "Microsoft", "EdgeCore", "*", "msedge.exe"),
+	} {
+		if matches, err := filepath.Glob(pattern); err == nil {
+			for _, m := range matches {
+				if isExecutableFile(m) {
+					return m
+				}
+			}
+		}
+	}
+	for _, appName := range []string{"msedge.exe", "chrome.exe", "brave.exe"} {
+		if p := queryAppPath(appName); p != "" && isExecutableFile(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func isExecutableFile(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
+}
+
+func queryAppPath(appName string) string {
+	subKey, err := syscall.UTF16PtrFromString(`SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\` + appName)
+	if err != nil {
+		return ""
+	}
+	for _, root := range []syscall.Handle{syscall.HKEY_LOCAL_MACHINE, syscall.HKEY_CURRENT_USER} {
+		var hKey syscall.Handle
+		if err := syscall.RegOpenKeyEx(root, subKey, 0, syscall.KEY_READ, &hKey); err != nil {
+			continue
+		}
+		var bufLen uint32 = 1024
+		buf := make([]uint16, bufLen)
+		queryErr := syscall.RegQueryValueEx(hKey, nil, nil, nil, (*byte)(unsafe.Pointer(&buf[0])), &bufLen)
+		_ = syscall.RegCloseKey(hKey)
+		if queryErr == nil {
+			val := strings.Trim(syscall.UTF16ToString(buf), `"`)
+			if val != "" {
+				return val
+			}
+		}
+	}
+	return ""
 }
 
 func BootstrapURL() (string, error) {

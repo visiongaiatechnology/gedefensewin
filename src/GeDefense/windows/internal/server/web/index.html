@@ -52,7 +52,7 @@
             <p class="eyebrow">GEDEFENSE WINDOWS SECURITY FABRIC</p>
             <h2>Eine Schutzlage. Alle Windows-Sicherheitsschichten.</h2>
             <p>Defender, ASR, App Control, Firewall, Prozess-Telemetrie, Threat Intelligence, Dateiintegrität und Evidence werden lokal zusammengeführt.</p>
-            <div class="hero-actions"><button class="button primary" data-go="protection">Schutzstatus öffnen</button><span id="overviewMode" class="mode-caption">Status wird geladen</span></div>
+            <div class="hero-actions"><button class="button primary" data-go="protection">Schutzstatus öffnen</button><button id="heroReconcilePolicy" class="button ghost">Policy synchronisieren</button><span id="overviewMode" class="mode-caption">Status wird geladen</span></div>
           </div>
           <div class="posture-orbit" aria-hidden="true"><div class="posture-core"><strong id="postureScore">0</strong><span>POSTURE</span></div></div>
         </div>
@@ -66,7 +66,7 @@
 
       <section class="view" data-page="protection" hidden>
         <div class="page-head"><div><p class="eyebrow">PROTECTION CENTER</p><h2>Aktiver Schutz ohne kryptische Betriebsmodi.</h2><p>Die Control Plane prüft serverseitig, welche Schutzstufe sicher aktiviert werden kann. Kein Browser entscheidet über Release-Gates.</p></div><span id="protectionBadge" class="status-pill warn">PRÜFUNG</span></div>
-        <article class="glass protection-state"><div><small>AKTUELLER MODUS</small><strong id="currentMode">---</strong><p id="currentModeText">Schutzstatus wird geladen.</p><div class="action-row"><span id="protectionHealth" class="status-pill warn">STARTING</span><span id="protectionVerified" class="mono muted">Noch nicht verifiziert</span></div></div><div class="protection-visual"><span>MONITOR</span><i></i><span>GUARDED</span><i></i><span>SOVEREIGN</span></div></article>
+        <article class="glass protection-state"><div><small>AKTUELLER MODUS</small><strong id="currentMode">---</strong><p id="currentModeText">Schutzstatus wird geladen.</p><div class="action-row"><span id="protectionHealth" class="status-pill warn">STARTING</span><span id="protectionVerified" class="mono muted">Noch nicht verifiziert</span><button id="reconcilePolicy" class="button ghost small">Policy synchronisieren</button></div></div><div class="protection-visual"><span>MONITOR</span><i></i><span>GUARDED</span><i></i><span>SOVEREIGN</span></div></article>
         <div class="mode-grid">
           <article class="glass mode-card"><span class="mode-number">01</span><h3>Monitor</h3><p>Erkennen, korrelieren und protokollieren. Keine MHX-Prozessterminierung.</p><button class="button ghost" data-protection="monitor">Nur überwachen</button></article>
           <article class="glass mode-card recommended"><span class="mode-number">02</span><h3>Guarded</h3><p>Kontextuelle MHX-Entscheidungen dürfen den exakt beobachteten Prozess nach erneuter Identitätsprüfung beenden.</p><button class="button primary" data-protection="guarded">Guarded aktivieren</button></article>

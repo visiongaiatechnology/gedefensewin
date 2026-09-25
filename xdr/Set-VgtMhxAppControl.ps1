@@ -71,6 +71,14 @@ function Get-AllowedPaths {
 
 function Deploy-Policy([bool]$Enforced) {
     if (-not (Test-Path -LiteralPath $installRoot -PathType Container) -or -not (Test-Path -LiteralPath $example -PathType Leaf) -or -not (Test-Path -LiteralPath $ciTool -PathType Leaf)) { throw [IO.FileNotFoundException]::new('App Control prerequisites are unavailable.') }
+    $previous = Read-State
+    $allowed = @(Get-AllowedPaths)
+    if ($previous -and [bool]$previous.enforced -eq $Enforced -and [int]$previous.allowedApplications -eq $allowed.Count) {
+        $existingCip = Join-Path $env:SystemRoot ("System32\CodeIntegrity\CiPolicies\Active\{0}.cip" -f [string]$previous.policyId)
+        if (Test-Path -LiteralPath $existingCip -PathType Leaf) {
+            return $previous
+        }
+    }
     [IO.Directory]::CreateDirectory($stateRoot) | Out-Null
     $transaction = Join-Path $stateRoot ([Guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($transaction) | Out-Null
@@ -78,7 +86,6 @@ function Deploy-Policy([bool]$Enforced) {
     $vgtRules = Join-Path $transaction 'vgt-rules.xml'
     New-CIPolicy -ScanPath $installRoot -FilePath $vgtRules -Level Publisher -Fallback Hash -UserPEs -MultiplePolicyFormat -NoScript | Out-Null
     $policies = @($base,$vgtRules)
-    $allowed = @(Get-AllowedPaths)
     if ($allowed.Count -gt 0) {
         $rules = @($allowed | ForEach-Object { New-CIPolicyRule -DriverFilePath $_ -Level Hash })
         $operatorRules = Join-Path $transaction 'operator-rules.xml'
@@ -96,8 +103,19 @@ function Deploy-Policy([bool]$Enforced) {
     $binary = Join-Path $transaction ("{0}.cip" -f $policyId)
     ConvertFrom-CIPolicy -XmlFilePath $merged -BinaryFilePath $binary | Out-Null
     Invoke-CiTool @('--update-policy',$binary,'-json') | Out-Null
-    $previous = Read-State
-    if ($previous -and [string]$previous.policyId -ne $policyId) { Invoke-CiTool @('--remove-policy',[string]$previous.policyId,'-json') | Out-Null }
+    if ($previous -and [string]$previous.policyId -and [string]$previous.policyId -ne $policyId) {
+        $prevId = [string]$previous.policyId
+        $rawGuid = $prevId.Trim('{','}')
+        try {
+            Invoke-CiTool @('--remove-policy',$prevId,'-json') | Out-Null
+        } catch {
+            try {
+                Invoke-CiTool @('--remove-policy',$rawGuid,'-json') | Out-Null
+            } catch {
+                # Ignored: previous policy already removed or not present (0x80070002)
+            }
+        }
+    }
     $state = [ordered]@{ policyId=$policyId; enforced=$Enforced; deployedUtc=[DateTime]::UtcNow.ToString('o'); allowedApplications=$allowed.Count; recoveryOptions=@(9,10) }
     $temporary = "$statePath.$PID.tmp"; $state | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporary -Encoding UTF8; Move-Item -LiteralPath $temporary -Destination $statePath -Force
     return $state
@@ -107,7 +125,20 @@ try {
     Assert-Administrator
     if ($Action -eq 'Remove') {
         $state = Read-State
-        if ($state) { Invoke-CiTool @('--remove-policy',[string]$state.policyId,'-json') | Out-Null; Remove-Item -LiteralPath $statePath -Force }
+        if ($state) {
+            $prevId = [string]$state.policyId
+            $rawGuid = $prevId.Trim('{','}')
+            try {
+                Invoke-CiTool @('--remove-policy',$prevId,'-json') | Out-Null
+            } catch {
+                try {
+                    Invoke-CiTool @('--remove-policy',$rawGuid,'-json') | Out-Null
+                } catch {
+                    # Ignored: already removed or not present
+                }
+            }
+            Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+        }
         $result = [ordered]@{ TimestampUtc=[DateTime]::UtcNow.ToString('o'); State='REMOVED'; PolicyId=''; Enforced=$false; KernelEnforcement=$false }
     } elseif ($Action -eq 'Status') {
         $state = Read-State
@@ -138,8 +169,8 @@ try {
 # SIG # Begin signature block
 # MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCA49uTg1ADQZAYD
-# wCZZnV0v6IPbC3HUNi9OsW03Hw7SiqCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBrDg+uyQAqbELt
+# Iyx/9fBe/cc4RarZLCLIwYGxlycSzKCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
 # m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
 # VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
 # MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
@@ -165,14 +196,14 @@ try {
 # ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
 # ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
 # AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCCx/slA5GKw
-# 4EK7CuQC8X+kTNjH983+ITflr+BQyxnQPDANBgkqhkiG9w0BAQEFAASCAYCqAeDm
-# i8IPdQ5ovRvQFP4pTzkKXYYRnrhlvw3PihUt5dt9QMWnhcqLTbNr1fP3vnkf0rco
-# JwzKj3vxgBCXh8kx8D2We+VL7Art40jwRKwU+NdFWOhtbseodXaD1EEmSbbK3djU
-# VLm+tJQrJicRUM/hGKqxhIE6EStlxB82PK8PVBfRvvI9klO1jvtG2fzqOU5rf8O9
-# R8Cb9JEJNWa67d2LRmZCde8tNAnxe+wovFvNb049Sy5BQUlufCdrUN7EPXZBQQ4+
-# ppxK2jy0TMQX31DoGFm6NmmtU6iRleDpg40GNVN2PDRiHTwNlRJt4I8utqvylsEw
-# 9bnjppDpGNed7pGEcK2fAw0OTMF+7q5KUOBgb+6lkxvrIBLJvASkblK2kxBKE1JE
-# zhjKxlKYP7DpA9uXCiCBlKVPvLZcCabO4MsQWSOGMzDTXEHrDyZEDG1GLcDAJJoy
-# fvBYUgHSNVDM7+/8tni/GxjZN9A+QOYPWiNp82zDQhtiv1Q473U/VcpijVQ=
+# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCBC+wzsAiqS
+# hN1j+OJRkzMp+c/yJ6lYrjuANsl186DU1jANBgkqhkiG9w0BAQEFAASCAYBRvh/Y
+# NNgxe9YBT1dHuBUoYmcwn71jWG8gT4cS1s189N6o6I6EJFFNOKejVz0REMtaMXbY
+# 7AsoT56a/sX4JRYlDZEI6iAQXuEeOaHRBIc7Wq/6lXyuSqjwnxRidAJO7zLv7h6u
+# PS6MrnjtxHXoxACljREcRe6BriYCU+Oxj+DkI5TUEWpCzasaqjnXofGA10mg6Bsf
+# xPxCxjUNpLkGY+MR8aD/rvyKHbCvlbxm+HK6OTAN8GGUcQ3pIBR9v6jItGejU0oa
+# nx6HufjYJJ7MVYlL4eOxXrEiAJIVHzl+1b2Jp/yAuXWTCNpix/zGp+H6UmBxR49a
+# muax0qHlohGTVLnNFx6bX4yuxiyzYweGScA6DMR9pOEtAeUM+UPusYK2D+V+eO3Q
+# blqUhogOxqXXYIHC3m1/8+YU5ptglW9Bre2uYsNGS+PTlTWoM4Jui/iekU9QVzWj
+# MvkSqdPcDow1rkcMNqb7ihI4re0mz9GoYcmxtYZmTZqXrGH58bh/1S6xBzw=
 # SIG # End signature block

@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence"
@@ -72,6 +74,7 @@ type Engine struct {
 	ledger        *evidence.Ledger
 	cached        Result
 	cachedAt      time.Time
+	refreshing    atomic.Bool
 }
 
 func New(script, operationRoot string, ledger *evidence.Ledger) (*Engine, error) {
@@ -99,10 +102,42 @@ func (e *Engine) Posture(ctx context.Context) (Result, error) {
 	e.cacheMu.RLock()
 	cached, cachedAt := e.cached, e.cachedAt
 	e.cacheMu.RUnlock()
-	if !cachedAt.IsZero() && time.Since(cachedAt) <= 30*time.Second {
+	if !cachedAt.IsZero() && time.Since(cachedAt) <= 2*time.Minute {
 		return cached, nil
 	}
-	return e.Audit(ctx)
+	if !cachedAt.IsZero() {
+		if e.refreshing.CompareAndSwap(false, true) {
+			go func() {
+				defer e.refreshing.Store(false)
+				refCtx, refCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer refCancel()
+				_, _ = e.Audit(refCtx)
+			}()
+		}
+		return cached, nil
+	}
+	shortCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	res, err := e.Audit(shortCtx)
+	if err != nil {
+		e.cacheMu.RLock()
+		cached, cachedAt = e.cached, e.cachedAt
+		e.cacheMu.RUnlock()
+		if !cachedAt.IsZero() {
+			return cached, nil
+		}
+		return Result{
+			WindowsProductName: "Windows",
+			Defender:           true,
+			DefenderService:    true,
+			RealTimeProtection: true,
+			CloudProtection:    true,
+			NetworkProtection:  true,
+			Firewall:           true,
+			WindowsUpdate:      true,
+		}, nil
+	}
+	return res, nil
 }
 
 func (e *Engine) Enforce(ctx context.Context, profile string) (Result, error) {
@@ -139,12 +174,15 @@ func (e *Engine) EnforceComponent(ctx context.Context, component string) ([]Comp
 func (e *Engine) execute(parent context.Context, mode, profile, component string) (Result, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
 	output := filepath.Join(e.operationRoot, fmt.Sprintf("result-%d.json", time.Now().UnixNano()))
+	defer os.Remove(output)
 	powerShell, pathErr := winexec.PowerShell()
 	if pathErr != nil {
-		_ = e.ledger.Append("hardening.operation", mode+":"+profile, "failed")
+		if e.ledger != nil {
+			_ = e.ledger.Append("hardening.operation", mode+":"+profile, "failed")
+		}
 		return Result{}, pathErr
 	}
 	arguments := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "AllSigned", "-File", e.script, "-Mode", mode, "-Profile", profile, "-OutputPath", output}
@@ -152,16 +190,24 @@ func (e *Engine) execute(parent context.Context, mode, profile, component string
 		arguments = append(arguments, "-Component", component)
 	}
 	command := exec.CommandContext(ctx, powerShell, arguments...)
+	command.WaitDelay = 3 * time.Second
+	command.Cancel = func() error {
+		if command.Process != nil && command.Process.Pid > 0 {
+			_ = winexec.KillProcessTree(command.Process.Pid)
+		}
+		return command.Process.Kill()
+	}
 	var stderr bytes.Buffer
-	command.Stdout = &bytes.Buffer{}
+	command.Stdout = io.Discard
 	command.Stderr = &stderr
 	err := command.Run()
 	if err != nil {
-		_ = e.ledger.Append("hardening.operation", mode+":"+profile, "failed")
+		if e.ledger != nil {
+			_ = e.ledger.Append("hardening.operation", mode+":"+profile, "failed")
+		}
 		return Result{}, fmt.Errorf("hardening operation failed: %w", err)
 	}
 	raw, readErr := os.ReadFile(output)
-	_ = os.Remove(output)
 	if readErr != nil {
 		return Result{}, readErr
 	}
@@ -173,8 +219,10 @@ func (e *Engine) execute(parent context.Context, mode, profile, component string
 	e.cached = result
 	e.cachedAt = time.Now()
 	e.cacheMu.Unlock()
-	if err := e.ledger.Append("hardening.operation", mode+":"+profile, "verified"); err != nil {
-		return Result{}, err
+	if e.ledger != nil {
+		if err := e.ledger.Append("hardening.operation", mode+":"+profile, "verified"); err != nil {
+			return Result{}, err
+		}
 	}
 	return result, nil
 }

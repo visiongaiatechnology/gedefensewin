@@ -27,7 +27,7 @@ if ($DiagnosticLogPath) {
 function Write-VgtInstallPhase {
     param([Parameter(Mandatory)][string]$Phase,[Parameter(Mandatory)][string]$State,[AllowEmptyString()][string]$Detail = '')
     New-Item -Path $dataRoot -ItemType Directory -Force | Out-Null
-    $safeDetail = $Detail.Replace("`r",' ').Replace("`n",' ')
+    $safeDetail = if ($Detail) { $Detail.Replace("`r",' ').Replace("`n",' ') } else { '' }
     $line = '{0}|{1}|{2}|{3}' -f [DateTime]::UtcNow.ToString('o'),$Phase,$State,$safeDetail
     if ($resolvedDiagnosticLog) {
         try {
@@ -38,29 +38,41 @@ function Write-VgtInstallPhase {
         }
     }
     try {
-        Add-Content -LiteralPath $installLog -Value $line -Encoding UTF8 -ErrorAction Stop
-    } catch {
-        if (-not $resolvedDiagnosticLog) { throw }
-    }
+        Add-Content -LiteralPath $installLog -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch {}
 }
 
 trap {
     try {
-        Write-VgtInstallPhase -Phase 'Installer' -State 'FAILED' -Detail $_.Exception.Message
+        $msg = if ($_.Exception) { $_.Exception.Message } else { 'Unknown installer exception' }
+        Write-VgtInstallPhase -Phase 'Installer' -State 'FAILED' -Detail $msg
     } catch {}
     exit 90
 }
 
 function Invoke-ScChecked {
     param([Parameter(Mandatory)][string[]]$Arguments)
-    $nativeOutput = (& "$env:SystemRoot\System32\sc.exe" @Arguments 2>&1 | Out-String).Trim()
-    $nativeExitCode = $LASTEXITCODE
     $operation = if ($Arguments.Count -gt 0) { $Arguments[0] } else { 'unknown' }
-    if ($nativeExitCode -ne 0) {
+    $maxAttempts = 6
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        $nativeOutput = (& "$env:SystemRoot\System32\sc.exe" @Arguments 2>&1 | Out-String).Trim()
+        $nativeExitCode = $LASTEXITCODE
+        if ($nativeExitCode -eq 0) {
+            Write-VgtInstallPhase -Phase 'ServiceControl' -State 'OK' -Detail ("{0}|exit=0" -f $operation)
+            return
+        }
+        if ($operation -eq 'delete' -and ($nativeExitCode -eq 1072 -or $nativeExitCode -eq 1060)) {
+            # 1072 = ERROR_SERVICE_MARKED_FOR_DELETE, 1060 = ERROR_SERVICE_DOES_NOT_EXIST
+            Write-VgtInstallPhase -Phase 'ServiceControl' -State 'OK' -Detail ("{0}|exit={1}|pending_delete" -f $operation,$nativeExitCode)
+            return
+        }
+        if ($operation -eq 'create' -and $nativeExitCode -eq 1072 -and $attempt -lt $maxAttempts) {
+            Start-Sleep -Milliseconds 600
+            continue
+        }
         Write-VgtInstallPhase -Phase 'ServiceControl' -State 'FAILED' -Detail ("{0}|exit={1}|{2}" -f $operation,$nativeExitCode,$nativeOutput)
         throw [InvalidOperationException]::new(("Service operation '{0}' failed with exit code {1}." -f $operation,$nativeExitCode))
     }
-    Write-VgtInstallPhase -Phase 'ServiceControl' -State 'OK' -Detail ("{0}|exit=0" -f $operation)
 }
 
 function Invoke-IcaclsChecked {
@@ -134,6 +146,13 @@ foreach ($processName in @('GeDefenseTray','GeDefenseCenter')) {
 
 if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
     Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+    foreach ($proc in @(Get-Process -Name 'gedefense-windows' -ErrorAction SilentlyContinue)) {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($dism in @(Get-Process -Name 'DismHost' -ErrorAction SilentlyContinue)) {
+        Stop-Process -Id $dism.Id -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Milliseconds 500
     Invoke-ScChecked @('delete',$serviceName)
     Start-Sleep -Milliseconds 700
 }
@@ -164,8 +183,8 @@ if ($identitySid -ne 'S-1-5-18') {
 }
 Write-VgtInstallPhase -Phase 'OperatorGroup' -State 'OK' -Detail ("{0}|{1}|member={2}" -f $operatorGroup,$operatorGroupSid,$identitySid)
 Invoke-IcaclsChecked -Target $installRoot -Phase 'ProgramACL' -Arguments @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)RX')
-$dataAclArguments = @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F',("*{0}:(RX)" -f $operatorGroupSid))
-if ($identitySid -ne 'S-1-5-18') { $dataAclArguments += ("*{0}:(RX)" -f $identitySid) }
+$dataAclArguments = @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F',("*{0}:(OI)(CI)(RX)" -f $operatorGroupSid))
+if ($identitySid -ne 'S-1-5-18') { $dataAclArguments += ("*{0}:(OI)(CI)(RX)" -f $identitySid) }
 Invoke-IcaclsChecked -Target $dataRoot -Phase 'DataACL' -Arguments $dataAclArguments
 Write-VgtInstallPhase -Phase 'ACL' -State 'OK' -Detail 'Program and data roots secured'
 
