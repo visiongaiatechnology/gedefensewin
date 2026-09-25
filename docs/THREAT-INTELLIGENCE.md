@@ -15,7 +15,7 @@ The Threat Intelligence subsystem is a local control plane. Feed ingestion, poli
 | blocklist.de All | `CORRELATE_ONLY` |
 | Emerging Threats Block IPs | `CORRELATE_ONLY` |
 | IPsum Level 1+ | `CORRELATE_ONLY` |
-| FireHOL Level 1 | `CORRELATE_ONLY` |
+| FireHOL Level 1 | `BLOCK` |
 | Tor Exit Nodes | `ANNOTATE_ONLY` |
 
 If a prefix exists in several feeds, effective authority is the maximum of those explicitly assigned actions while complete feed attribution is preserved. `ANNOTATE_ONLY` never enters an enforcement snapshot. `CORRELATE_ONLY` may strengthen an XDR story but never enters a Windows Firewall block generation.

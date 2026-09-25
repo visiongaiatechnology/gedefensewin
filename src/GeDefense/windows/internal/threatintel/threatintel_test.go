@@ -19,7 +19,7 @@ func TestCatalogActionsAreFailSafe(t *testing.T) {
 		"blocklist_de":     ActionCorrelateOnly,
 		"emerging_threats": ActionCorrelateOnly,
 		"ipsum":            ActionCorrelateOnly,
-		"firehol_l1":       ActionCorrelateOnly,
+		"firehol_l1":       ActionBlock,
 		"tor_exit":         ActionAnnotateOnly,
 	}
 	if len(catalog) != len(expected) {

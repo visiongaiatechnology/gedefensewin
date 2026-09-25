@@ -11,7 +11,7 @@ var catalog = []Source{
 	{Key: "blocklist_de", Name: "blocklist.de All", URL: "https://lists.blocklist.de/lists/all.txt", Format: FormatPlain, Action: ActionCorrelateOnly, MaximumBytes: defaultMaximumFeedBytes},
 	{Key: "emerging_threats", Name: "Emerging Threats Block IPs", URL: "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt", Format: FormatPlain, Action: ActionCorrelateOnly, MaximumBytes: defaultMaximumFeedBytes},
 	{Key: "ipsum", Name: "IPsum Level 1+", URL: "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt", Format: FormatPlain, Action: ActionCorrelateOnly, MaximumBytes: defaultMaximumFeedBytes},
-	{Key: "firehol_l1", Name: "FireHOL Level 1", URL: "https://iplists.firehol.org/files/firehol_level1.netset", Format: FormatPlain, Action: ActionCorrelateOnly, MaximumBytes: defaultMaximumFeedBytes},
+	{Key: "firehol_l1", Name: "FireHOL Level 1", URL: "https://iplists.firehol.org/files/firehol_level1.netset", Format: FormatPlain, Action: ActionBlock, MaximumBytes: defaultMaximumFeedBytes},
 	{Key: "tor_exit", Name: "Tor Exit Nodes", URL: "https://check.torproject.org/torbulkexitlist", Format: FormatPlain, Action: ActionAnnotateOnly, MaximumBytes: defaultMaximumFeedBytes},
 }
 
