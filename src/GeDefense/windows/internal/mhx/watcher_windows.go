@@ -88,6 +88,13 @@ func (processWatcher) Run(ctx context.Context, output chan<- ProcessEvent, healt
 		return
 	}
 	command := exec.CommandContext(ctx, path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", processTraceScript)
+	command.WaitDelay = 3 * time.Second
+	command.Cancel = func() error {
+		if command.Process != nil && command.Process.Pid > 0 {
+			_ = winexec.KillProcessTree(command.Process.Pid)
+		}
+		return command.Process.Kill()
+	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		deliverFault(faults, err)

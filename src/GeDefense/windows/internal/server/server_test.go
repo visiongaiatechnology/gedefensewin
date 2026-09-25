@@ -64,6 +64,9 @@ func (f *fixedMHX) Applications(context.Context) ([]mhx.ApplicationAllow, error)
 func (f *fixedMHX) SetApplication(context.Context, string, string) ([]mhx.ApplicationAllow, error) {
 	return []mhx.ApplicationAllow{}, nil
 }
+func (f *fixedMHX) ReconcilePolicy(context.Context) error {
+	return nil
+}
 func (f *fixedIntegrity) Status() integrity.Status { return f.status }
 func (f *fixedIntegrity) Configure(enabled bool, hours int) (integrity.Status, error) {
 	f.status.Enabled = enabled
@@ -221,5 +224,25 @@ func TestProtectionReadinessRejectsDegradedPolicy(t *testing.T) {
 	}
 	if result.Ready {
 		t.Fatal("guarded readiness accepted degraded protection policy")
+	}
+}
+
+func TestMHXPolicyReconcile(t *testing.T) {
+	root := t.TempDir()
+	ledger, err := evidence.Open(filepath.Join(root, "evidence.jsonl"), filepath.Join(root, "evidence.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mhxEngine := &fixedMHX{mode: "guarded", status: mhx.Status{Realtime: true, ProtectionHealth: "VERIFIED"}}
+	handler := New("test", "01234567890123456789012345678901", fixedEngine{result: hardening.Result{Defender: true}}, fixedAudit{}, fixedXDR{}, mhxEngine, &fixedIntegrity{}, ledger)
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17831/api/v1/mhx/policy/reconcile", nil)
+	request.Host = "127.0.0.1:17831"
+	request.RemoteAddr = "127.0.0.1:49152"
+	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
+	request.Header.Set("X-VGT-Request-ID", "11111111-2222-3333-4444-555555555555")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("got %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
 	}
 }

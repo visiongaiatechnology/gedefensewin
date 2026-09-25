@@ -270,6 +270,33 @@ func (e *Engine) allowVerificationLoop(stop <-chan struct{}) {
 	}
 }
 
+func (e *Engine) ReconcilePolicy(parent context.Context) error {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
+	defer cancel()
+	if err := e.acquirePolicy(ctx); err != nil {
+		e.setProtectionHealth("DEGRADED")
+		_ = e.ledger.Append("mhx.enforcement", "policy-gate", "degraded")
+		return fmt.Errorf("MHX policy gate unavailable: %w", err)
+	}
+	defer e.releasePolicy()
+
+	if err := e.ledger.Verify(); err != nil {
+		e.setProtectionHealth("DEGRADED")
+		_ = e.ledger.Append("mhx.enforcement", "evidence-ledger", "degraded")
+		return fmt.Errorf("evidence ledger verification failed: %w", err)
+	}
+
+	err := e.applyVerifiedMode(ctx, e.Mode())
+	if err != nil {
+		e.setProtectionHealth("DEGRADED")
+		_ = e.ledger.Append("mhx.enforcement", "policy-reconciliation", "degraded")
+		return fmt.Errorf("MHX policy reconciliation failed: %w", err)
+	}
+	e.setProtectionHealth("VERIFIED")
+	_ = e.ledger.Append("mhx.enforcement", "policy-reconciliation", "verified")
+	return nil
+}
+
 func (e *Engine) policyReconciliationLoop(stop <-chan struct{}) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -279,19 +306,7 @@ func (e *Engine) policyReconciliationLoop(stop <-chan struct{}) {
 			return
 		case <-timer.C:
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-			if err := e.acquirePolicy(ctx); err != nil {
-				e.setProtectionHealth("DEGRADED")
-				_ = e.ledger.Append("mhx.enforcement", "policy-gate", "degraded")
-			} else {
-				err = e.applyVerifiedMode(ctx, e.Mode())
-				e.releasePolicy()
-				if err != nil {
-					e.setProtectionHealth("DEGRADED")
-					_ = e.ledger.Append("mhx.enforcement", "policy-reconciliation", "degraded")
-				} else {
-					e.setProtectionHealth("VERIFIED")
-				}
-			}
+			_ = e.ReconcilePolicy(ctx)
 			cancel()
 			timer.Reset(10 * time.Minute)
 		}

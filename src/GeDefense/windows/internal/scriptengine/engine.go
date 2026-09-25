@@ -56,6 +56,7 @@ func RunJSON[T any](engine *Engine, parent context.Context, operation string, ex
 	ctx, cancel := context.WithTimeout(parent, engine.timeout)
 	defer cancel()
 	output := filepath.Join(engine.operationRoot, fmt.Sprintf("%s-%d.json", operation, time.Now().UnixNano()))
+	defer os.Remove(output)
 	arguments := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "AllSigned", "-File", engine.script, "-OutputPath", output}
 	arguments = append(arguments, extraArgs...)
 	powerShell, err := winexec.PowerShell()
@@ -63,13 +64,19 @@ func RunJSON[T any](engine *Engine, parent context.Context, operation string, ex
 		return result, err
 	}
 	command := exec.CommandContext(ctx, powerShell, arguments...)
+	command.WaitDelay = 3 * time.Second
+	command.Cancel = func() error {
+		if command.Process != nil && command.Process.Pid > 0 {
+			_ = winexec.KillProcessTree(command.Process.Pid)
+		}
+		return command.Process.Kill()
+	}
 	var stderr bytes.Buffer
 	command.Stdout = io.Discard
 	command.Stderr = &limitedWriter{target: &stderr, remaining: 64 << 10}
 	if err := command.Run(); err != nil {
 		return result, fmt.Errorf("%s failed: %w: %s", operation, err, stderr.String())
 	}
-	defer os.Remove(output)
 	file, err := os.Open(output)
 	if err != nil {
 		return result, err

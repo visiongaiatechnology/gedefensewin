@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"time"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winexec"
 )
 
 const defenderTraceScript = `$ErrorActionPreference='Stop'
@@ -41,6 +44,13 @@ func (defenderWatcher) Run(ctx context.Context, output chan<- defenderEvent, fau
 		return
 	}
 	command := exec.CommandContext(ctx, path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-")
+	command.WaitDelay = 3 * time.Second
+	command.Cancel = func() error {
+		if command.Process != nil && command.Process.Pid > 0 {
+			_ = winexec.KillProcessTree(command.Process.Pid)
+		}
+		return command.Process.Kill()
+	}
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		deliverFault(faults, err)

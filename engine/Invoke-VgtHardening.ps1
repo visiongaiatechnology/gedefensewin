@@ -53,7 +53,9 @@ function Set-VgtComponent {
         'SMB' {
             Set-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' 'RequireSecuritySignature' 1
             Set-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters' 'RequireSecuritySignature' 1
-            Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart -ErrorAction Stop | Out-Null
+            Set-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' 'SMB1' 0
+            Set-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\mrxsmb10' 'Start' 4
+            Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart -ErrorAction SilentlyContinue | Out-Null
         }
         'PowerShellLogging' {
             Set-VgtRegistryDword 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' 'EnableScriptBlockLogging' 1
@@ -83,7 +85,15 @@ function Get-VgtAudit {
     $bitLocker = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction SilentlyContinue
     $windowsUpdate = Get-CimInstance -ClassName Win32_Service -Filter "Name='wuauserv'" -ErrorAction SilentlyContinue
     $windowsVersion = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
-	$smb1 = Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue
+    $smb1ServerDisabled = (Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' 'SMB1') -eq 0
+    $smb1DriverDisabled = (Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\mrxsmb10' 'Start') -eq 4
+    $smb1Disabled = $smb1ServerDisabled -and $smb1DriverDisabled
+    if (-not $smb1Disabled) {
+        $smb1Cim = Get-CimInstance Win32_OptionalFeature -Filter "Name='SMB1Protocol'" -ErrorAction SilentlyContinue
+        if ($smb1Cim -and $smb1Cim.InstallState -eq 3) {
+            $smb1Disabled = $true
+        }
+    }
     $tpmHasState = [bool]($tpm -and $tpm.PSObject.Properties['TpmPresent'] -and $tpm.PSObject.Properties['TpmReady'])
     $asrIds = @($mpPreference.AttackSurfaceReductionRules_Ids)
     $asrActions = @($mpPreference.AttackSurfaceReductionRules_Actions)
@@ -116,7 +126,7 @@ function Get-VgtAudit {
         CredentialGuard = [bool]($deviceGuard -and 1 -in @($deviceGuard.SecurityServicesRunning))
         MemoryIntegrity = [bool]($deviceGuard -and 2 -in @($deviceGuard.SecurityServicesRunning))
         LsaProtection = [bool]((Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' 'RunAsPPL') -in @(1,2))
-        SmbHardening = [bool]((Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' 'RequireSecuritySignature') -eq 1 -and (Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters' 'RequireSecuritySignature') -eq 1 -and $smb1 -and [string]$smb1.State -eq 'Disabled')
+        SmbHardening = [bool]((Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' 'RequireSecuritySignature') -eq 1 -and (Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters' 'RequireSecuritySignature') -eq 1 -and $smb1Disabled)
         PowerShellLogging = [bool]((Get-VgtRegistryDword 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' 'EnableScriptBlockLogging') -eq 1 -and (Get-VgtRegistryDword 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging' 'EnableModuleLogging') -eq 1)
         VulnerableDriverBlocklist = [bool]((Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Config' 'VulnerableDriverBlocklistEnable') -eq 1)
         UacSecureDesktop = [bool]((Get-VgtRegistryDword 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'EnableLUA') -eq 1 -and (Get-VgtRegistryDword 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'PromptOnSecureDesktop') -eq 1 -and (Get-VgtRegistryDword 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'ConsentPromptBehaviorAdmin') -eq 2)

@@ -95,7 +95,9 @@ function Save-VgtBaseline {
     }
     $firewall = Get-NetFirewallProfile | Select-Object Name,Enabled,DefaultInboundAction,DefaultOutboundAction,NotifyOnListen,AllowUnicastResponseToMulticast,LogBlocked,LogAllowed,LogMaxSizeKilobytes
     $defender = Get-MpPreference | Select-Object PUAProtection,MAPSReporting,SubmitSamplesConsent,EnableNetworkProtection,CloudBlockLevel,EnableControlledFolderAccess,AttackSurfaceReductionRules_Ids,AttackSurfaceReductionRules_Actions
-    $smb1 = Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue
+    $smb1Server = (Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' 'SMB1')
+    $smb1Driver = (Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\mrxsmb10' 'Start')
+    $smb1State = if ($smb1Server -eq 0 -and $smb1Driver -eq 4) { 'Disabled' } else { 'Enabled' }
     $auditPolicy = Join-Path $stateDirectory 'audit-policy.csv'
     $auditPolicyTool = Join-Path $env:SystemRoot 'System32\auditpol.exe'
     if (-not (Test-Path -LiteralPath $auditPolicyTool -PathType Leaf)) { throw [IO.FileNotFoundException]::new('Windows audit policy tool is unavailable.') }
@@ -109,7 +111,7 @@ function Save-VgtBaseline {
         registry = @($registry)
         firewall = @($firewall)
         defender = $defender
-        smb1State = if ($smb1) { [string]$smb1.State } else { 'Unavailable' }
+        smb1State = $smb1State
         auditPolicy = $auditPolicy
     }
     $temporary = "$target.$PID.tmp"
@@ -144,9 +146,13 @@ function Restore-VgtBaseline {
         Set-MpPreference -AttackSurfaceReductionRules_Ids @($defender.AttackSurfaceReductionRules_Ids) -AttackSurfaceReductionRules_Actions @($defender.AttackSurfaceReductionRules_Actions)
     }
     if ($state.smb1State -eq 'Enabled') {
-        Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -All -NoRestart | Out-Null
+        Set-VgtRegistryDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'SMB1' -Value 1
+        Set-VgtRegistryDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\mrxsmb10' -Name 'Start' -Value 3
+        Enable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -All -NoRestart -ErrorAction SilentlyContinue | Out-Null
     } elseif ($state.smb1State -eq 'Disabled') {
-        Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart | Out-Null
+        Set-VgtRegistryDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'SMB1' -Value 0
+        Set-VgtRegistryDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\mrxsmb10' -Name 'Start' -Value 4
+        Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart -ErrorAction SilentlyContinue | Out-Null
     }
     if (-not (Test-Path -LiteralPath $state.auditPolicy -PathType Leaf)) {
         throw [IO.FileNotFoundException]::new('Audit policy baseline is unavailable.')

@@ -21,7 +21,7 @@ function Read-VgtText {
 }
 
 $version = (Read-VgtText $versionPath).Trim()
-Assert-Vgt ($version -match '^4\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*$') 'VERSION is not a valid GeDefense V4 beta version.'
+Assert-Vgt ($version -match '^4\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') 'VERSION is not a valid GeDefense V4 version.'
 
 $toolchainPath = Join-Path $projectRoot 'TOOLCHAINS.lock'
 $toolchain = @{}

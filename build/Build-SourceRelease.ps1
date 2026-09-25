@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $version = (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION') -Raw -Encoding UTF8).Trim()
-if ($version -notmatch '^4\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*$') { throw [IO.InvalidDataException]::new('Release VERSION is invalid.') }
+if ($version -notmatch '^4\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') { throw [IO.InvalidDataException]::new('Release VERSION is invalid.') }
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = Join-Path $projectRoot 'release' }
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $projectPath = [IO.Path]::GetFullPath($projectRoot)

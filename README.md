@@ -1,6 +1,6 @@
 # VGT GeDefense Windows 4
 
-[![Status](https://img.shields.io/badge/status-v4.1.0--beta.1-4cc9ff?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
+[![Status](https://img.shields.io/badge/status-v4.1.1-4cc9ff?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-168bff?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-31d0aa?style=for-the-badge)](LICENSE)
 [![Security Standard](https://img.shields.io/badge/security-VGT-blueviolet?style=for-the-badge)](ARCHITECTURE.md)
@@ -40,7 +40,7 @@ GeDefense Windows 4 ist die souveräne, lokal überprüfbare Endpoint-Defense- u
 
 GeDefense Windows 4 ist eine vollständige Neugestaltung des Windows-Sicherheitsagenten auf der V4-Architekturphilosophie:
 
-| Bereich | Legacy (GeDefense Windows 2.3.2) | GeDefense Windows 4.1.0-beta.1 |
+| Bereich | Legacy (GeDefense Windows 2.3.2) | GeDefense Windows 4.1.1 |
 | :--- | :--- | :--- |
 | **Go-Abhängigkeiten** | Externe Go-Module für Tray, Webview und Syscalls | **Zero Go Modules**. Reine Standardbibliothek + native WinAPI-Syscalls |
 | **Frontend Runtime** | Eingebettete Webview-Komponenten mit externen Bindings | **Native Browser-Orchestrierung** via Loopback-Server (`127.0.0.1:17831`) mit Strict CSP Nonce |
@@ -75,7 +75,7 @@ Die vollständigen Invarianten und Datenpfade stehen in [docs/THREAT-INTELLIGENC
 GeDefense-Windows-4/
 ├── ARCHITECTURE.md          # Umfassende technische System- & Architekturspezifikation
 ├── README.md                # Projektübersicht & Schnellstart
-├── VERSION                  # Offizielle Release-Version (4.1.0-beta.1)
+├── VERSION                  # Offizielle Release-Version (4.1.1)
 ├── TOOLCHAINS.lock          # Exakt gepinnte Toolchains (Go 1.26.4 / Go 1.27.1, PowerShell 5.1)
 ├── src/GeDefense/windows/   # Go-Quellcode (Zero External Dependencies)
 │   ├── cmd/
@@ -153,7 +153,7 @@ Dieser Befehl:
 3. Signiert alle Binärdateien und PowerShell-Module digital mit Authenticode (SHA-256).
 4. Erzeugt den signierten Windows-Katalog `vgt-payload.cat`.
 5. Bettet den Payload komprimiert in `cmd/gedefense-installer` ein.
-6. Kompiliert die autarke Setup-Datei `release\GeDefense-Setup-x64-v4.1.0-beta.1.exe` und signiert diese.
+6. Kompiliert die autarke Setup-Datei `release\GeDefense-Setup-x64-v4.1.1.exe` und signiert diese.
 
 ---
 
@@ -162,7 +162,7 @@ Dieser Befehl:
 ### Neuinstallation oder Upgrade von V2.x
 1. Starte die erstellte Datei als Administrator:
    ```powershell
-   Start-Process .\release\GeDefense-Setup-x64-v4.1.0-beta.1.exe -Verb RunAs
+   Start-Process .\release\GeDefense-Setup-x64-v4.1.1.exe -Verb RunAs
    ```
 2. Der Installer führt vollautomatisch folgende Schritte durch:
    - Sauberes Beenden und Entfernen früherer GeDefense-Versionen (Dienst `VGTGeDefense` und Tray `GeDefenseTray`).

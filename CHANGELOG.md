@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.1.1] - 2026-09-25
+
+### Added
+- **Dediziertes Anwendungsfenster**: GeDefense Center startet als eigenständiges, isoliertes Anwendungsfenster (Chromium Application Mode mit separatem `%LocalAppData%\VGT\GeDefense\WebWindow`-Profil) mit nativer Titelleiste ("GeDefense 4 · Windows Security Center"), eigenem Taskleisten-Eintrag und ohne störende Browser-Tabs. Automatische Erkennung über Microsoft Edge, EdgeCore, Google Chrome und Brave mit defensivem `ShellOpenURL`-Fallback.
+- **On-Demand Policy-Synchronisierung**: Neuer HTTP-Endpunkt `POST /api/v1/mhx/policy/reconcile` und interaktive Cyber-Glass-Schaltflächen ("Policy synchronisieren") im Protection Center und der Übersichtsseite zur sofortigen serverseitigen Re-Verifikation aller Sicherheitsrichtlinien.
+- **Sovereign Cyber-Dark Glassmorphism Setup Wizard**: Vollständige optische Überarbeitung des nativen Setup Wizards mit Windows 11 DWM Acrylic Glass (`DWMWA_SYSTEMBACKDROP_TYPE = 3`), Immersive Dark Titlebar, Electric-Cyan Glow, flackerfreiem Double-Buffered GDI Canvas und interaktivem Pill-Button.
+
+### Fixed
+- **App Control Policy Reconciliation Degradation**: Behoben: `Set-VgtMhxAppControl.ps1` stürzte ab, wenn `CiTool.exe --remove-policy` bei bereits bereinigten oder nicht vorhandenen Richtlinien `0x80070002` (`ERROR_FILE_NOT_FOUND`) zurückgab, was die Schutzlage auf `DEGRADED` setzte. Ungültige/abwesende Alt-Richtlinien werden nun tolerant übersprungen und identische Richtlinienzustände sofort atomar bestätigt.
+- **Installer-Transaktionsfehler (Exit Code 90)**: Behoben: SCM-Löschverzögerungen (`ERROR_SERVICE_MARKED_FOR_DELETE` 1072) beim Dienst-Upgrade werden nun mit exponentiellem Backoff abgefangen. `(OI)(CI)` Vererbung auf `$dataRoot` verhindert Zugriffsfehler auf Diagnosedateien.
+- **Dienst- und Tray-Hänger**: `Get-WindowsOptionalFeature` DISM-Blocker durch 0 ms Registry-Checks ersetzt; Pipe-Deadlocks durch `winexec.KillProcessTree` und Posture-Cache (< 1 ms Antwortzeit) dauerhaft gelöst.
+
 ## [4.1.0-beta.1] - 2026-09-19
 
 ### Added

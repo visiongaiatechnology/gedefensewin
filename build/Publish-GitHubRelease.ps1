@@ -12,7 +12,20 @@ $headers = @{
     Accept = "application/vnd.github+json"
 }
 
-$tag = "v4.1.0-beta.1"
+$version = (Get-Content (Join-Path $PSScriptRoot "..\VERSION") -Raw).Trim()
+$tag = "v$version"
+
+$releaseDir = Resolve-Path (Join-Path $PSScriptRoot "..\release")
+$exePath = (Resolve-Path (Join-Path $releaseDir "GeDefense-Setup-x64-$tag.exe")).Path
+$exeName = [System.IO.Path]::GetFileName($exePath)
+$exeBytes = [System.IO.File]::ReadAllBytes($exePath)
+$sha256 = (Get-FileHash -Path $exePath -Algorithm SHA256).Hash.ToUpperInvariant()
+$formattedSize = "{0:N0} Bytes" -f $exeBytes.Length
+
+$jsonPath = (Resolve-Path (Join-Path $releaseDir "GeDefense-Setup-x64-$tag.json")).Path
+$jsonName = [System.IO.Path]::GetFileName($jsonPath)
+$jsonBytes = [System.IO.File]::ReadAllBytes($jsonPath)
+
 $release = try {
     Invoke-RestMethod -Uri "https://api.github.com/repos/visiongaiatechnology/gedefensewin/releases/tags/$tag" -Headers $headers -Method Get
 } catch {
@@ -21,22 +34,24 @@ $release = try {
 
 if (-not $release) {
     $body = @"
-# VGT GeDefense Windows 4.1.0-beta.1
+# VGT GeDefense Windows $version
 
-Offizielles Standalone-Release für **VGT GeDefense Windows 4 (Version 4.1.0-beta.1)** von VisionGaia Technology.
+Offizielles Standalone-Release für **VGT GeDefense Windows 4 (Version $version)** von VisionGaia Technology.
 
 Für Security Researcher und System-Architekten ist die vollständige technische Systemspezifikation in der [**ARCHITECTURE.md**](https://github.com/visiongaiatechnology/gedefensewin/blob/main/ARCHITECTURE.md) hinterlegt.
 
 ---
 
-## Highlights der Generation 4
+## Highlights der Version $version
 
+- **Dediziertes Anwendungsfenster**: Eigenständiges, tab- und adressleistenfreies Anwendungsfenster für das GeDefense Security Center via Chromium App Mode (`--app`) mit nativer Dark-Theme-Farbkopplung (`<meta name="theme-color" content="#050b14">`).
+- **Resiliente Policy-Synchronisation**: Graceful Tolerance bei der Bereinigung entfernter Windows App Control (WDAC) Policies (`0x80070002`) und neuer API-Endpoint `POST /api/v1/mhx/policy/reconcile` mit synchronen Dashboard-Buttons für sofortige Wiederherstellung des Schutzstatus.
+- **Glassmorphism Setup Wizard**: Vollständig modernisierter Installer mit Ice-Blue Glassmorphism UI, Blur-Effekten und transaktionaler Elevations-Überwachung.
 - **Zero External Go Dependencies**: Vollständige Entfernung externer Go-Module (`go.sum` hat exakt 0 Bytes). Direkte native Win32-Syscalls (`kernel32.dll`, `advapi32.dll`, `user32.dll`, `iphlpapi.dll`).
 - **Loopback-Only Control Plane**: Bindet strikt an `127.0.0.1:17831` mit Token-basierter Authentifizierung (`dashboard.token`), Host-/Origin-Prüfung und kurzlebigen, signierten Session-Cookies.
-- **Anti-PID-Reuse EDR Response**: Prozessterminierung validiert zwingend das Tripel `(PID, CreationTime, ExecutablePath)` vor Ausführung. Keine unautorisierten Host-Kills durch reine Netzwerk-IOCs.
+- **Anti-PID-Reuse EDR Response**: Prozessterminierung validiert zwingend das Tripel `(PID, CreationTime, ExecutablePath)` vor Ausführung.
 - **Native Netzwerk-zu-Prozess-Korrelation**: Echtzeit-TCP-Extended-Table (`iphlpapi.dll`) mit atomarer Owning-PID-Zuordnung und Attack-Story-Verknüpfung.
 - **MHX Heuristik & EncodedCommand Unpacker**: Dekodierung von Base64/UTF-16LE PowerShell-Payloads mit Hash-basierter Evidenz.
-- **Sovereign Application Control**: Windows App Control (WDAC / CiTool) Kernel-Richtlinien mit atomaren Transaktionen.
 - **HMAC-SHA-256 Evidence Ledger**: Manipulationssicheres, sequenziell verkettetes Audit-Protokoll (`evidence.jsonl`).
 - **Autarker Standalone-Installer**: Eingebetteter, kryptografisch katalogisierter Payload (`vgt-payload.cat`) unter strikter `ExecutionPolicy AllSigned`.
 
@@ -46,10 +61,10 @@ Für Security Researcher und System-Architekten ist die vollständige technische
 
 | Eigenschaft | Wert |
 | :--- | :--- |
-| **Datei** | ``GeDefense-Setup-x64-v4.1.0-beta.1.exe`` |
+| **Datei** | ``$exeName`` |
 | **Architektur** | Windows 11 x64 |
-| **Dateigröße** | 15.140.152 Bytes |
-| **SHA-256** | ``A1F33DC3994559B2B41292F5A43BF0624C7F8FD1FACC33B709E89B2F7FFDC16D`` |
+| **Dateigröße** | $formattedSize |
+| **SHA-256** | ``$sha256`` |
 | **Signatur-Status** | Valid (Authenticode SHA-256) |
 | **Signer Thumbprint** | ``1E7B1641FC2E8EB82735216829C13721E3B9D895`` |
 | **Signer Subject** | ``CN=VisionGaia Technology VGT Release`` |
@@ -58,21 +73,21 @@ Für Security Researcher und System-Architekten ist die vollständige technische
 
 ## Installation & Upgrade
 
-1. Lade die Datei ``GeDefense-Setup-x64-v4.1.0-beta.1.exe`` herunter.
+1. Lade die Datei ``$exeName`` herunter.
 2. Starte die Datei mit Administratorrechten ("Als Administrator ausführen").
-3. Der Installer ersetzt frühere Versionen (z. B. 2.3.2), installiert die V4-Binaries nach ``C:\Program Files\VGT\GeDefense``, registriert den Dienst ``VGTGeDefense`` mit Startmodus ``Automatic`` (**startet direkt bei jedem Windows-Boot**) und richtet den Autostart für das System-Tray ein.
+3. Der Installer ersetzt frühere Versionen, installiert die V4-Binaries nach ``C:\Program Files\VGT\GeDefense``, registriert den Dienst ``VGTGeDefense`` mit Startmodus ``Automatic`` (**startet direkt bei jedem Windows-Boot**) und richtet den Autostart für das System-Tray ein.
 "@
 
     $releasePayload = @{
         tag_name = $tag
         target_commitish = "main"
-        name = "VGT GeDefense Windows 4.1.0-beta.1"
+        name = "VGT GeDefense Windows $version"
         body = $body
         draft = $false
-        prerelease = $true
+        prerelease = $false
     } | ConvertTo-Json -Depth 4
 
-    Write-Host "Creating GitHub release..."
+    Write-Host "Creating GitHub release for $tag..."
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/visiongaiatechnology/gedefensewin/releases" -Headers $headers -Method Post -Body $releasePayload -ContentType "application/json; charset=utf-8"
 }
 
@@ -88,9 +103,6 @@ foreach ($asset in $existingAssets) {
 }
 
 # Upload .exe
-$exePath = (Resolve-Path ".\release\GeDefense-Setup-x64-v4.1.0-beta.1.exe").Path
-$exeName = [System.IO.Path]::GetFileName($exePath)
-$exeBytes = [System.IO.File]::ReadAllBytes($exePath)
 $exeUploadUrl = "$($uploadUrlBase)?name=$($exeName)"
 Write-Host "Uploading $($exeName) ($($exeBytes.Length) bytes)..."
 $uploadExeHeaders = @{
@@ -102,9 +114,6 @@ $exeAsset = Invoke-RestMethod -Uri $exeUploadUrl -Headers $uploadExeHeaders -Met
 Write-Host "Uploaded $($exeName) -> $($exeAsset.browser_download_url)"
 
 # Upload .json manifest
-$jsonPath = (Resolve-Path ".\release\GeDefense-Setup-x64-v4.1.0-beta.1.json").Path
-$jsonName = [System.IO.Path]::GetFileName($jsonPath)
-$jsonBytes = [System.IO.File]::ReadAllBytes($jsonPath)
 $jsonUploadUrl = "$($uploadUrlBase)?name=$($jsonName)"
 Write-Host "Uploading $($jsonName) ($($jsonBytes.Length) bytes)..."
 $uploadJsonHeaders = @{
@@ -119,8 +128,8 @@ Write-Host "SUCCESS: Release published at $($release.html_url)"
 # SIG # Begin signature block
 # MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDXqdGAEP4WrbkS
-# yIyl7DAB9LqWqMJ77imiuhHFuzUFSKCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBnw/0UdC12ia1p
+# RmBzkiAl+GW0fdUh0jwSBJeqhjqyfqCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
 # m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
 # VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
 # MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
@@ -146,14 +155,14 @@ Write-Host "SUCCESS: Release published at $($release.html_url)"
 # ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
 # ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
 # AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCAAhncIb70u
-# LZv4wtaGKiVCtPOUj7WahtwnSSvotZ6aNDANBgkqhkiG9w0BAQEFAASCAYB65JFy
-# p6uATDR4USeDNloItzd8HhkaNgiQ4qjQxd8IcAmyveZlO/FqTPSMap5NGVJobjUr
-# AQ7EZXQK/izJDa2ilcfxD5/YFVItEFAHrF6tnNLCmuPvrW1zr2RBptO1WN7DdQ4/
-# pgh3WySgJwIG+ZWXQuYJCIx5gWJX2hmGYGJtkgpIwznfI1FgTs1vnzh6nbEbLIdH
-# qkkzJHX+4SNnEhcuR22kS+o2HnTQe3YQCK2VlXIaXx9948Z/1bk4sXnjtetVqQRr
-# u0mJGCFXOZDRtr65WU57hmLnC2k+f8XhJIa2C4xX+lBEOqHYnQ/g6WkS39A+V209
-# i71zHpm9bHto7nS9HyAoz2cWo5ov0qQv+U5xkF27XPULqVflVro33uyKzhqgif7I
-# 2bnXlO5jnD8AK9f5u3GXpBXPlv7W6FdGhiGOvM4+X7tOB5Me+0uN9IJ7Pi7Po7z/
-# D9eTTBrbqLsztHl0LajtxldMJqzmS/tZ2Jrgjd+7ooCYYGPcYN7gC8/VEzo=
+# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCAJMMDBjuZ0
+# pPD92D17/3jS+4G06fcFV8HCgwxbRWUQdzANBgkqhkiG9w0BAQEFAASCAYCcOEpL
+# 4PCEKVdrwvyKosYCC/WrI7EHcF05DTS0tj/z2ZafR1Q5yy0d4bjd8ZbIRiyMRcNw
+# 3ROLzs7Xeva6z7FTlPLON4c0vuozDs8THSBoEl3P8WF0cTk/6+5YCNYvhSTfOzSB
+# qbpIAREpN5e8c2RUVsIA5tg2M45Vhx10/4ARmtnX0kGULIFiPxv+wNC1LST95Vfq
+# ngxsx1HACP5ClZ5j2uZgZGgyd+r2EANtMxFBw6XN6gOGWHZ/0zsO/GQzNV30Ikmk
+# Vl1dIO8Uqk0fNWCaYqvQRefouQcUGNtsbSRVO7yuJ9Bwa/mZpX6EFYMuL3W3D3lc
+# JetYmIc8dD64MUMbVNfPbJbUq+2l+0lCYCdZKWsFTABwc5qTG8bc5Et1HbX19ms0
+# ko2cLEWciyCJVdleRNojh65MQD7HcmL0sN7Hi6vFFy16JYPPNCyXO51HuNdVCT6T
+# gra0GdivJ3iqi9GM/dFWvS38rXeSWHwwg5jlpd5kgTbFygjbHxZS1Yyf5bY=
 # SIG # End signature block
