@@ -103,7 +103,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $resolvedPayload 'bin\gedefense-wind
 $versionPath = Join-Path $resolvedPayload 'VERSION'
 if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) { throw [IO.FileNotFoundException]::new('GeDefense release version metadata is missing.') }
 $releaseVersion = (Get-Content -LiteralPath $versionPath -Raw -Encoding UTF8).Trim()
-if ($releaseVersion -notmatch '^4\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*$') { throw [IO.InvalidDataException]::new('GeDefense release version metadata is invalid.') }
+if ($releaseVersion -notmatch '^4\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') { throw [IO.InvalidDataException]::new('GeDefense release version metadata is invalid.') }
 $releaseCertificate = Join-Path $resolvedPayload 'vgt-release.cer'
 if (-not (Test-Path -LiteralPath $releaseCertificate -PathType Leaf)) { throw [IO.FileNotFoundException]::new('VGT release certificate is missing.') }
 $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($releaseCertificate)
@@ -290,8 +290,8 @@ Write-VgtInstallPhase -Phase 'Installer' -State 'COMPLETE' -Detail ("GeDefense {
 # SIG # Begin signature block
 # MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAGxIz0Ys9jQS+f
-# 2xErJdjBf0OC3RDkJCvzP5MNYGKPuqCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBLFxfnd67/pLz1
+# w2QvY/5bMG/7qgH5EcTs7gPeI/5vaqCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
 # m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
 # VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
 # MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
@@ -317,14 +317,14 @@ Write-VgtInstallPhase -Phase 'Installer' -State 'COMPLETE' -Detail ("GeDefense {
 # ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
 # ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
 # AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCCOuMWhCnPi
-# pnD0u8hOyhmyKzNjUi+RBuegaNzjuyVfSTANBgkqhkiG9w0BAQEFAASCAYC7OlJ2
-# /TXgBhl1ZlF7DP+k4qTHVpOGv9OL7Ns1OnRqqJmTcVC4DsX8BVU3zQ6k7RrRrv//
-# 94PQUPwObv9Eq9rmnuAtV5YD18fHQi1q5y7CbZxDx3iCE80Mfl5O76sVXI9LCKsS
-# lP9hwygS4U7AOfp2ycLm17TZhjgBKEW7QcaHLsNf4tkwpBsYE+MgcwKgx8YB1fsf
-# 8cyde71NIC7Fhxe4eGB5EkXTIgGS322VhcibNBu+O99zsCySwmzD+q59aL0H7ja8
-# DHwxNKvdDoDi29/Gku0wpPYzTNfA/KkfyKRWVl0NYevP7uRutVyATUj+bK0aGHzc
-# OLBzOxjFJnDTyGvM6bS/UPFxuQdCKCE4JFNqwMlNFGlG29HA2rpfIMrfIOcxptN6
-# etyZGfS5vaTqpBKSDfk3Z29MHxV+/oGgODcyGa0yW1ecfvzKUnKXeFYESM0BEriK
-# qUGIPkOGGSL+2nWJLwKxBuTJYIx1ToanjwrzgsVN3T71vomQI8snkg7ZF+g=
+# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCAqBzcYg6Tl
+# IukYnkEIDzjs/wwe0UBTAq86vd/7bcgeTTANBgkqhkiG9w0BAQEFAASCAYBsolpv
+# ffBPnj41ST6EJPgM2eXz1wsorH6Sq/EBrcpbjAfiPkOLwJqNSkm5DQMFwylH0zfF
+# uTacgWmOlxJ0Qc/xkRaBXDZloAYEZW+9sxLX1q/gxznqVtuZf+kon5n5DyRGpPBm
+# c3pT4Ah8D9wxtaWV8YZ0OgKQlYeFGd1BjsnpuuWgBrXAaho6/ZEBJWF1pekunGAj
+# bDY/CdksDLOKbiKzgTwoJVW3OWbFBQXm9Abk6XNiloPW765ivuljMUtNnmQ+K+as
+# 26UEk+v8QPZRN+0JXFqUH4BbAUsMvLPJhrA13Z5yV895WptxBVaOHphDhPkjIAG4
+# me8u0tdBNRY1SMQivRbPRBnioTQ0Lxu4g5cXuLWVsDta1I+NsYad8q5jVtc6zTyD
+# a7M/lp54wVZx8CjDErp0+R72VRoZwIMfnvnRSDEfzgo69yEVUcxydlHugM9/fcD1
+# c5g62a9NY4dwSeecJ9NBiN+Irj3sT1zIWG9KgJHkglFfKUdJuC5siTwjElo=
 # SIG # End signature block
