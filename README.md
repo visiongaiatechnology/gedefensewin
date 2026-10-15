@@ -1,5 +1,8 @@
 # GeDefense Windows 4.1.3
 
+<img width="2364" height="1240" alt="image_2026-10-15_10-50-03" src="https://github.com/user-attachments/assets/8bbb85f0-65be-42c9-b9ff-f78b3a401a5e" />
+
+
 Lokales Windows Security Center von **VisionGaia Technology**. GeDefense führt Defender, Firewall/WFP, ASR, Windows App Control, Systemhärtung, MHX EDR/XDR, Threat Intelligence und Dateiintegrität in einer gemeinsamen Oberfläche zusammen.
 
 [Installer und Release](https://github.com/visiongaiatechnology/gedefensewin/releases/tag/v4.1.3) · [Changelog](CHANGELOG.md) · [Architektur](ARCHITECTURE.md) · [Sicherheit](SECURITY.md)
@@ -20,6 +23,9 @@ Lokales Windows Security Center von **VisionGaia Technology**. GeDefense führt 
 | **Robustheit** | Korrekte Win32-Fehlerverträge, erhaltene Close-/Cleanup-Fehler und geordneter Abbruch des Tray-Ereignis-Workers. Go-Toolchain 1.26.9. |
 
 Details: [Release Notes](RELEASE-NOTES.md), [Verifikationsbericht 4.1.3](docs/VERIFICATION-4.1.3.md).
+
+<img width="2281" height="1240" alt="image_2026-10-15_10-50-21" src="https://github.com/user-attachments/assets/52f1fffe-4dba-4025-8712-7b470f6728b2" />
+
 
 ## Installation und erster Start
 
