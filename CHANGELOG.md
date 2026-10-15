@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.1.4] - 2026-10-15
+
+### WFP-Telemetrie
+
+- WFP-Eventlog-Brücke startet nach Abbruch mit begrenztem exponentiellem Backoff erneut. Ein 30-Sekunden-Watchdog beendet hängende Abfragen; Prozesse, Pipes und Watchdog werden beim Beenden verbunden und freigegeben.
+- Empfangszeit für Sensor-Health und ursprüngliche Ereigniszeit für Korrelation getrennt. Alte nachgelesene 5157-Ereignisse erzeugen keinen falschen Heartbeat-Ausfall.
+- Record-Cursor bleibt über Brücken-Neustarts erhalten. Bereits zugestellte Ereignisse werden nicht erneut gezählt; bei zurückgesetztem Eventlog wird der Startcursor neu abgeglichen. Der Cursor ist nicht über Dienstneustarts persistent.
+- Fehlende Events werden von fehlgeschlagenem Eventlog-Zugriff unterschieden. Abfragefehler dürfen kein READY/Heartbeat vortäuschen. Diagnostikausgaben sind auf 2 KiB pro Versuch begrenzt.
+- Gültige Systemereignisse mit PID 0 können als WFP-Blockevidenz erfasst werden; daraus entsteht keine Host-Terminationsautorität.
+- Start-Healthcheck meldet bei ausgefallener WFP-Anbindung Aufmerksamkeit, auch wenn Prozess- und TCP-Sensoren antworten und historische Blockereignisse vorhanden sind.
+
 ## [4.1.3] - 2026-10-15
 
 ### Neu seit dem bisherigen öffentlichen 4.1.1-Stand

@@ -21,6 +21,7 @@ import (
 func healthyInputs() (hardening.Result, mhx.Status) {
 	return hardening.Result{Defender: true, DefenderService: true, RealTimeProtection: true, Firewall: true}, mhx.Status{
 		ProtectionHealth: "VERIFIED", ProtectionVerifiedUTC: time.Now(), Realtime: true, TelemetryHeartbeatUTC: time.Now(), NetworkTelemetry: "NATIVE_TCP_OWNER_PID",
+		WFPBlockTelemetry:  "POLLING_5157_AUDIT_UNVERIFIED",
 		ThreatIntelligence: threatintel.Status{State: "CURRENT", Indicators: 2, BlockingFeedsReady: 1, BlockingFeedsTotal: 1, EnforcementGeneration: "current"},
 		ThreatEnforcement:  mhx.ThreatEnforcementStatus{State: "VERIFIED", ActiveGeneration: "current"},
 	}
@@ -37,6 +38,7 @@ func TestHealthRejectsIncompleteAndStaleEvidence(t *testing.T) {
 	}{
 		{"missing defender", func(p *hardening.Result, _ *mhx.Status) { p.Defender = false }, true},
 		{"stale heartbeat", func(_ *hardening.Result, m *mhx.Status) { m.TelemetryHeartbeatUTC = time.Now().Add(-time.Minute) }, true},
+		{"offline WFP with historical blocks", func(_ *hardening.Result, m *mhx.Status) { m.WFPBlockTelemetry = "DEGRADED"; m.WFPBlockedEvents = 30 }, true},
 		{"unverified policy", func(_ *hardening.Result, m *mhx.Status) { m.ProtectionHealth = "STARTING" }, true},
 		{"missing verification timestamp", func(_ *hardening.Result, m *mhx.Status) { m.ProtectionVerifiedUTC = time.Time{} }, true},
 		{"wrong firewall generation", func(_ *hardening.Result, m *mhx.Status) { m.ThreatEnforcement.ActiveGeneration = "old" }, true},
