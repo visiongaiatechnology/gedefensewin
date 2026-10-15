@@ -32,7 +32,7 @@ Aus `src/GeDefense/windows/`: `go test -race ./...`, `go vet ./...` und optional
 
 `node --test test/telemetry-ui.test.mjs` prüft die Traffic-Darstellung. `node test/startup-health.browser.cjs` benötigt separat installiertes Playwright und Chrome. Playwright wird normal über Node aufgelöst; alternativ kann `CODEX_NODE_MODULES` auf dessen absolutes Modulverzeichnis zeigen. Diese Testwerkzeuge sind keine Produktionsabhängigkeiten.
 
-Native Tests mit echten Browserfenstern sowie Tests, die Windows-Schutzrichtlinien ändern, gehören auf isolierte Testsysteme. Umfang und Grenzen der durchgeführten Tests: [4.1.3](VERIFICATION-4.1.3.md).
+Native Tests mit echten Browserfenstern sowie Tests, die Windows-Schutzrichtlinien ändern, gehören auf isolierte Testsysteme. Umfang und Grenzen der durchgeführten Tests: [4.1.4](VERIFICATION-4.1.4.md).
 
 ## Sauberes Source-Release
 

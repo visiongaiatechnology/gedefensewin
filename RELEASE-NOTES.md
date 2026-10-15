@@ -1,3 +1,18 @@
+# GeDefense Windows 4.1.4 — WFP-Telemetrie-Hotfix
+
+Veröffentlicht am 15. Oktober 2026 · Windows 11 x64
+
+Die WFP-Ereignisbrücke startet nach einem Abbruch automatisch neu. Ein Watchdog beendet hängende Abfragen; ein Record-Cursor vermeidet doppelte Zustellung über Brücken-Neustarts. Sensor-Health verwendet den Empfangszeitpunkt, die ursprüngliche Windows-Ereigniszeit bleibt für Korrelation erhalten. Abfragefehler können keinen erfolgreichen Heartbeat vortäuschen. Der Startcheck markiert ausgefallene WFP-Telemetrie auch bei vorhandenen historischen Ereignissen.
+
+Nach Installation des signierten 4.1.4-Pakets meldete der Dienst den WFP-Leser wieder als aktiv und erfasste fünf neue Blockereignisse. Die Anzeige bestätigt keinen Audit-Policy-Zustand: **Die effektive Windows-Audit-Richtlinie bleibt unbestätigt.** Auch vollständige Netzwerk-Ingress-Abdeckung wird nicht behauptet.
+
+Der signierte x64-Installer, sein JSON-Manifest, das reproduzierbare Source-ZIP und SHA-256-Prüfsummen stehen in den Release-Assets. Die Signatur wurde auf dem Buildsystem als gültig geprüft; daraus folgt keine allgemeine SmartScreen-Reputation.
+
+Die separate VM-Neuinstallation/Upgrade-Qualifikation und unabhängige Vier-Augen-Freigabe stehen aus. Die Gesamteinstufung bleibt **GOLD**. Details und Testgrenzen: [Verifikationsbericht](docs/VERIFICATION-4.1.4.md).
+
+Vollständige Änderungen: [Changelog](CHANGELOG.md).
+
+---
 # GeDefense Windows 4.1.3
 
 Veröffentlicht am 15. Oktober 2026 · Windows 11 x64
@@ -18,7 +33,7 @@ Veröffentlicht am 15. Oktober 2026 · Windows 11 x64
 
 ## Download und Prüfung
 
-`GeDefense-Setup-x64-v4.1.3.exe` ist der signierte Standalone-Installer. Das zugehörige JSON-Manifest dokumentiert Größe, SHA-256 und Signer-Thumbprint. `SHA256SUMS.txt` enthält die Hashes der Release-Dateien. Das Source-ZIP enthält die bereinigten Quellen und ein vollständiges Byte-Manifest.
+`GeDefense-Setup-x64-v4.1.3.exe` war der signierte Standalone-Installer. Das zugehörige JSON-Manifest dokumentiert Größe, SHA-256 und Signer-Thumbprint. `SHA256SUMS.txt` enthält die Hashes der Release-Dateien. Das Source-ZIP enthält die bereinigten Quellen und ein vollständiges Byte-Manifest.
 
 Administratorrechte sind für die Installation nötig. Das Center benötigt lokal installiertes Edge, Chrome oder Brave. Die Signatur wurde auf dem Buildsystem als gültig geprüft; das begründet keine allgemeine SmartScreen-Reputation oder universelle Zertifikatsvertrauensstellung.
 

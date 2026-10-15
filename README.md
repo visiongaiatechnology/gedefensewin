@@ -1,15 +1,19 @@
-# GeDefense Windows 4.1.3
+# GeDefense Windows 4.1.4
 
 <img width="2364" height="1240" alt="image_2026-10-15_10-50-03" src="https://github.com/user-attachments/assets/8bbb85f0-65be-42c9-b9ff-f78b3a401a5e" />
 
 
 Lokales Windows Security Center von **VisionGaia Technology**. GeDefense führt Defender, Firewall/WFP, ASR, Windows App Control, Systemhärtung, MHX EDR/XDR, Threat Intelligence und Dateiintegrität in einer gemeinsamen Oberfläche zusammen.
 
-[Installer und Release](https://github.com/visiongaiatechnology/gedefensewin/releases/tag/v4.1.3) · [Changelog](CHANGELOG.md) · [Architektur](ARCHITECTURE.md) · [Sicherheit](SECURITY.md)
+[Installer und Release](https://github.com/visiongaiatechnology/gedefensewin/releases/tag/v4.1.4) · [Changelog](CHANGELOG.md) · [Architektur](ARCHITECTURE.md) · [Sicherheit](SECURITY.md)
 
-## Neu in dieser Veröffentlichung
+## WFP-Hotfix 4.1.4
 
-4.1.3 bündelt die Fenster- und Startkorrekturen aus 4.1.2 sowie die seit dem bisherigen öffentlichen Stand hinzugekommenen Kinetic-, Traffic- und GeoIP/ASN-Module.
+Die WFP-Ereignisbrücke startet nach Abbruch automatisch neu; ein Watchdog beendet hängende Abfragen. Der Sensor meldet den Empfangszeitpunkt als Healthcheck und behält den Originalzeitpunkt für die Ereigniskorrelation. Der Startcheck erkennt einen ausgefallenen WFP-Leser auch dann, wenn historische Blockereignisse vorliegen. Nach Installation von 4.1.4 meldet der lokale Leser wieder aktuelle Ereignisse; die effektive Windows-Audit-Richtlinie bleibt ausdrücklich unbestätigt.
+
+## Letzte öffentliche Veröffentlichung: 4.1.4
+
+4.1.4 ergänzt die automatische Wiederherstellung des WFP-Lesers und eine Health-Prüfung, die historische Blockereignisse nicht mit einem aktiven Sensor verwechselt. Die Version 4.1.3 bündelt Fenster- und Startkorrekturen aus 4.1.2 sowie Kinetic Defense, Traffic und GeoIP/ASN.
 
 | Bereich | Änderung |
 |---|---|
@@ -22,21 +26,22 @@ Lokales Windows Security Center von **VisionGaia Technology**. GeDefense führt 
 | **Codequalität** | Alle 92 Befunde des unbegrenzten Lint-Scans bereinigt; Ergebnis: **0 Meldungen**, ohne neue Ausnahmen oder Unterdrückungen. |
 | **Robustheit** | Korrekte Win32-Fehlerverträge, erhaltene Close-/Cleanup-Fehler und geordneter Abbruch des Tray-Ereignis-Workers. Go-Toolchain 1.26.9. |
 
-Details: [Release Notes](RELEASE-NOTES.md), [Verifikationsbericht 4.1.3](docs/VERIFICATION-4.1.3.md).
+| **WFP-Sensor** | Automatischer Neustart der Eventlog-Brücke, Watchdog für hängende Abfragen und Health anhand des Empfangszeitpunkts. Das Release bestätigt keine effektive Audit-Richtlinie oder vollständige Ingress-Abdeckung. |
+Details: [Release Notes](RELEASE-NOTES.md), [Verifikationsbericht 4.1.4](docs/VERIFICATION-4.1.4.md).
 
 <img width="2281" height="1240" alt="image_2026-10-15_10-50-21" src="https://github.com/user-attachments/assets/52f1fffe-4dba-4025-8712-7b470f6728b2" />
 
 
 ## Installation und erster Start
 
-1. `GeDefense-Setup-x64-v4.1.3.exe` aus dem [Release](https://github.com/visiongaiatechnology/gedefensewin/releases/tag/v4.1.3) herunterladen. SHA-256 mit `SHA256SUMS.txt` vergleichen und die Authenticode-Signatur prüfen.
+1. `GeDefense-Setup-x64-v4.1.4.exe` aus dem [Release](https://github.com/visiongaiatechnology/gedefensewin/releases/tag/v4.1.4) herunterladen. SHA-256 mit `SHA256SUMS.txt` vergleichen und die Authenticode-Signatur prüfen.
 2. Installer als Administrator starten. Er installiert Dienst, Center und Tray und richtet die lokalen Zugriffsrechte ein.
 3. GeDefense Center öffnen. Der Startdialog gleicht die konfigurierte Schutzlage ab und prüft **Policy, Defender, Firewall, Prozess-/Netzwerk-Telemetrie, Threat Intelligence, aktive Threat-IP-Firewallgeneration und Evidenzkette**.
 4. Hinweise im Dialog bearbeiten oder den Check im Hintergrund fortsetzen. Bei Problemen ist eine erneute Prüfung möglich. Grün erscheint erst nach erfolgreicher Verifikation; der Check schaltet optionale Schutzfunktionen nicht pauschal ein.
 
 Voraussetzungen: **Windows 11 x64**, Windows PowerShell 5.1, verfügbare Windows-Sicherheitsfunktionen und ein lokal installierter Chromium-Browser wie Edge, Chrome oder Brave. Der Renderer läuft im eigenen Win32-Fensterhost. Administratorrechte sind für Installation und Systemänderungen nötig; Center und Tray laufen im Benutzerkontext.
 
-Die Signatur bestätigt die Integrität unter der jeweiligen Zertifikats-Vertrauenskette. Eine lokal gültige Signatur bedeutet keine allgemeine SmartScreen-Reputation. Build- und Testumfang einschließlich der noch offenen separaten VM-Neuinstallation/Upgrade-Prüfung stehen im [Verifikationsbericht](docs/VERIFICATION-4.1.3.md).
+Die Signatur bestätigt die Integrität unter der jeweiligen Zertifikats-Vertrauenskette. Eine lokal gültige Signatur bedeutet keine allgemeine SmartScreen-Reputation. Build- und Testumfang einschließlich der noch offenen separaten VM-Neuinstallation/Upgrade-Prüfung stehen im [Verifikationsbericht](docs/VERIFICATION-4.1.4.md).
 
 ## Kinetic Defense, Traffic und Karte
 
@@ -87,7 +92,7 @@ Die `internal/`-Pfade liegen unter `src/GeDefense/windows/`.
 Offizielle Buildbasis: **Go 1.26.9**, Windows PowerShell 5.1 x64 und eine Race-Detector-fähige Windows-Buildumgebung. Die minimale Go-Sprachversion im Modul ist von der Release-Toolchain getrennt.
 
 ```powershell
-# STATUS: GOLD — Releasequalifikation siehe docs/VERIFICATION-4.1.3.md
+# STATUS: GOLD — Releasequalifikation siehe docs/VERIFICATION-4.1.4.md
 $env:GOTOOLCHAIN = 'go1.26.9'
 & .\build\Test-GeDefenseRelease.ps1
 & .\build\Build-GeDefenseStandalone.ps1

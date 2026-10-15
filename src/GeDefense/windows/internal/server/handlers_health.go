@@ -56,9 +56,9 @@ func evaluateHealth(p hardening.Result, m mhx.Status, evidenceValid bool) health
 		"Firewall-Profile sind aktiv.",
 		"Firewall-Konfiguration benötigt Aufmerksamkeit. Im Bereich Härtung die Firewall prüfen.")
 	fresh := !m.TelemetryHeartbeatUTC.IsZero() && time.Since(m.TelemetryHeartbeatUTC) <= 10*time.Second
-	add("telemetry", "Prozess- und Netzwerk-Telemetrie", m.Realtime && fresh && m.NetworkTelemetry == "NATIVE_TCP_OWNER_PID",
-		"Prozesssensor und native Netzwerk-Erfassung antworten.",
-		"Sensoren noch nicht bereit. Erneut prüfen; bei anhaltendem Fehler den GeDefense-Dienst prüfen.")
+	add("telemetry", "Prozess- und Netzwerk-Telemetrie", m.Realtime && fresh && m.NetworkTelemetry == "NATIVE_TCP_OWNER_PID" && m.WFPBlockTelemetry == "POLLING_5157_AUDIT_UNVERIFIED",
+		"Prozesssensor, native Netzwerk-Erfassung und WFP-Ereignisabfrage antworten. Audit-Policy wird dadurch nicht bestätigt.",
+		"Prozess-, Netzwerk- oder WFP-Ereignissensor nicht bereit. Erneut prüfen; bei anhaltendem Fehler den GeDefense-Dienst prüfen.")
 	ti := m.ThreatIntelligence
 	add("intelligence", "Threat Intelligence", ti.Indicators > 0 && ti.BlockingFeedsTotal > 0 && ti.BlockingFeedsReady == ti.BlockingFeedsTotal && (ti.State == "CURRENT" || ti.State == "CACHED"),
 		"Threat-Feeds und lokale Datenbasis sind verfügbar.",
