@@ -8,6 +8,7 @@ import (
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/audit"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/geoip"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/hardening"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/integrity"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/mhx"
@@ -32,6 +33,8 @@ type rateWindow struct {
 }
 
 type Server struct {
+	geoOnce        sync.Once
+	geo            *geoip.GeoResolver
 	version        string
 	token          string
 	engine         HardeningEngine
@@ -46,6 +49,10 @@ type Server struct {
 	sessions       map[string]time.Time
 	rateMu         sync.Mutex
 	rates          map[string]rateWindow
+	windowMu       sync.Mutex
+	windowCommands chan string
+	windowStateVal string
+	windowClientAt time.Time
 }
 
 type HardeningEngine interface {

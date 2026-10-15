@@ -19,10 +19,10 @@ func powerShellFromRoot(systemRoot string) (string, error) {
 	path := filepath.Join(filepath.Clean(systemRoot), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 	info, err := os.Lstat(path)
 	if err != nil {
-		return "", errors.New("Windows PowerShell is unavailable")
+		return "", errors.New("windows PowerShell is unavailable")
 	}
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return "", errors.New("Windows PowerShell path is not a regular file")
+		return "", errors.New("windows PowerShell path is not a regular file")
 	}
 	return path, nil
 }

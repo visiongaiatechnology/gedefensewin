@@ -10,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 )
 
 const (
@@ -145,11 +147,12 @@ type trayState struct {
 	menu           uintptr
 	icon           uintptr
 	taskbarCreated uint32
+	iconAdded      bool
 	lastHealthy    bool
 	lastDetail     string
 }
 
-func Run(cfg Config) error {
+func Run(cfg Config) (err error) {
 	if cfg.Open == nil || cfg.Status == nil || cfg.Title == "" {
 		return errors.New("invalid tray configuration")
 	}
@@ -169,11 +172,20 @@ func Run(cfg Config) error {
 	if icon == 0 {
 		return syscallError("LoadImageW", iconErr)
 	}
-	defer procDestroyIcon.Call(icon)
+	defer func() {
+		r, _, e := procDestroyIcon.Call(icon)
+		err = errors.Join(err, winapi.CheckBOOL("DestroyIcon", r, e))
+	}()
 	wc := wndClassEx{Size: uint32(unsafe.Sizeof(wndClassEx{})), WndProc: callback, Instance: instance, Icon: icon, IconSmall: icon, ClassName: className}
 	atom, _, registerErr := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 	if atom == 0 && registerErr != syscall.Errno(1410) { // class already exists
 		return syscallError("RegisterClassExW", registerErr)
+	}
+	if atom != 0 {
+		defer func() {
+			r, _, e := user32.NewProc("UnregisterClassW").Call(uintptr(unsafe.Pointer(className)), instance)
+			err = errors.Join(err, winapi.CheckBOOL("UnregisterClassW(tray)", r, e))
+		}()
 	}
 	hwnd, _, createErr := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(className)), 0, 0, 0, 0, 0, 0, 0, instance, 0)
 	if hwnd == 0 {
@@ -189,28 +201,53 @@ func Run(cfg Config) error {
 		activeMu.Unlock()
 	}()
 
+	defer func() {
+		if valid, _, _ := user32.NewProc("IsWindow").Call(hwnd); valid != 0 {
+			r, _, e := procDestroyWindow.Call(hwnd)
+			err = errors.Join(err, winapi.CheckBOOL("DestroyWindow(tray)", r, e))
+		}
+	}()
+	defer func() {
+		if state.menu != 0 {
+			r, _, e := procDestroyMenu.Call(state.menu)
+			err = errors.Join(err, winapi.CheckBOOL("DestroyMenu", r, e))
+		}
+	}()
 	if err := state.createMenu(); err != nil {
-		procDestroyWindow.Call(hwnd)
 		return err
 	}
-	defer procDestroyMenu.Call(state.menu)
 	taskbarName, _ := syscall.UTF16PtrFromString("TaskbarCreated")
 	registered, _, _ := procRegisterWindowMsgW.Call(uintptr(unsafe.Pointer(taskbarName)))
 	state.taskbarCreated = uint32(registered)
 	if err := state.addIcon(); err != nil {
-		procDestroyWindow.Call(hwnd)
 		return err
 	}
-	defer state.deleteIcon()
+	defer func() { err = errors.Join(err, state.deleteIcon()) }()
 	state.refreshStatus()
-	procSetTimer.Call(hwnd, 1, 60000, 0)
-	defer procKillTimer.Call(hwnd, 1)
+	timer, _, timerErr := procSetTimer.Call(hwnd, 1, 60000, 0)
+	if timer == 0 {
+		return syscallError("SetTimer", timerErr)
+	}
+	defer func() {
+		// DestroyWindow already destroys its timers; only kill while the HWND is live.
+		if valid, _, _ := user32.NewProc("IsWindow").Call(hwnd); valid != 0 {
+			r, _, e := procKillTimer.Call(hwnd, timer)
+			err = errors.Join(err, winapi.CheckBOOL("KillTimer", r, e))
+		}
+	}()
 
+	stopWatcher := make(chan struct{})
+	var watcher sync.WaitGroup
+	defer func() { close(stopWatcher); watcher.Wait() }()
 	if cfg.OpenEvent != 0 {
-		go watchOpenEvent(cfg.OpenEvent, hwnd)
+		watcher.Add(1)
+		go func() { defer watcher.Done(); watchOpenEvent(cfg.OpenEvent, hwnd, stopWatcher) }()
 	}
 	if cfg.OpenAtStart {
-		procPostMessageW.Call(hwnd, externalOpen, 0, 0)
+		result, _, callErr := procPostMessageW.Call(hwnd, externalOpen, 0, 0)
+		if err := winapi.CheckBOOL("PostMessageW(open)", result, callErr); err != nil {
+			return err
+		}
 	}
 
 	var msg message
@@ -222,20 +259,38 @@ func Run(cfg Config) error {
 		if result == 0 {
 			return nil
 		}
-		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
-		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
+		// Character-generation BOOL and WndProc LRESULT are informational, not errors.
+		_, _, _ = procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
+		_, _, _ = procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
 	}
 }
 
-func watchOpenEvent(handle uintptr, hwnd uintptr) {
-	kernel := syscall.NewLazyDLL("kernel32.dll")
-	wait := kernel.NewProc("WaitForSingleObject")
+func watchOpenEvent(handle, hwnd uintptr, stop <-chan struct{}) {
+	wait := kernel32.NewProc("WaitForSingleObject")
 	for {
-		result, _, _ := wait.Call(handle, 0xFFFFFFFF)
-		if uint32(result) != 0 {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		result, _, callErr := wait.Call(handle, 500)
+		if result == 258 {
+			continue
+		}
+		if result != 0 {
+			winapi.ReportError("tray open-event wait", syscallError("WaitForSingleObject", callErr))
 			return
 		}
-		procPostMessageW.Call(hwnd, externalOpen, 0, 0)
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		result, _, callErr = procPostMessageW.Call(hwnd, externalOpen, 0, 0)
+		if err := winapi.CheckBOOL("PostMessageW(open)", result, callErr); err != nil {
+			winapi.ReportError("tray open event", err)
+			return
+		}
 	}
 }
 
@@ -248,7 +303,7 @@ func windowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return result
 	}
 	if state.taskbarCreated != 0 && msg == state.taskbarCreated {
-		_ = state.addIcon()
+		winapi.ReportError("tray icon recreation", state.addIcon())
 		return 0
 	}
 	switch msg {
@@ -271,12 +326,14 @@ func windowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		case menuOpen:
 			state.cfg.Open()
 		case menuQuit:
-			procDestroyWindow.Call(hwnd)
+			result, _, callErr := procDestroyWindow.Call(hwnd)
+			winapi.ReportError("tray close", winapi.CheckBOOL("DestroyWindow", result, callErr))
 		}
 		return 0
 	case wmDestroy:
-		state.deleteIcon()
-		procPostQuitMessage.Call(0)
+		winapi.ReportError("tray icon removal", state.deleteIcon())
+		// PostQuitMessage returns VOID.
+		_, _, _ = procPostQuitMessage.Call(0)
 		return 0
 	}
 	result, _, _ := procDefWindowProcW.Call(hwnd, uintptr(msg), wParam, lParam)
@@ -324,15 +381,25 @@ func (s *trayState) refreshStatus() {
 	s.lastHealthy, s.lastDetail = healthy, detail
 	title := "Schutzstatus: " + detail
 	ptr, _ := syscall.UTF16PtrFromString(title)
-	procModifyMenuW.Call(s.menu, menuStatus, mfByCommand|mfString|mfDisabled|mfGrayed, menuStatus, uintptr(unsafe.Pointer(ptr)))
-	_ = s.modifyIcon("VGT GeDefense · " + detail)
+	result, _, callErr := procModifyMenuW.Call(s.menu, menuStatus, mfByCommand|mfString|mfDisabled|mfGrayed, menuStatus, uintptr(unsafe.Pointer(ptr)))
+	winapi.ReportError("tray status menu", winapi.CheckBOOL("ModifyMenuW", result, callErr))
+	winapi.ReportError("tray status tooltip", s.modifyIcon("VGT GeDefense · "+detail))
 }
 
 func (s *trayState) showMenu() {
 	var p point
-	procGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
-	procSetForegroundWindow.Call(s.hwnd)
-	procTrackPopupMenu.Call(s.menu, tpmRightButton|tpmBottomAlign, uintptr(p.X), uintptr(p.Y), 0, s.hwnd, 0)
+	result, _, callErr := procGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
+	if err := winapi.CheckBOOL("GetCursorPos", result, callErr); err != nil {
+		winapi.ReportError("tray menu position", err)
+		return
+	}
+	result, _, callErr = procSetForegroundWindow.Call(s.hwnd)
+	if err := winapi.CheckBOOL("SetForegroundWindow", result, callErr); err != nil {
+		winapi.ReportError("tray menu focus", err)
+		return
+	}
+	result, _, callErr = procTrackPopupMenu.Call(s.menu, tpmRightButton|tpmBottomAlign, uintptr(p.X), uintptr(p.Y), 0, s.hwnd, 0)
+	winapi.ReportError("tray menu", winapi.CheckBOOL("TrackPopupMenu", result, callErr))
 }
 
 func (s *trayState) addIcon() error {
@@ -341,6 +408,7 @@ func (s *trayState) addIcon() error {
 	if result == 0 {
 		return syscallError("Shell_NotifyIconW(NIM_ADD)", callErr)
 	}
+	s.iconAdded = true
 	return nil
 }
 
@@ -353,9 +421,17 @@ func (s *trayState) modifyIcon(tip string) error {
 	return nil
 }
 
-func (s *trayState) deleteIcon() {
+func (s *trayState) deleteIcon() error {
+	if !s.iconAdded {
+		return nil
+	}
 	data := s.iconData("")
-	procShellNotifyIconW.Call(nimDelete, uintptr(unsafe.Pointer(&data)))
+	result, _, callErr := procShellNotifyIconW.Call(nimDelete, uintptr(unsafe.Pointer(&data)))
+	if err := winapi.CheckBOOL("Shell_NotifyIconW(NIM_DELETE)", result, callErr); err != nil {
+		return err
+	}
+	s.iconAdded = false
+	return nil
 }
 
 func (s *trayState) iconData(tip string) notifyIconData {

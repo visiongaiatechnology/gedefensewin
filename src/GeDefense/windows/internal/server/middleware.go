@@ -27,7 +27,10 @@ func (s *Server) headers(next http.Handler) http.Handler {
 			s.writeError(w, http.StatusForbidden, "request rejected")
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/") && !s.allowRequest(remoteHost) {
+		providedAuth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		isMaster := security.TokenEqual(providedAuth, s.token)
+		isWindowInternal := strings.HasPrefix(r.URL.Path, "/api/v1/window/")
+		if strings.HasPrefix(r.URL.Path, "/api/") && !isMaster && !isWindowInternal && !s.allowRequest(remoteHost) {
 			w.Header().Set("Retry-After", "10")
 			s.writeError(w, http.StatusTooManyRequests, "request rate limited")
 			return
@@ -92,9 +95,16 @@ func (s *Server) authorize(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) masterAuthorize(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !security.TokenEqual(provided, s.token) || !s.originAllowed(r, true) || !s.claim(r.Header.Get("X-VGT-Request-ID")) {
+		if !security.TokenEqual(provided, s.token) || !s.originAllowed(r, true) {
 			s.writeError(w, http.StatusUnauthorized, "authorization required")
 			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			reqID := r.Header.Get("X-VGT-Request-ID")
+			if reqID != "" && !s.claim(reqID) {
+				s.writeError(w, http.StatusConflict, "request rejected")
+				return
+			}
 		}
 		next(w, r)
 	}
@@ -132,7 +142,7 @@ func validRequestID(id string) bool {
 			}
 			continue
 		}
-		if !((char >= 'a' && char <= 'f') || (char >= '0' && char <= '9')) {
+		if (char < 'a' || char > 'f') && (char < '0' || char > '9') {
 			return false
 		}
 	}

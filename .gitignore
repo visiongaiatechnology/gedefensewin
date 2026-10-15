@@ -49,3 +49,10 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+
+# Local handoff, archive provenance and optional dataset
+/Next.md
+/FULL_SOURCE_SHA256.txt
+/MERGE_REPORT.json
+/data/geoip.csv*
+node_modules/

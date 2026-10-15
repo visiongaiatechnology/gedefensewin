@@ -105,9 +105,10 @@ func (m *protectionManager) ApplyAppControl(ctx context.Context, action string) 
 
 func (m *protectionManager) Apply(ctx context.Context, mode string) (ProtectionResult, error) {
 	name := "Guarded"
-	if mode == "monitor" {
+	switch mode {
+	case "monitor":
 		name = "Monitor"
-	} else if mode == "sovereign" {
+	case "sovereign":
 		name = "Sovereign"
 	}
 	return scriptengine.RunJSON[ProtectionResult](m.runner, ctx, "mhx-mode", "-Mode", name)

@@ -16,6 +16,8 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/visiongaiatechnology/gedefense/windows/internal/cleanup"
+
 	"github.com/visiongaiatechnology/gedefense/windows/internal/product"
 )
 
@@ -530,7 +532,10 @@ func (w *setupWizard) paint() {
 	if hdc == 0 {
 		return
 	}
-	defer procEndPaint.Call(w.hwnd, uintptr(unsafe.Pointer(&ps)))
+	defer func() {
+		// EndPaint always returns nonzero; it has no failure channel.
+		_, _, _ = procEndPaint.Call(w.hwnd, uintptr(unsafe.Pointer(&ps)))
+	}()
 
 	var rc rect
 	_, _, _ = procGetClientRect.Call(w.hwnd, uintptr(unsafe.Pointer(&rc)))
@@ -812,12 +817,12 @@ func (w *setupWizard) drawScene(hdc uintptr, width, height int32) {
 	_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(btnPtr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&textRc)), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
 }
 
-func readDiagnosticLogTail(path string, maxLines int) ([]string, error) {
+func readDiagnosticLogTail(path string, maxLines int) (result []string, err error) {
 	file, err := openSharedFileForRead(path)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer cleanup.CloseInto(&err, file)
 
 	var lines []string
 	scanner := bufio.NewScanner(file)

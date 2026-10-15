@@ -88,7 +88,7 @@ function Read-EnforcementSnapshot {
     }
     $indicators = @($snapshot.blockIndicators)
     if ($indicators.Count -lt 1 -or $indicators.Count -gt $maximumIndicators -or $indicators.Count -ne $ExpectedIndicators) { throw [Security.SecurityException]::new('Indicator count boundary validation failed.') }
-    if ([int]$snapshot.blockingFeedCount -ne 3) { throw [Security.SecurityException]::new('Blocking feed cardinality validation failed.') }
+    if ([int]$snapshot.blockingFeedCount -lt 3 -or [int]$snapshot.blockingFeedCount -gt 4) { throw [Security.SecurityException]::new('Blocking feed cardinality validation failed.') }
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $previous = ''
     foreach ($indicatorValue in $indicators) {
@@ -308,18 +308,18 @@ try {
     })
     exit 0
 } catch [Security.SecurityException] {
-    Write-Error 'Threat intelligence firewall transaction was rejected.'
+    Write-Error "Threat intelligence firewall transaction was rejected: $($_.Exception.Message)"
     exit 10
 } catch {
-    Write-Error 'Threat intelligence firewall transaction failed.'
+    Write-Error "Threat intelligence firewall transaction failed: $($_.Exception.Message)"
     exit 20
 }
 
 # SIG # Begin signature block
 # MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCQ5AJoL8yTRF1N
-# kQ1cj236pVIYM/WjbEXFmtz9mrGcdKCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAbtOHDrU5h893C
+# Jw9CJoWQ27uJW5dqBdPn2zeRJ6QPRaCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
 # m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
 # VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
 # MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
@@ -345,14 +345,14 @@ try {
 # ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
 # ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
 # AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCBxNOncCKDs
-# AjQwdG+6SG7hefIfwLsooxR/eMFK+RYefDANBgkqhkiG9w0BAQEFAASCAYBSh2lH
-# gKPSeI/ERFabO+6CMab+P0wrKCgpeAs/NJdh/ye7BucKhDBNp5aCXfeWFvEC51z/
-# iHr+llYBXmyqjGQ7BXOq980OC6JeHFLM0LDo+pcXV3L8pv/RvYG0XOthhWNa2atr
-# z1lORzcKkU8KhbeAK455+UU+0tFLZGThIjcUs2JW7kp8vi/2ZU+0DuGE8lFr44E0
-# DyJIUCIOlHTW7qI/AHZc1NVaCYTKoK1wLlYwv0w5xYyT2s3F638KCJ0FcsYEBKLn
-# fVtTnJ6TDcK31Q+Uk1ygNioumHCCXlpW7wHcnBEF6bQ500qQxnV4ZiIiWk/L10m4
-# 1hfNaOJtUHrslUVU0BGsefKlOZ3SvpHfF8r3aeuGoK2ZLtS8q5+rH6swJGyyYtow
-# Z/Ayu8pvEJdivYZx47vdyibrIwAM+UE3rYCj1iRVk1Z1RnLChkaS4DgdbnnGHvpV
-# pfcvcQe1JMh4dZKB/C+6iqLh8Nw7/EuZMC3J9/udQUep/lt8JUXHKIGGfRE=
+# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCBuTCJ3dyhv
+# JG2/aWDsO3JMpWc1NkJFYi8SCvJWnZnjcTANBgkqhkiG9w0BAQEFAASCAYA6KD+E
+# V8mpbELUyhy5WrWviQaE6OxObR/mGSw8xWCghh0nVtDVeRqw7BqgcHB9/Ra+Cjw7
+# f5SJDTyzKmCG5zJzL1n0SDZ81s1+Th+sKfV64+28F7hHSA6fXb06SQRN+Mib5814
+# k+Fw2A6Mw+c+4hR9DjcDLgolMlh13GBPdjDI+GNV4ODzeYGWtnMAnd4hGqdbjlF4
+# jRRSFpdyiq1jQEUz/gRQawLCfEseJQZcD1qy40vrS02ypauxSDoZEDqrdY/x8xAe
+# dDUAwPS0x5dghvo/dc729jrIBsWCS4qU381F6gURu6gcG1R5d0DXYXqn1q21WgCU
+# Uej1hs0n8reIxqP5q0nSGy0EQ6K3Ss6jKKNeFTNvOH9PRn/kvwZCDsyE9qZl6xKR
+# 43+DqXCX5eElQhJT1PoThl3TyxAuGm3AoNt0WbmideunePKu+UDmTZJx6DiT4PSH
+# El3tP1FvCtSh2BYEqnv0gnD/D1K9WTBTaHrNYZjOKsSPkfPqBrR+C+TZmHk=
 # SIG # End signature block

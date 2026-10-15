@@ -22,8 +22,11 @@ func main() {
 		_ = winapi.MessageBox("VGT GeDefense Center", "GeDefense Center konnte nicht exklusiv gestartet werden.", winapi.MBIconError)
 		return
 	}
-	defer winapi.CloseHandle(mutex)
+	defer func() { winapi.ReportError("center mutex close", winapi.CloseHandle(mutex)) }()
 	if existed {
+		if hwnd, err := winapi.FindGeDefenseWindow(); err == nil && hwnd != 0 {
+			_ = winapi.BringWindowToForeground(hwnd)
+		}
 		return
 	}
 	if err := launcher.Open(); err != nil {

@@ -65,21 +65,16 @@ func TestPostureReturnsStaleCacheWithoutBlocking(t *testing.T) {
 	}
 }
 
-func TestPostureColdStartFallbackOnInvalidScript(t *testing.T) {
-	// No cache, invalid script path
-	engine := &Engine{
-		script:        `C:\nonexistent\script.ps1`,
-		operationRoot: t.TempDir(),
-	}
-
+func TestPostureColdStartNeverInventsHealthyState(t *testing.T) {
+	engine := &Engine{script: `C:
+onexistent\script.ps1`, operationRoot: t.TempDir()}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-
 	result, err := engine.Posture(ctx)
-	if err != nil {
-		t.Fatalf("Posture() should not fail on cold start error, got: %v", err)
+	if err == nil {
+		t.Fatal("unavailable initial audit must return an error")
 	}
-	if !result.Defender || !result.RealTimeProtection || !result.Firewall {
-		t.Fatalf("expected safe baseline fallback posture, got: %+v", result)
+	if result.Defender || result.RealTimeProtection || result.Firewall {
+		t.Fatalf("unverified security controls reported healthy: %+v", result)
 	}
 }

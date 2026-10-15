@@ -1,4 +1,4 @@
-VGT GeDefense Windows 4.1.1
+VGT GeDefense Windows 4.1.3
 Copyright © 2026 VisionGaia Technology.
 
 GeDefense Windows is built without third-party Go module dependencies. It uses public Microsoft Windows operating-system interfaces and platform security services that are not bundled in this repository.
@@ -6,3 +6,6 @@ GeDefense Windows is built without third-party Go module dependencies. It uses p
 Microsoft, Windows and Microsoft Defender are trademarks of the Microsoft group of companies. VisionGaia Technology is not affiliated with or endorsed by Microsoft.
 
 VGT, VisionGaia Technology, GeDefense and associated logos are governed by TRADEMARKS.md and are not granted under AGPL-3.0-only.
+
+Local map geometry: jsVectorMap, Copyright (c) 2020 Mustafa Omar, MIT; see LICENSES/jsVectorMap-LICENSE.
+Optional GeoIP/ASN data: DB-IP Lite (CC BY 4.0), sapics/ip-location-db ASN (PDDL per imported integration). See THIRD-PARTY-NOTICES.md and GEOIP_LICENSE_AND_DEPLOYMENT.md.

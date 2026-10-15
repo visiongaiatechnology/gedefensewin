@@ -112,7 +112,7 @@ func (e *Engine) applyVerifiedMode(ctx context.Context, mode string) error {
 			return err
 		}
 		if !appControl.Enforced || !appControl.KernelEnforcement {
-			return errors.New("App Control kernel enforcement verification failed")
+			return errors.New("app control kernel enforcement verification failed")
 		}
 		e.kernelEnforcement.Store(appControl.KernelEnforcement)
 	}
@@ -131,7 +131,7 @@ func (e *Engine) applyVerifiedMode(ctx context.Context, mode string) error {
 			return err
 		}
 		if appControl.Enforced || appControl.KernelEnforcement {
-			return errors.New("App Control audit verification failed")
+			return errors.New("app control audit verification failed")
 		}
 		e.kernelEnforcement.Store(false)
 	}
@@ -230,12 +230,12 @@ func (e *Engine) SetApplication(ctx context.Context, action, path string) ([]App
 	if appAction == "Enforce" && (!appControl.Enforced || !appControl.KernelEnforcement) {
 		e.setProtectionHealth("DEGRADED")
 		_ = e.ledger.Append("mhx.sovereign", "appcontrol-refresh", "verification-failed")
-		return nil, errors.New("App Control kernel enforcement verification failed")
+		return nil, errors.New("app control kernel enforcement verification failed")
 	}
 	if appAction == "Audit" && (appControl.Enforced || appControl.KernelEnforcement) {
 		e.setProtectionHealth("DEGRADED")
 		_ = e.ledger.Append("mhx.sovereign", "appcontrol-refresh", "verification-failed")
-		return nil, errors.New("App Control audit verification failed")
+		return nil, errors.New("app control audit verification failed")
 	}
 	e.kernelEnforcement.Store(appControl.KernelEnforcement)
 	_ = e.ledger.Append("mhx.sovereign", "application-allow", strings.ToLower(action))
@@ -286,14 +286,26 @@ func (e *Engine) ReconcilePolicy(parent context.Context) error {
 		return fmt.Errorf("evidence ledger verification failed: %w", err)
 	}
 
+	// A concurrent startup reconciliation may already have verified this mode.
+	// Coalesce queued UI retries under the same policy gate.
+	e.mu.RLock()
+	recentlyVerified := e.protectionHealth == "VERIFIED" && time.Since(e.protectionVerifiedUTC) < 30*time.Second
+	e.mu.RUnlock()
+	if recentlyVerified {
+		return nil
+	}
+
 	err := e.applyVerifiedMode(ctx, e.Mode())
 	if err != nil {
 		e.setProtectionHealth("DEGRADED")
 		_ = e.ledger.Append("mhx.enforcement", "policy-reconciliation", "degraded")
 		return fmt.Errorf("MHX policy reconciliation failed: %w", err)
 	}
+	if err := e.ledger.Append("mhx.enforcement", "policy-reconciliation", "verified"); err != nil {
+		e.setProtectionHealth("DEGRADED")
+		return fmt.Errorf("policy reconciliation evidence commit: %w", err)
+	}
 	e.setProtectionHealth("VERIFIED")
-	_ = e.ledger.Append("mhx.enforcement", "policy-reconciliation", "verified")
 	return nil
 }
 

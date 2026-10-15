@@ -3,6 +3,11 @@
   "short_name": "GeDefense",
   "start_url": "/",
   "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "borderless",
+    "standalone"
+  ],
   "background_color": "#040914",
   "theme_color": "#040914",
   "icons": [

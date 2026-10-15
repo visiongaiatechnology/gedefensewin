@@ -31,7 +31,11 @@ func TestProcessWatcherReceivesEncodedCommand(t *testing.T) {
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer command.Wait()
+	defer func() {
+		if err := command.Wait(); err != nil && ctx.Err() == nil {
+			t.Errorf("telemetry fixture process: %v", err)
+		}
+	}()
 	for {
 		select {
 		case err := <-faults:

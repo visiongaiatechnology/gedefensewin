@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="/assets/components.css">
   <link rel="stylesheet" href="/assets/views.css">
   <link rel="stylesheet" href="/assets/responsive.css">
+  <link rel="stylesheet" href="/assets/startup-health.css">
   <script type="module" src="/assets/app.js"></script>
 </head>
 <body>
@@ -28,6 +29,7 @@
         <button class="nav" data-view="protection"><span class="nav-icon">⬢</span><span>Protection Center</span></button>
         <button class="nav" data-view="xdr"><span class="nav-icon">⌁</span><span>MHX XDR</span></button>
         <button class="nav" data-view="network"><span class="nav-icon">◎</span><span>Netzwerk</span></button>
+        <button class="nav" data-view="kinetic"><span class="nav-icon">⌁</span><span>Kinetic Defense</span></button>
         <button class="nav" data-view="integrity"><span class="nav-icon">◇</span><span>Integrität</span></button>
         <button class="nav" data-view="hardening"><span class="nav-icon">▦</span><span>Härtung</span></button>
         <button class="nav" data-view="audit"><span class="nav-icon">✓</span><span>SafetySys Audit</span></button>
@@ -44,7 +46,16 @@
       <header class="topbar">
         <button id="menuToggle" class="icon-button mobile-only" aria-label="Navigation öffnen">☰</button>
         <div class="title-stack"><small>VISIONGAIA TECHNOLOGY // SOVEREIGN WINDOWS DEFENSE</small><h1 id="viewTitle">Übersicht</h1></div>
-        <div class="top-actions"><span id="clock" class="mono muted">--:--:--</span><button id="authButton" class="button ghost">Operator-Key</button><span id="globalMode" class="status-pill locked">GESPERRT</span></div>
+        <div class="top-actions">
+          <span id="clock" class="mono muted">--:--:--</span>
+          <button id="authButton" class="button ghost">Operator-Key</button>
+          <span id="globalMode" class="status-pill locked">GESPERRT</span>
+          <div class="window-controls" aria-label="Fenstersteuerung">
+            <button id="winMin" class="win-control-btn" title="Minimieren" aria-label="Minimieren"><svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg></button>
+            <button id="winMax" class="win-control-btn" title="Maximieren" aria-label="Maximieren"><svg id="winMaxIcon" width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+            <button id="winClose" class="win-control-btn win-close" title="Schließen" aria-label="Schließen"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.3"/></svg></button>
+          </div>
+        </div>
       </header>
 
       <section class="view active" data-page="overview">
@@ -58,9 +69,12 @@
           <div class="posture-orbit" aria-hidden="true"><div class="posture-core"><strong id="postureScore">0</strong><span>POSTURE</span></div></div>
         </div>
         <div class="metric-grid" id="overviewMetrics"></div>
+        <article class="glass section-card traffic-dashboard"><div class="section-head"><div><p class="eyebrow">LIVE NETWORK FABRIC · WINDOWS IP HELPER</p><h3>Echtzeit-Traffic</h3><p id="trafficDescription" class="muted">Warte auf Interface-Zähler. Keine Paketinhalte, keine Simulation.</p></div><span class="status-pill warn" id="trafficState">STARTING</span></div>
+          <div class="traffic-layout"><div class="traffic-values"><div><span>↓ DOWNLOAD</span><strong id="trafficRx">--</strong></div><div><span>↑ UPLOAD</span><strong id="trafficTx">--</strong></div></div><svg id="trafficGraph" class="traffic-chart" viewBox="0 0 640 170" role="img" aria-label="Echtzeit-Traffic, Download und Upload der letzten 120 Sekunden"><title>Network Traffic über Zeit</title><path class="traffic-gridline" d="M0 45H640 M0 85H640 M0 125H640"></path><path id="trafficRxPath" class="traffic-rx" d=""></path><path id="trafficTxPath" class="traffic-tx" d=""></path></svg></div><p class="mono muted">● Cyan: Empfang · ● Violett: Versand · 2-Sekunden-Samples · nur lokal erfasste Interface-Bytes; keine vollständige Paketinspektion.</p>
+        </article>
         <div class="two-col">
           <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">SCHUTZDOMÄNEN</p><h3>Defense Coverage</h3></div><span id="anchorCount" class="status-pill info">0/0</span></div><div id="domainBars" class="bars"></div></article>
-          <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">LIVE FABRIC</p><h3>Realtime Security</h3></div><span id="realtimeBadge" class="status-pill warn">STARTING</span></div><div class="compact-stats"><div><strong id="mhxEvents">0</strong><span>Prozesse bewertet</span></div><div><strong id="mhxBlocked">0</strong><span>Reaktionen</span></div><div><strong id="networkHits">0</strong><span>Threat-IP Treffer</span></div><div><strong id="storyCount">0</strong><span>Attack Stories</span></div></div></article>
+          <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">LIVE FABRIC</p><h3>Realtime Security</h3></div><span id="realtimeBadge" class="status-pill warn">STARTING</span></div><div class="compact-stats"><div><strong id="mhxEvents">0</strong><span>Prozessereignisse bewertet</span></div><div><strong id="mhxBlocked">0</strong><span>MHX-Prozesse gestoppt</span></div><div><strong id="wfpBlocks">0</strong><span>WFP-Sperrereignisse (5157)</span></div><div><strong id="networkHits">0</strong><span>Threat-IP-Matches</span></div><div><strong id="storyCount">0</strong><span>Korrelierte Attack Stories</span></div></div><p id="telemetryHealth" class="mono muted" aria-live="polite">WFP- und Feed-Verifikation werden geprüft.</p><p class="mono muted">Zähler seit Dienststart. MHX-Terminationen, Windows-WFP-Sperren, Feed-Matches und korrelierte Stories sind unterschiedliche Ereignisse; eine Null allein bedeutet keinen Schutzfehler.</p></article>
         </div>
         <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">LETZTE KORRELATIONEN</p><h3>Attack Stories</h3></div><button class="button ghost small" data-go="xdr">Alle anzeigen</button></div><div id="overviewStories" class="story-list empty-state">Noch keine korrelierten Angriffe.</div></article>
       </section>
@@ -79,7 +93,7 @@
       <section class="view" data-page="xdr" hidden>
         <div class="page-head"><div><p class="eyebrow">MHX XDR 7.0</p><h2>Prozess-, Defender- und Netzwerk-Korrelation.</h2><p>Prozessherkunft, Signatur, Command Semantics und Threat-Intel-Netzwerkziele werden zu überprüfbaren Angriffsketten verbunden.</p></div><div class="action-row"><button id="syncFeeds" class="button ghost">Threat Intelligence synchronisieren</button><button id="runXdr" class="button primary">Tiefenscan starten</button></div></div>
         <div class="metric-grid" id="xdrMetrics"></div>
-        <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">SOVEREIGN THREAT INTELLIGENCE</p><h3>9-Feed Enforcement Matrix</h3><p id="threatIntelGeneration" class="mono muted">Generation wird geladen.</p></div><div class="status-cluster"><span id="threatIntelState" class="status-pill warn">STARTING</span><span id="threatEnforcementState" class="status-pill warn">WFP UNVERIFIED</span></div></div><div id="threatFeedMatrix" class="threat-feed-grid"></div></article>
+        <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">SOVEREIGN THREAT INTELLIGENCE</p><h3>9-Feed Enforcement Matrix</h3><p id="threatIntelGeneration" class="mono muted">Generation wird geladen.</p></div><div class="status-cluster"><span id="threatIntelState" class="status-pill warn">STARTING</span><span id="threatEnforcementState" class="status-pill warn">WFP UNVERIFIED</span></div></div><div id="threatIntelOperationStrip" class="threat-intel-operation-strip" role="status" aria-live="polite" style="display:none;"><div style="display:flex;align-items:center;gap:10px;"><span id="threatIntelOperationState" class="status-pill info">IDLE</span><span id="threatIntelOperationDetail" class="mono" style="font-size:0.72rem">---</span></div></div><div id="threatFeedMatrix" class="threat-feed-grid"></div></article>
         <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">MANAGEMENT SAFETY PLANE</p><h3>Protected Networks</h3><p>Explizit geschützte öffentliche Management-IP/CIDR werden vor der WFP-Block-Generation mathematisch aus BLOCK-Prefixen subtrahiert. Die Threat-Intel-Korrelation bleibt davon unberührt.</p></div><span id="protectedNetworkState" class="status-pill info">0 PREFIXES</span></div><div class="protected-network-grid"><label>Geschützte IP/CIDR, eine pro Zeile<textarea id="protectedNetworks" rows="7" maxlength="16000" spellcheck="false" placeholder="198.20.30.40/32&#10;198.20.31.0/24"></textarea></label><label>Begründung<input id="protectedNetworkReason" type="text" maxlength="512" autocomplete="off" placeholder="Warum muss diese Management-Strecke erreichbar bleiben?"></label></div><div class="section-head protected-network-actions"><p id="protectedNetworkGeneration" class="mono muted">Policy-Generation wird geladen.</p><button id="updateProtectedNetworks" class="button danger">Protected Networks anwenden</button></div></article>
         <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">ATTACK STORIES</p><h3>Korrelation</h3></div></div><div id="attackStories" class="story-list empty-state">Noch keine korrelierten Angriffe.</div></article>
         <article class="glass table-card"><div class="section-head"><div><p class="eyebrow">REALTIME ANALYSES</p><h3>Prozessentscheidungen</h3></div></div><div class="table-wrap"><table><thead><tr><th>Zeit</th><th>Schwere</th><th>Prozess</th><th>Erkennung</th><th>Signale</th><th>Aktion</th></tr></thead><tbody id="analysisRows"></tbody></table></div></article>
@@ -90,6 +104,21 @@
         <div class="page-head"><div><p class="eyebrow">NATIVE NETWORK TELEMETRY</p><h2>Remote-IP → Owning PID → Prozesskontext.</h2><p>GeDefense nutzt Windows-eigene TCP-Tabellen und verbindet Threat-Intel-Treffer ohne zusätzliche Runtime mit MHX.</p></div><span id="networkState" class="status-pill info">NATIVE TCP</span></div>
         <div class="metric-grid" id="networkMetrics"></div>
         <article class="glass table-card"><div class="section-head"><div><p class="eyebrow">THREAT NETWORK FINDINGS</p><h3>Korrelierte Verbindungen</h3></div></div><div class="table-wrap"><table><thead><tr><th>Zeit</th><th>Prozess</th><th>Remote</th><th>Port</th><th>Policy</th><th>Feeds</th><th>Schwere</th><th>Response</th></tr></thead><tbody id="networkRows"></tbody></table></div></article>
+      </section>
+
+      <section class="view" data-page="kinetic" hidden>
+        <div class="page-head"><div><p class="eyebrow">KINETIC DEFENSE // WINDOWS</p><h2>Signal. Kontext. Schutz.</h2><p>WFP-5157-Bursts werden mit Threat-IP-Feeds korreliert. Ein erkannter Burst ist keine nachgewiesene SYN-Flut.</p></div><span class="status-pill warn" id="kineticState">OBSERVE ONLY</span></div>
+        <article class="glass section-card kinetic-hero"><div><p class="eyebrow">OPERATOR-CONTROLLED KINETIC</p><h3 id="kineticTitle">Beobachtungsmodus</h3><p id="kineticExplanation">Keine eigenständigen Kinetic-Sperrregeln. Windows Threat-Intel-WFP-Blockregeln werden nur nach geprüfter Generation als Schutzwirkung gewertet.</p><p class="mono muted" id="kineticCoverage">Coverage wird geladen.</p></div><div class="kinetic-actions"><button class="button primary" id="kineticArm">Threat-IP-Korrelation scharfschalten</button><button class="button ghost" id="kineticDisarm">Beobachtungsmodus</button></div></article>
+        <div class="metric-grid" id="kineticMetrics"></div>
+        <article class="glass section-card kinetic-geocard">
+          <div class="section-head"><div><p class="eyebrow">KINETIC GEO INTELLIGENCE // LOCAL ONLY</p><h3>Weltkarte · Länder · ASN</h3><p>Ungefähre Netzherkunft aus lokaler GeoIP/ASN-CSV. Keine externe IP-Anfrage, keine Herkunftsbehauptung über Personen.</p></div></div>
+          <div id="kineticGeoMap" class="kinetic-geo-map" aria-label="Kinetic Weltkarte"></div>
+          <p id="kineticGeoSummary" class="mono muted" aria-live="polite">GeoIP-Daten werden geprüft.</p>
+          <div class="table-wrap"><table><thead><tr><th>Quell-IP</th><th>Land</th><th>ASN</th><th>Provider</th><th>Ereignis</th></tr></thead><tbody id="kineticGeoRows"></tbody></table></div>
+          <p class="muted geo-attribution">Daten: DB-IP Lite (CC BY 4.0, db-ip.com), Origin ASN (PDDL). Näherungswerte, nicht Personenstandorte.</p>
+        </article>
+        <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">KINETIC TIMELINE</p><h3>Erkannte Bursts und Threat-IP-Korrelation</h3></div></div><div id="kineticTimeline" class="story-list empty-state">Noch keine Burst-Ereignisse.</div></article>
+        <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">KINETIC SIGNAL PIPELINE</p><h3>Erkennung und Verifikation</h3></div></div><div class="kinetic-pipeline"><span>WFP 5157<br><small>echte Blockevents</small></span><b>›</b><span>Burstfenster<br><small>≥ 12 / 10s / 3 Ports</small></span><b>›</b><span>Threat-IP<br><small>Feed-Match</small></span><b>›</b><span>WFP Generation<br><small>muss verifiziert sein</small></span></div><p class="muted">Kinetic Armed bedeutet aktuell aktive Korrelation, nicht die Installation neuer Kinetic-Sperrregeln. Separate dynamische Blocks benötigen einen eigenen, getesteten Enforcement-/Rollback-Mechanismus.</p></article>
       </section>
 
       <section class="view" data-page="integrity" hidden>
@@ -123,9 +152,17 @@
     </main>
   </div>
 
+  <dialog id="kineticDialog"><form method="dialog"><div class="dialog-head"><div><p class="eyebrow">KINETIC OPERATOR GATE</p><h2 id="kineticDialogTitle">Kinetic umschalten</h2></div></div><p id="kineticDialogExplanation">Freigabe wird geprüft.</p><label>Begründung<input id="kineticReason" type="text" maxlength="512" autocomplete="off" placeholder="Mindestens 8 Zeichen"></label><div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="kineticConfirm" value="default" class="button primary">Bestätigen</button></div></form></dialog>
   <dialog id="authDialog"><form method="dialog"><div class="dialog-head"><div><p class="eyebrow">OPERATOR ACCESS</p><h2>Lokale Sitzung entsperren</h2></div></div><p>Der Operator-Key bleibt ausschließlich im Arbeitsspeicher dieses Browser-Tabs.</p><label>Operator-Key<input id="operatorKey" type="password" autocomplete="off" spellcheck="false"></label><div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="authSubmit" value="default" class="button primary">Entsperren</button></div></form></dialog>
   <dialog id="protectionDialog"><form method="dialog"><div class="dialog-head"><div><p class="eyebrow">PROTECTION TRANSITION</p><h2 id="protectionDialogTitle">Schutzstufe ändern</h2></div></div><div id="protectionDialogBody" class="dialog-copy"></div><label>Begründung<input id="protectionReason" type="text" maxlength="512" autocomplete="off" placeholder="Warum wird diese Schutzstufe aktiviert?"></label><div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="protectionConfirm" value="default" class="button primary">Bestätigen</button></div></form></dialog>
   <dialog id="confirmDialog"><form method="dialog"><div class="dialog-head"><div><p class="eyebrow">SECURITY TRANSACTION</p><h2 id="confirmTitle">Aktion bestätigen</h2></div></div><p id="confirmText"></p><div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="confirmAction" value="default" class="button danger">Ausführen</button></div></form></dialog>
+  <dialog id="syncDialog"><form method="dialog"><div class="dialog-head"><div><p class="eyebrow">SOVEREIGN THREAT INTELLIGENCE</p><h2 id="syncDialogTitle">Threat Intelligence Synchronisation</h2></div></div><div id="syncDialogBody" class="dialog-copy"><p id="syncDialogStatusText">Threat-Feeds werden synchronisiert und WFP-Blockregeln verifiziert...</p><div class="progress" style="margin:16px 0"><span id="syncDialogProgressBar" style="width:25%"></span></div><div id="syncDialogDetails" class="mono muted" style="font-size:0.72rem;line-height:1.6">Verbindung zu Threat-Intelligence-Quellen wird aufgebaut...</div></div><div class="dialog-actions"><button id="syncDialogClose" value="cancel" class="button ghost" disabled>Schließen</button></div></form></dialog>
+  <dialog id="startupDialog" aria-labelledby="startupTitle" aria-describedby="startupSummary">
+    <header class="health-header"><div class="health-brand"><img src="/assets/gedefense-logo.png" alt=""><p class="eyebrow">GEDEFENSE · SYSTEMBEREITSCHAFT</p></div><h2 id="startupTitle">GeDefense wird vorbereitet</h2><p id="startupSummary"></p></header>
+    <div class="health-progress"><div class="health-progress-label" role="status" aria-live="polite"><span id="startupStage">Startcheck</span><span id="startupCount">0 / 4</span></div><progress id="startupProgress" value="0" max="4" aria-label="Fortschritt der Synchronisierung"></progress></div>
+    <ul id="startupChecks" class="health-checks" aria-label="Schutzbereiche"></ul>
+    <footer class="health-actions"><button id="startupRetry" class="button primary" hidden>Erneut synchronisieren</button><button id="startupClose" class="button ghost" autofocus>Im Hintergrund fortsetzen</button></footer>
+  </dialog>
   <div id="toasts" class="toasts" aria-live="polite"></div>
 </body>
 </html>

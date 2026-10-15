@@ -1,112 +1,69 @@
-// STATUS: DIAMANT VGT SUPREME
+// STATUS: PLATIN
 package server
 
 import (
 	"net/http"
-
-	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
+	"time"
 )
 
-func (s *Server) windowMinimize(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+// The service never accesses the desktop. The launcher is the sole consumer.
+func (s *Server) queueWindow(w http.ResponseWriter, action string) {
+	s.windowMu.Lock()
+	defer s.windowMu.Unlock()
+	if time.Since(s.windowClientAt) > 20*time.Second {
+		s.writeError(w, http.StatusServiceUnavailable, "GeDefense window is not connected")
 		return
 	}
-	hwnd, err := winapi.FindGeDefenseWindow()
-	if err != nil || hwnd == 0 {
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"action":  "minimize",
-			"handled": false,
-			"mode":    "browser",
-		})
-		return
+	select {
+	case s.windowCommands <- action:
+		s.writeJSON(w, http.StatusAccepted, map[string]any{"handled": true, "action": action})
+	default:
+		s.writeError(w, http.StatusTooManyRequests, "window command pending")
 	}
-	if err := winapi.MinimizeWindow(hwnd); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "failed to minimize window")
-		return
-	}
-	s.writeJSON(w, http.StatusOK, map[string]any{
-		"action":  "minimize",
-		"handled": true,
-		"mode":    "native",
-	})
 }
-
-func (s *Server) windowMaximize(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	hwnd, err := winapi.FindGeDefenseWindow()
-	if err != nil || hwnd == 0 {
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"action":    "maximize",
-			"handled":   false,
-			"mode":      "browser",
-			"maximized": false,
-		})
-		return
-	}
-	maximized, err := winapi.MaximizeOrRestoreWindow(hwnd)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "failed to toggle window maximize")
-		return
-	}
-	s.writeJSON(w, http.StatusOK, map[string]any{
-		"action":    "maximize",
-		"handled":   true,
-		"mode":      "native",
-		"maximized": maximized,
-	})
-}
-
-func (s *Server) windowClose(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	hwnd, err := winapi.FindGeDefenseWindow()
-	if err != nil || hwnd == 0 {
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"action":  "close",
-			"handled": false,
-			"mode":    "browser",
-		})
-		return
-	}
-	if err := winapi.CloseWindow(hwnd); err != nil {
-		s.writeError(w, http.StatusInternalServerError, "failed to close window")
-		return
-	}
-	s.writeJSON(w, http.StatusOK, map[string]any{
-		"action":  "close",
-		"handled": true,
-		"mode":    "native",
-	})
-}
+func (s *Server) windowMinimize(w http.ResponseWriter, r *http.Request) { s.queueWindow(w, "minimize") }
+func (s *Server) windowMaximize(w http.ResponseWriter, r *http.Request) { s.queueWindow(w, "maximize") }
+func (s *Server) windowClose(w http.ResponseWriter, r *http.Request)    { s.queueWindow(w, "close") }
+func (s *Server) windowDrag(w http.ResponseWriter, r *http.Request)     { s.queueWindow(w, "drag") }
 
 func (s *Server) windowState(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	hwnd, err := winapi.FindGeDefenseWindow()
-	if err != nil || hwnd == 0 {
-		s.writeJSON(w, http.StatusOK, map[string]any{
-			"state":   "normal",
-			"handled": false,
-			"mode":    "browser",
-		})
-		return
-	}
-	state, err := winapi.WindowState(hwnd)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "failed to query window state")
-		return
-	}
+	s.windowMu.Lock()
+	defer s.windowMu.Unlock()
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"state":   state,
-		"handled": true,
-		"mode":    "native",
+		"state": s.windowStateVal, "handled": time.Since(s.windowClientAt) <= 20*time.Second,
 	})
+}
+func (s *Server) windowPoll(w http.ResponseWriter, r *http.Request) {
+	s.windowMu.Lock()
+	s.windowClientAt = time.Now()
+	s.windowMu.Unlock()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case cmd := <-s.windowCommands:
+		s.writeJSON(w, http.StatusOK, map[string]string{"command": cmd})
+	case <-timer.C:
+		s.writeJSON(w, http.StatusOK, map[string]string{"command": "idle"})
+	case <-r.Context().Done():
+	}
+}
+func (s *Server) windowAck(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		State string `json:"state"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil || (req.State != "normal" && req.State != "maximized" && req.State != "minimized" && req.State != "closed") {
+		s.writeError(w, http.StatusBadRequest, "invalid window state")
+		return
+	}
+	s.windowMu.Lock()
+	s.windowStateVal = req.State
+	s.windowClientAt = time.Now()
+	if req.State == "closed" {
+		s.windowClientAt = time.Time{}
+		for len(s.windowCommands) > 0 {
+			<-s.windowCommands
+		}
+	}
+	s.windowMu.Unlock()
+	s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

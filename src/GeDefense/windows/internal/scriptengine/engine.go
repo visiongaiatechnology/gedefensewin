@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/visiongaiatechnology/gedefense/windows/internal/cleanup"
+
 	"github.com/visiongaiatechnology/gedefense/windows/internal/winexec"
 )
 
@@ -46,8 +48,7 @@ func New(script, operationRoot string, timeout time.Duration) (*Engine, error) {
 	return &Engine{script: script, operationRoot: operationRoot, timeout: timeout}, nil
 }
 
-func RunJSON[T any](engine *Engine, parent context.Context, operation string, extraArgs ...string) (T, error) {
-	var result T
+func RunJSON[T any](engine *Engine, parent context.Context, operation string, extraArgs ...string) (result T, err error) {
 	if operation == "" || len(operation) > 48 {
 		return result, errors.New("operation name rejected")
 	}
@@ -56,7 +57,7 @@ func RunJSON[T any](engine *Engine, parent context.Context, operation string, ex
 	ctx, cancel := context.WithTimeout(parent, engine.timeout)
 	defer cancel()
 	output := filepath.Join(engine.operationRoot, fmt.Sprintf("%s-%d.json", operation, time.Now().UnixNano()))
-	defer os.Remove(output)
+	defer cleanup.RemoveInto(&err, output)
 	arguments := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "AllSigned", "-File", engine.script, "-OutputPath", output}
 	arguments = append(arguments, extraArgs...)
 	powerShell, err := winexec.PowerShell()
@@ -81,7 +82,7 @@ func RunJSON[T any](engine *Engine, parent context.Context, operation string, ex
 	if err != nil {
 		return result, err
 	}
-	defer file.Close()
+	defer cleanup.CloseInto(&err, file)
 	raw, err := io.ReadAll(io.LimitReader(file, maxResultBytes+1))
 	if err != nil {
 		return result, err

@@ -3,7 +3,7 @@
 ```text
 // STATUS: DIAMANT VGT SUPREME
 // PLATFORM: Windows 11 x64
-// ARCHITECTURE MAP VERSION: 4.1.1
+// ARCHITECTURE MAP VERSION: 4.1.3
 // CONTROL PLANE: 127.0.0.1:17831
 ```
 
@@ -62,7 +62,7 @@
 2. **Zero External Frontend Dependencies**: The dashboard contains no CDN links, external font providers, remote JavaScript packages, or external frameworks. All assets (HTML, CSS, JS, SVG/PNG) are compiled directly into the Go executable via `embed.FS`.
 3. **Loopback-Only Control Plane**: The control plane binds strictly to `127.0.0.1:17831`. Requests are validated by RemoteAddr, Host header, Origin header, Bearer master token, or short-lived, authenticated HttpOnly/SameSite session cookies.
 4. **Privilege Separation & Isolation**:
-   - The UI runs inside the user's unprivileged default web browser.
+   - The UI runs inside a launcher-owned Win32 host with an unprivileged, PID-bound Chromium child renderer.
    - The interactive tray (`GeDefenseTray.exe`) and center launcher (`GeDefenseCenter.exe`) run as the unprivileged desktop operator.
    - The core background service (`gedefense-windows.exe`) runs with `LocalSystem` privileges under the Windows Service Control Manager (SCM).
    - System state mutations are executed via cryptographically signed PowerShell transactions using `ExecutionPolicy AllSigned`.
@@ -204,7 +204,7 @@ SYSTEM: VGT GeDefense Windows 4
 The following mapping links each physical file relative to the project root to its respective architectural domain:
 
 ### Client Tier (Tray, Launcher, Web Dashboard)
-- `src/GeDefense/windows/cmd/gedefense-center/main.go` → Single-instance GUI launcher; requests bootstrap code and opens browser.
+- `src/GeDefense/windows/cmd/gedefense-center/main.go` → Single-instance GUI launcher; requests bootstrap code and opens the native host and embeds its own Chromium process.
 - `src/GeDefense/windows/cmd/gedefense-tray/main.go` → System notification area background process; monitors status and triggers Center.
 - `src/GeDefense/windows/internal/launcher/launcher_windows.go` → HTTP client for `/api/v1/session/bootstrap`; opens target URL via `ShellExecuteW`.
 - `src/GeDefense/windows/internal/wintray/tray_windows.go` → Pure Win32 system tray implementation (window class, message loop, context menu).
@@ -225,7 +225,7 @@ The following mapping links each physical file relative to the project root to i
 - `src/GeDefense/windows/cmd/gedefense-windows/main.go` → Service entrypoint; parses CLI flags (`--console`, `--launch`, `--version`) and invokes SCM.
 - `src/GeDefense/windows/internal/service/service_windows.go` → Pure Win32 Service Control Manager integration (`StartServiceCtrlDispatcherW`).
 - `src/GeDefense/windows/internal/app/app.go` → Main application composition root; instantiates engines, opens ledger, runs workers, starts HTTP server.
-- `src/GeDefense/windows/internal/product/version.go` → Embedded version constant (`Version = "4.1.1"`).
+- `src/GeDefense/windows/internal/product/version.go` → Embedded version constant (`Version = "4.1.3"`).
 - `src/GeDefense/windows/internal/server/router.go` → HTTP ServeMux configuration; asset file serving and API route registration.
 - `src/GeDefense/windows/internal/server/middleware.go` → Host, RemoteAddr, Origin, Rate-Limit, Replay Guard, and Security Header middleware.
 - `src/GeDefense/windows/internal/server/session.go` → One-time bootstrap code generation, exchange logic, session cookie management.
@@ -385,7 +385,7 @@ Runs in the operator's user session as a lightweight tray notification icon (`Ge
 ### 4.5 Standalone Installer & Release Packager Module
 
 #### Purpose
-Provides a self-contained, digitally signed Windows installation and uninstallation package (`GeDefense-Setup-x64-v4.1.1.exe`).
+Provides a self-contained, digitally signed Windows installation and uninstallation package (`GeDefense-Setup-x64-v4.1.3.exe`).
 
 #### Capabilities
 - Extracts embedded zip payloads (`payload.zip`) safely: guards against zip-slip attacks, symlink traversal, decompression bombs, and reserved device names.
@@ -1384,7 +1384,7 @@ sequenceDiagram
 | `src/GeDefense/windows/cmd/gedefense-windows/main.go` | `main` | `main()`: Service dispatcher & CLI parser |
 | `src/GeDefense/windows/internal/service/service_windows.go` | `Runner`, `serviceStatus`, `serviceTableEntry` | `Run()`, `RunConsole()`, `serviceMain()`, `serviceControlHandler()` |
 | `src/GeDefense/windows/internal/app/app.go` | `App` | `New()`, `Run()` |
-| `src/GeDefense/windows/internal/product/version.go` | None | `const Version = "4.1.1"` |
+| `src/GeDefense/windows/internal/product/version.go` | None | `const Version = "4.1.3"` |
 | `src/GeDefense/windows/internal/server/router.go` | None | `New()`: builds http.ServeMux with all route bindings |
 | `src/GeDefense/windows/internal/server/types.go` | `Server`, `HardeningEngine`, `AuditEngine`, `XDREngine`, `MHXEngine`, `IntegrityEngine` | Subsystem interface definitions |
 | `src/GeDefense/windows/internal/server/middleware.go` | `replayGuard`, `rateWindow` | `headers()`, `authorize()`, `masterAuthorize()`, `claim()`, `allowRequest()` |
@@ -1446,7 +1446,7 @@ During the complete audit of the repository, several distinct architectural patt
 
 ```text
 // ARCHITECTURE MAP COMPLETE
-// VERIFIED AGAINST VGT CODEBASE v4.1.1
+// BASE ARCHITECTURE: v4.1.1; current changes documented in 4.1.2/4.1.3 addenda
 // ZERO COMPROMISE · ZERO EXTERNAL GO DEPENDENCIES · ZERO CDN ASSETS
 ```
 
@@ -1463,3 +1463,28 @@ The BLOCK projection is fingerprinted independently from the full correlation in
 Network intelligence does not create autonomous process-kill authority. Host response remains gated by independent MHX `ResponseAuthority` plus PID, creation-time and binary-path revalidation.
 
 Canonical subsystem specification: `docs/THREAT-INTELLIGENCE.md`.
+
+
+## 4.1.2 Addendum: Native Window Ownership and Startup Readiness
+
+This addendum supersedes older browser-launch and title-based window-control descriptions above.
+
+- `internal/winframe/host_windows.go` owns the Win32 host, message loop, nonclient layout, DPI-aware borders, work-area maximize bounds and child renderer sizing. `WM_NCCALCSIZE` removes the native caption. No window region or fixed header crop is used.
+- The interactive launcher starts Chromium in content-only kiosk mode with a unique temporary profile. It accepts only a visible window belonging to that launched PID and embeds it as `WS_CHILD`. It cancels and joins the browser and coordinator when the host exits. It never deletes another profile's locks or terminates a browser selected by command-line substring.
+- The service performs no Win32 desktop operations. Authenticated window POSTs enter a bounded single-item queue. Only the launcher consumes commands and posts them to its own UI thread. State GETs are read-only; disconnected hosts return unavailable for mutations. Master-authenticated acknowledgements accept a strict state enum and reject unknown/trailing JSON.
+- `web/window-controls.js` drives the existing custom controls, disables them without a connected host and reports transport errors.
+- After session authentication, `web/startup-health.js` opens the readiness dialog, reconciles the existing protection mode if unverified, refreshes Threat Intelligence when needed and calls `POST /api/v1/health/refresh`.
+- The health endpoint runs a fresh read-only Windows audit (bypassing the posture cache), inspects current policy, process/network sensors, feed coverage, active firewall generation and ledger integrity. Its seven fixed checks return only `healthy` or `attention`, with operator actions. Green requires observed evidence. It does not enable Sovereign, Kinetic, broad hardening profiles or optional integrity scans.
+- Failed initial posture audits return an error. They never synthesize enabled Defender or Firewall values. Repeated concurrent policy reconciliation calls coalesce after a recent verified result under the existing policy gate.
+- Build toolchain: Go 1.26.9, Windows PowerShell 5.1. Runtime and frontend retain zero external code dependencies.
+
+Verification uses native Edge/Chrome hosting tests and isolated browser fixtures in `test/startup-health.browser.cjs`; fixture results are not proof of a fresh installed Windows security configuration.
+
+
+## 4.1.3 Addendum: Native Frame Painting and Error Contracts
+
+The host class owns a solid brush matching the product background (#050b14), replacing the COLOR_MENU background that exposed a light resize gutter. Windows owns brush deletion after successful class registration; UnregisterClass releases the class brush. DWM border color is explicitly NONE, and no glass margin is extended into the client. Unsupported optional DWM attributes are distinguished from actual HRESULT failures.
+
+Startup is maximized to the nearest monitor work area. The restore rectangle is centered at 92% of work-area width and 90% of work-area height; no fixed 1280x820 native-pixel size remains. Native tests inspect actual gutter pixels after browser attachment, as well as parent ownership and state transitions.
+
+internal/winapi/result_windows.go separates BOOL and HRESULT error contracts from stale GetLastError values. Informational/VOID return values are documented locally; state-changing calls with ambiguous returns are checked through their actual postconditions. internal/cleanup conserves deferred Close and temporary-file/staging-removal failures in named operation results. Tray event watching has bounded waits, explicit cancellation and a join before native resources are released.

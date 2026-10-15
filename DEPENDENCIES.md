@@ -2,7 +2,7 @@
 
 ## Go-Module
 
-GeDefense Windows 4 verwendet **keine externen Go-Module**. `src/GeDefense/windows/go.mod` enthält ausschließlich Modulpfad und Go-Version; `go.sum` ist absichtlich leer.
+GeDefense Windows 4 verwendet **keine externen Go-Module**. `src/GeDefense/windows/go.mod` enthält ausschließlich Modulpfad, Go-Sprachversion und gepinnte Build-Toolchain; `go.sum` ist absichtlich leer.
 
 Windows-spezifische Funktionen werden über kleine interne Wrapper gegen öffentliche Win32-APIs umgesetzt. Es entstehen keine transitiven Go-Abhängigkeiten und keine zusätzliche UI-Runtime.
 
@@ -11,10 +11,11 @@ Windows-spezifische Funktionen werden über kleine interne Wrapper gegen öffent
 - Microsoft Windows 11 x64
 - Microsoft Defender Antivirus und verfügbare Windows-Sicherheitsfunktionen
 - Windows PowerShell 5.1 für signierte Hardening-/Systemtransaktionen
+- Lokal installierter Chromium-Browser (Edge, Chrome oder Brave) als eingebetteter Renderer im eigenen Win32-Fensterhost
 
 ## Build
 
-- Offizielle VGT-Release-Toolchain: Go 1.27.1 (siehe `TOOLCHAINS.lock`)
+- Offizielle VGT-Release-Toolchain: Go 1.26.9 (siehe `TOOLCHAINS.lock`)
 - Windows PowerShell 5.1
 - ein für den Go-Race-Detector geeignetes Windows-x64-Buildsystem für den vollständigen Release-Gate
 

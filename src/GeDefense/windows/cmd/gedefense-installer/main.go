@@ -15,6 +15,8 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/visiongaiatechnology/gedefense/windows/internal/cleanup"
+
 	"github.com/visiongaiatechnology/gedefense/windows/internal/product"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/winexec"
@@ -55,7 +57,7 @@ func isElevated() bool {
 	return winapi.IsProcessElevated()
 }
 
-func execute(uninstall, elevated bool, progress ProgressCallback) error {
+func execute(uninstall, elevated bool, progress ProgressCallback) (err error) {
 	report := func(percent int, status, detail string) {
 		if progress != nil {
 			progress(percent, status, detail)
@@ -74,7 +76,7 @@ func execute(uninstall, elevated bool, progress ProgressCallback) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(staging)
+	defer cleanup.RemoveTreeInto(&err, staging)
 
 	report(10, "Dateien werden extrahiert...", "Lade eingebettetes Payload-Archiv...")
 	archive, err := installerPayload()
@@ -249,7 +251,7 @@ func extractFile(entry *zip.File, target string) (err error) {
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	defer cleanup.CloseInto(&err, source)
 
 	destination, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {

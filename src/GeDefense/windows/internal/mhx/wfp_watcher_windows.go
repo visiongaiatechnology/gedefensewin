@@ -9,11 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/netip"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winexec"
 )
 
 const wfpBlockTraceScript = `$ErrorActionPreference='Stop'
@@ -52,12 +53,12 @@ while ($true) {
       if (-not [int]::TryParse([string]$fields.Protocol,[ref]$protocolValue)) { continue }
       if (-not [long]::TryParse([string]$fields.FilterRTID,[ref]$filterValue)) { $filterValue = 0L }
       $directionToken = [string]$fields.Direction
-      if ($directionToken -eq '%%14593') {
+      if ($directionToken -eq '%%14593' -or $directionToken -match '(?i)outbound|ausgehend') {
         $direction = 'Outbound'
         $remoteAddress = [string]$fields.DestAddress
         [void][int]::TryParse([string]$fields.DestPort,[ref]$remotePortValue)
         [void][int]::TryParse([string]$fields.SourcePort,[ref]$localPortValue)
-      } elseif ($directionToken -eq '%%14592') {
+      } elseif ($directionToken -eq '%%14592' -or $directionToken -match '(?i)inbound|eingehend') {
         $direction = 'Inbound'
         $remoteAddress = [string]$fields.SourceAddress
         [void][int]::TryParse([string]$fields.SourcePort,[ref]$remotePortValue)
@@ -105,11 +106,13 @@ func (wfpBlockWatcher) Run(ctx context.Context, output chan<- wfpBlockEvent, hea
 		deliverFault(faults, err)
 		return
 	}
-	command := exec.CommandContext(ctx, path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-")
-	stdin, err := command.StdinPipe()
-	if err != nil {
-		deliverFault(faults, err)
-		return
+	command := exec.CommandContext(ctx, path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", wfpBlockTraceScript)
+	command.WaitDelay = 3 * time.Second
+	command.Cancel = func() error {
+		if command.Process != nil && command.Process.Pid > 0 {
+			_ = winexec.KillProcessTree(command.Process.Pid)
+		}
+		return command.Process.Kill()
 	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -125,7 +128,6 @@ func (wfpBlockWatcher) Run(ctx context.Context, output chan<- wfpBlockEvent, hea
 		deliverFault(faults, err)
 		return
 	}
-	go func() { _, _ = io.WriteString(stdin, wfpBlockTraceScript); _ = stdin.Close() }()
 	go consumeErrors(ctx, stderr, faults)
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)

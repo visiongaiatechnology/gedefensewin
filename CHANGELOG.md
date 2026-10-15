@@ -1,5 +1,38 @@
 # Changelog
 
+## [4.1.3] - 2026-10-15
+
+### Neu seit dem bisherigen öffentlichen 4.1.1-Stand
+
+- **Kinetic Defense:** Eigene Oberfläche für reale eingehende WFP-5157-Blockereignisse, begrenzte Burst-Erkennung und Threat-IP-Korrelation. Standard `OBSERVE_ONLY`; bestätigtes `ARMED_TI_CORRELATION` setzt verfügbare Telemetrie und eine verifizierte aktive Threat-IP-Firewallgeneration voraus. Keine separaten dynamischen Kinetic-Sperrregeln und keine IP-basierte Prozess-Kill-Autorität.
+- **Native Traffic-Anzeige:** RX/TX-Interface-Zähler über `GetIfTable2`, mit `GetIfTable`-Fallback, Zwei-Sekunden-Abtastung und begrenztem Verlauf.
+- **Lokale GeoIP/ASN-Karte:** Herkunftskontext für tatsächlich beobachtete Ereignisse, lokale CSV mit SHA-256-Prüfung, keine externen IP-Abfragen und keine synthetischen Standortmarkierungen.
+- **Automatischer Startcheck aus 4.1.2:** Synchronisiert die konfigurierte Policy sowie bei Bedarf Threat-Feeds/WFP und bewertet sieben Schutzbereiche anhand frischer Backend-Daten. Wiederholung und Hintergrundbetrieb sind möglich; fehlgeschlagene Messungen werden nicht als gesund ausgegeben.
+
+### Korrigiert und gehärtet
+
+- Dunkler nativer Fensterhintergrund und unterdrückte DWM-Akzentkante beseitigen den weißen Rand. Start maximiert; Wiederherstellen auf 92 % Breite und 90 % Höhe der aktuellen Monitor-Arbeitsfläche.
+- Alle 92 Fundstellen des vollständigen, unbegrenzten golangci-lint-Scans bereinigt (zuvor wurden nur 53 angezeigt). Keine Linter-Ausnahmen oder Unterdrückungsregeln hinzugefügt.
+- Win32-Rückgaben werden gemäß BOOL-, HRESULT-, Zustands- und VOID-Verträgen behandelt. Deferred-Close-/Cleanup-Fehler werden mit dem Operationsergebnis erhalten; der Tray-Ereignis-Worker wird beim Beenden abgebrochen und verbunden.
+- Native Regression prüft maximierten Start, proportionale Wiederherstellungsgröße und tatsächliche Randpixel nach Einbettung von Edge/Chrome.
+
+- Fensterbefehle werden ausschließlich vom Launcher am eigenen nativen Host ausgeführt. Fremde Explorer-Fenster mit „GeDefense“ im Titel werden nicht mehr als Ziel gesucht.
+- Das Startdialog-Overlay sperrt das Scrollen des Hintergrunds.
+- Sicherheitsstand der offiziellen Go-Buildbasis: 1.26.9.
+
+### Veröffentlichung und Verifikation
+
+- Signierter x64-Standalone-Installer mit Manifest und veröffentlichten SHA-256-Prüfsummen; bereinigte Quellen ohne private Signierdaten, Laufzeitdaten oder Buildausgaben.
+- Race-Tests, Vet, Staticcheck, unbegrenzter golangci-lint-Scan, wiederholte Tests, native Edge-/Chrome-Fensterregressionen und sechs Browser-Szenarien bestanden. Quell- und Service-Binary-Vulnerability-Scan ohne Befund.
+- Der separate vollständige VM-Neuinstallations-/Upgrade-Test steht aus. Umfang und Grenzen sind in `docs/VERIFICATION-4.1.3.md` dokumentiert.
+
+## [4.1.2] - 2026-10-15
+
+- Eigener Win32-Fensterhost ohne zusätzliche Windows-Titelleiste; PID-gebundener Browser und genau ein Empfänger für Fensterbefehle. Keine Titelsuche und kein fester Bildzuschnitt mehr.
+- Automatischer Startdialog synchronisiert den konfigurierten Schutzmodus und Threat Intelligence. Sieben Schutzbereiche werden serverseitig anhand aktueller Messungen bewertet; Wiederholung und Hintergrundbetrieb sind möglich.
+- Fehlgeschlagene erste Windows-Prüfungen erzeugen keine erfundenen grünen Sicherheitswerte mehr. Interne Policy-/Feed-Fehler bleiben im Dienstprotokoll.
+- Go-Buildbasis auf Sicherheitsstand 1.26.9 aktualisiert.
+
 ## [4.1.1] - 2026-09-25
 
 ### Added

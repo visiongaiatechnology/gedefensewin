@@ -1,37 +1,17 @@
 # GitHub-Veröffentlichung
 
-Der Ordner ist als quelloffenes Repository vorbereitet. Er enthält weder Windows-
-Installationsmedien noch erzeugte Binärdateien, private Schlüssel, Laufzeittokens oder
-lokale Evidenzdaten.
+Repository: https://github.com/visiongaiatechnology/gedefensewin
 
-## Erstveröffentlichung
+Die öffentliche Historie wird fortgeführt. Quellen werden aus einem sauberen Checkout auf `main` veröffentlicht; keine erzwungene Überschreibung der Historie.
 
-```powershell
-git add .
-git commit -S -m 'Initial open-source release of GeDefense Windows 4.1.0-beta.1'
-git remote add origin https://github.com/VisionGaiaTechnology/GeDefense-Windows.git
-git push -u origin main
-```
+## Inhalte
 
-Vor dem Push muss auf GitHub ein leeres Repository mit dem Namen
-`GeDefense-Windows` unter der Organisation `VisionGaiaTechnology` existieren. GitHub
-soll dabei keine eigene README, Lizenz oder `.gitignore` erzeugen, weil diese Dateien
-bereits Bestandteil dieses Repositorys sind.
+- Quellcode, Tests, signierte Systemskripte, Branding, Dokumentation und Lizenztexte.
+- Keine privaten Zertifikate, lokalen Vertrauensdateien, Tokens, Laufzeitdaten, Logs oder Buildausgaben.
+- Die große optionale GeoIP-CSV wird nicht in Git versioniert. Herkunft, Format und der im Installer enthaltene Datenstand stehen in `GEOIP_LICENSE_AND_DEPLOYMENT.md`.
 
-## Empfohlene Repository-Einstellungen
+## Release 4.1.3
 
-- Branch Protection für `main`
-- mindestens ein Review für Pull Requests
-- erfolgreiche `security-ci`-Prüfung als Merge-Voraussetzung
-- signierte Commits und lineare Historie
-- private Schwachstellenmeldungen aktivieren
-- Dependabot Security Updates aktivieren
-- Secret Scanning und Push Protection aktivieren
-- Releases ausschließlich aus signierten Tags erzeugen
+Das Tag `v4.1.3` bezeichnet den veröffentlichten Quellstand. Das Release enthält den signierten x64-Installer, dessen JSON-Manifest, ein verifiziertes Source-ZIP und SHA-256-Prüfsummen. Releasebeschreibung: `RELEASE-NOTES.md`.
 
-## Release-Grenze
-
-Ein GitHub-Release darf Community-Builds enthalten, muss sie aber eindeutig als solche
-kennzeichnen. Der Name, die Logos und die Bezeichnung „offizielles VGT-Release“ dürfen
-nur gemäß `TRADEMARKS.md` und der Branding-Lizenz verwendet werden. Microsoft-
-Komponenten oder Windows-Abbilder werden nicht in diesem Repository verteilt.
+Build- und Veröffentlichungsschritte: [docs/BUILDING.md](docs/BUILDING.md), [docs/RELEASING.md](docs/RELEASING.md). Der tatsächliche Qualifikationsstand ist in [docs/VERIFICATION-4.1.3.md](docs/VERIFICATION-4.1.3.md) dokumentiert.

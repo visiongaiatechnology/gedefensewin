@@ -1,11 +1,10 @@
-// STATUS: DIAMANT VGT SUPREME
+// STATUS: PLATIN
 //go:build windows
 
 package winframe
 
 import (
 	"errors"
-	"sync"
 	"syscall"
 	"unsafe"
 
@@ -60,9 +59,6 @@ const (
 	dwmsbtMainWindow      = 2 // Mica
 	dwmsbtTransientWindow = 3 // Acrylic Glass
 
-	defaultTitlebarHeight = 38
-	defaultResizeBorder   = 6
-	defaultButtonsWidth   = 138
 )
 
 type point struct {
@@ -93,37 +89,11 @@ var (
 	procCreateWindowExW               = user32.NewProc("CreateWindowExW")
 	procDefWindowProcW                = user32.NewProc("DefWindowProcW")
 	procDestroyWindow                 = user32.NewProc("DestroyWindow")
-	procShowWindow                    = user32.NewProc("ShowWindow")
-	procUpdateWindow                  = user32.NewProc("UpdateWindow")
 	procGetClientRect                 = user32.NewProc("GetClientRect")
-	procGetWindowRect                 = user32.NewProc("GetWindowRect")
-	procScreenToClient                = user32.NewProc("ScreenToClient")
 	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
 	procDwmSetWindowAttribute         = dwmapi.NewProc("DwmSetWindowAttribute")
 	procDwmExtendFrameIntoClientArea  = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
-
-	frameClassRegistered bool
-	frameClassMu         sync.Mutex
 )
-
-// FrameConfig defines options for creating a custom Non-Client Win32 frame window.
-type FrameConfig struct {
-	Title          string
-	Width          int32
-	Height         int32
-	TitlebarHeight int32
-	ResizeBorder   int32
-	ButtonsWidth   int32
-}
-
-// Frame represents a custom Non-Client Win32 Frame with borderless DWM styling.
-type Frame struct {
-	hwnd           winapi.Handle
-	config         FrameConfig
-	titlebarHeight int32
-	resizeBorder   int32
-	buttonsWidth   int32
-}
 
 // CalculateHitTest determines the non-client hit test code based on window-relative coordinates.
 // It is pure and independently testable across all screen layouts.
@@ -173,59 +143,30 @@ func CalculateHitTest(ptX, ptY, clientWidth, clientHeight, border, titlebarHeigh
 	return htClient
 }
 
-// Handle returns the native window handle.
-func (f *Frame) Handle() winapi.Handle {
-	return f.hwnd
-}
-
-// Close destroys the frame window.
-func (f *Frame) Close() error {
-	if f.hwnd != 0 {
-		procDestroyWindow.Call(uintptr(f.hwnd))
-		f.hwnd = 0
-	}
-	return nil
-}
-
-// ConfigureDWM applies Windows 11 immersive dark mode, rounded corners, and frame extension.
+// ConfigureDWM applies a dark, border-free compositor frame. Attributes absent
+// on Windows 10 are optional; actual failures from supported DWM calls propagate.
 func ConfigureDWM(hwnd winapi.Handle) error {
 	if hwnd == 0 {
 		return errors.New("invalid handle")
 	}
-
-	// Immersive Dark Mode
-	var darkMode int32 = 1
-	procDwmSetWindowAttribute.Call(
-		uintptr(hwnd),
-		uintptr(dwmwaUseImmersiveDarkMode),
-		uintptr(unsafe.Pointer(&darkMode)),
-		uintptr(unsafe.Sizeof(darkMode)),
-	)
-
-	// Rounded Corners
-	var cornerPref int32 = dwmwcpRound
-	procDwmSetWindowAttribute.Call(
-		uintptr(hwnd),
-		uintptr(dwmwaWindowCornerPreference),
-		uintptr(unsafe.Pointer(&cornerPref)),
-		uintptr(unsafe.Sizeof(cornerPref)),
-	)
-
-	// System Backdrop: Acrylic Glass / Mica
-	var backdropType int32 = dwmsbtMainWindow
-	procDwmSetWindowAttribute.Call(
-		uintptr(hwnd),
-		uintptr(dwmwaSystemBackdropType),
-		uintptr(unsafe.Pointer(&backdropType)),
-		uintptr(unsafe.Sizeof(backdropType)),
-	)
-
-	// Extend Frame Into Client Area by 1px to preserve DWM drop shadow
-	m := margins{cxLeftWidth: 0, cxRightWidth: 0, cyTopHeight: 1, cyBottomHeight: 0}
-	procDwmExtendFrameIntoClientArea.Call(
-		uintptr(hwnd),
-		uintptr(unsafe.Pointer(&m)),
-	)
-
-	return nil
+	var failures []error
+	for _, attribute := range []struct {
+		id    uint32
+		value uint32
+	}{
+		{dwmwaUseImmersiveDarkMode, 1}, {dwmwaWindowCornerPreference, dwmwcpRound},
+		{dwmwaBorderColor, 0xfffffffe}, {dwmwaSystemBackdropType, dwmsbtMainWindow},
+	} {
+		value := attribute.value
+		result, _, _ := procDwmSetWindowAttribute.Call(uintptr(hwnd), uintptr(attribute.id), uintptr(unsafe.Pointer(&value)), unsafe.Sizeof(value))
+		if uint32(result) == 0x80070057 || uint32(result) == 0x80004001 {
+			continue
+		} // Attribute unsupported by this Windows build.
+		failures = append(failures, winapi.CheckHRESULT("DwmSetWindowAttribute", result))
+	}
+	// No glass extension: the host paints its entire client, including resize edges.
+	m := margins{}
+	result, _, _ := procDwmExtendFrameIntoClientArea.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&m)))
+	failures = append(failures, winapi.CheckHRESULT("DwmExtendFrameIntoClientArea", result))
+	return errors.Join(failures...)
 }

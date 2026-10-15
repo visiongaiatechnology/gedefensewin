@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/visiongaiatechnology/gedefense/windows/internal/cleanup"
+
 	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 )
 
@@ -19,12 +21,12 @@ func validateObservedProcess(event ProcessEvent) error {
 	return identity.Close()
 }
 
-func terminateProcess(event ProcessEvent) error {
+func terminateProcess(event ProcessEvent) (err error) {
 	identity, err := openObservedProcess(event, true)
 	if err != nil {
 		return err
 	}
-	defer identity.Close()
+	defer cleanup.CloseInto(&err, &identity)
 	if err := identity.Terminate(0xC0000420); err != nil {
 		return fmt.Errorf("terminate observed process: %w", err)
 	}
@@ -46,12 +48,10 @@ func openObservedProcess(event ProcessEvent, terminate bool) (winapi.ProcessIden
 	// CIM timestamps and GetProcessTimes can differ slightly in representation.
 	// A two-second tolerance preserves identity validation without accepting PID reuse.
 	if difference > 2*time.Second {
-		identity.Close()
-		return winapi.ProcessIdentity{}, errors.New("process identity changed before response")
+		return winapi.ProcessIdentity{}, errors.Join(errors.New("process identity changed before response"), identity.Close())
 	}
 	if !winapi.SameImagePath(identity.ImagePath, event.ImagePath) {
-		identity.Close()
-		return winapi.ProcessIdentity{}, errors.New("process image changed before response")
+		return winapi.ProcessIdentity{}, errors.Join(errors.New("process image changed before response"), identity.Close())
 	}
 	return identity, nil
 }

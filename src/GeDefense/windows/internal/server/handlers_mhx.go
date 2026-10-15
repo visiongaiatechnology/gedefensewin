@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -42,7 +43,8 @@ func (s *Server) mhxSyncFeeds(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Minute)
 	defer cancel()
 	if err := s.mhx.SyncFeeds(ctx); err != nil {
-		s.writeError(w, http.StatusServiceUnavailable, "threat intelligence synchronization failed")
+		log.Printf("threat intelligence synchronization: %v", err)
+		s.writeError(w, http.StatusServiceUnavailable, "Threat Intelligence konnte nicht synchronisiert werden. Verbindung und Installationsdiagnose prüfen.")
 		return
 	}
 	s.writeJSON(w, http.StatusOK, s.mhx.Status().ThreatIntelligence)
@@ -179,7 +181,8 @@ func (s *Server) mhxReconcilePolicy(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Minute)
 	defer cancel()
 	if err := s.mhx.ReconcilePolicy(ctx); err != nil {
-		s.writeError(w, http.StatusConflict, fmt.Sprintf("policy reconciliation failed: %v", err))
+		log.Printf("policy reconciliation: %v", err)
+		s.writeError(w, http.StatusConflict, "Policy konnte nicht verifiziert werden. Installationsdiagnose prüfen.")
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{

@@ -10,5 +10,7 @@
 | Microsoft Defender / WFP / App Control | Betriebssystemfunktionen | Microsoft-Lizenz |
 | abuse.ch Feodo Tracker | Laufzeit-Feed | Bedingungen des Anbieters; nicht gebündelt |
 | Spamhaus DROP | Laufzeit-Feed | Spamhaus-Nutzungsbedingungen; nicht gebündelt |
+| Kartengeometrie | src/GeDefense/windows/internal/server/web/world-merc.js | MIT; LICENSES/jsVectorMap-LICENSE |
+| Optionale GeoIP/ASN-Daten | lokale geoip.csv im Installer; nicht in Git | DB-IP Lite / CC BY 4.0, ASN / PDDL laut importierter Integration; siehe THIRD-PARTY-NOTICES.md |
 
-GeDefense Windows 4.1.1 besitzt keine externen Go-Module.
+GeDefense Windows 4.1.3 besitzt keine externen Go-Module.
