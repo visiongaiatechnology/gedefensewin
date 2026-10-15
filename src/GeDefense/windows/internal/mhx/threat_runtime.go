@@ -39,9 +39,28 @@ func (e *Engine) applyThreatEnforcement(ctx context.Context, status threatintel.
 	if err != nil || result.Indicators != status.BlockingIndicators || result.Generation != status.EnforcementGeneration || result.ProtectionGeneration != status.ProtectionGeneration || result.ProtectedPrefixCount != status.ProtectedPrefixes || result.Rules <= 0 || result.Shards <= 0 {
 		verificationErr := err
 		if verificationErr == nil {
-			verificationErr = errors.New("threat intelligence firewall verification failed")
+			var reasons []string
+			if result.Indicators != status.BlockingIndicators {
+				reasons = append(reasons, fmt.Sprintf("indicators mismatch (%d != %d)", result.Indicators, status.BlockingIndicators))
+			}
+			if result.Generation != status.EnforcementGeneration {
+				reasons = append(reasons, fmt.Sprintf("generation mismatch (%s != %s)", result.Generation, status.EnforcementGeneration))
+			}
+			if result.ProtectionGeneration != status.ProtectionGeneration {
+				reasons = append(reasons, fmt.Sprintf("protection generation mismatch (%s != %s)", result.ProtectionGeneration, status.ProtectionGeneration))
+			}
+			if result.ProtectedPrefixCount != status.ProtectedPrefixes {
+				reasons = append(reasons, fmt.Sprintf("protected prefixes mismatch (%d != %d)", result.ProtectedPrefixCount, status.ProtectedPrefixes))
+			}
+			if result.Rules <= 0 {
+				reasons = append(reasons, "rules <= 0")
+			}
+			if result.Shards <= 0 {
+				reasons = append(reasons, "shards <= 0")
+			}
+			verificationErr = fmt.Errorf("firewall enforcement verification failed: %s", strings.Join(reasons, ", "))
 		}
-		e.setThreatEnforcementFailure(status.EnforcementGeneration, "firewall enforcement verification failed")
+		e.setThreatEnforcementFailure(status.EnforcementGeneration, verificationErr.Error())
 		_ = e.ledger.Append("mhx.intelligence", "firewall-enforcement", "failed")
 		return verificationErr
 	}

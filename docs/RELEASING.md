@@ -34,3 +34,9 @@ Offizielle VGT-Artefakte werden ausschließlich mit den in `TOOLCHAINS.lock` gep
 ```
 
 Der Source-Builder leitet den ZIP-Zeitstempel aus dem aktuellen Changelog-Release-Datum ab, verwendet eine stabile Dateireihenfolge, speichert Einträge ohne kompressorabhängige Variabilität und erzeugt zusätzlich `SOURCE-MANIFEST.sha256` sowie eine SHA-256-Sidecar-Datei für das Archiv.
+
+## Publikationsstand 4.1.3
+
+Repository: https://github.com/visiongaiatechnology/gedefensewin . Das Release dokumentiert die tatsächlich bestandenen Build-, Analyse-, Fenster- und Fixture-Prüfungen. Die separate vollständige VM-Neuinstallation/Upgrade-Qualifikation und eine unabhängige Vier-Augen-Freigabe sind damit nicht nachgewiesen; siehe VERIFICATION-4.1.3.md. Die Veröffentlichung behauptet keine darüber hinausgehende Qualifikation.
+
+Sources und Commit-Tag werden vor dem Release gepusht. Assets zunächst in einen Entwurf hochladen, Größe und SHA-256 prüfen und erst danach veröffentlichen. Private Schlüssel und lokale Laufzeitdaten bleiben ausgeschlossen.

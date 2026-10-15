@@ -11,3 +11,9 @@ path = ["branding/**", "src/**/gedefense-logo.png", "src/**/gedefense.ico"]
 precedence = "override"
 SPDX-FileCopyrightText = "2026 VisionGaia Technology"
 SPDX-License-Identifier = "LicenseRef-VGT-Trademark-Restricted"
+
+[[annotations]]
+path = ["src/GeDefense/windows/internal/server/web/world-merc.js"]
+precedence = "override"
+SPDX-FileCopyrightText = "2020 Mustafa Omar"
+SPDX-License-Identifier = "MIT"

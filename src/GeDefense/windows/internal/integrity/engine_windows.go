@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/visiongaiatechnology/gedefense/windows/internal/cleanup"
+
 	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 )
@@ -188,7 +190,7 @@ func (e *Engine) Start() error {
 	return nil
 }
 
-func (e *Engine) Changes(limit, offset int) ([]Change, error) {
+func (e *Engine) Changes(limit, offset int) (changes []Change, err error) {
 	if limit <= 0 || limit > maximumAPIChanges || offset < 0 || offset > 10_000_000 {
 		return nil, errors.New("integrity change window rejected")
 	}
@@ -204,7 +206,7 @@ func (e *Engine) Changes(limit, offset int) ([]Change, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer cleanup.CloseInto(&err, file)
 	result := make([]Change, 0, limit)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64<<10), 2<<20)
@@ -299,8 +301,7 @@ func (e *Engine) writeSnapshot(ctx context.Context, target string) (scanCounters
 	for index := 0; index < bucketCount; index++ {
 		file, err := os.OpenFile(filepath.Join(target, fmt.Sprintf("%02x.jsonl", index)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
-			closeBucketFiles(files, writers)
-			return scanCounters{}, err
+			return scanCounters{}, errors.Join(err, closeBucketFiles(files, writers))
 		}
 		files[index] = file
 		writers[index] = bufio.NewWriterSize(file, 64<<10)
@@ -477,12 +478,12 @@ func fixedDriveRoots() ([]string, error) {
 	return roots, nil
 }
 
-func hashFile(ctx context.Context, path string, buffer []byte) (FileRecord, error) {
+func hashFile(ctx context.Context, path string, buffer []byte) (record FileRecord, err error) {
 	file, before, err := winapi.OpenRegularFileNoReparse(path)
 	if err != nil {
 		return FileRecord{}, err
 	}
-	defer file.Close()
+	defer cleanup.CloseInto(&err, file)
 	hash := sha256.New()
 	reader := &contextReader{ctx: ctx, reader: file}
 	if _, err := io.CopyBuffer(hash, reader, buffer); err != nil {
@@ -512,14 +513,14 @@ func (r *contextReader) Read(buffer []byte) (int, error) {
 	}
 }
 
-func (e *Engine) compare(previous, currentDirectory string) (uint64, uint64, uint64, uint64, error) {
+func (e *Engine) compare(previous, currentDirectory string) (added, modified, deleted, stored uint64, err error) {
 	changesPath := filepath.Join(currentDirectory, "changes.jsonl")
 	changesFile, err := os.OpenFile(changesPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}
 	writer := bufio.NewWriterSize(changesFile, 128<<10)
-	defer changesFile.Close()
+	defer cleanup.CloseInto(&err, changesFile)
 	if previous == "" {
 		if err := writer.Flush(); err != nil {
 			return 0, 0, 0, 0, err
@@ -527,7 +528,7 @@ func (e *Engine) compare(previous, currentDirectory string) (uint64, uint64, uin
 		return 0, 0, 0, 0, nil
 	}
 	previousDirectory := filepath.Join(e.root, "snapshots", previous)
-	var added, modified, deleted, stored uint64
+
 	for index := 0; index < bucketCount; index++ {
 		oldRecords, err := readBucket(filepath.Join(previousDirectory, fmt.Sprintf("%02x.jsonl", index)))
 		if err != nil {
@@ -576,12 +577,12 @@ func (e *Engine) compare(previous, currentDirectory string) (uint64, uint64, uin
 	return added, modified, deleted, stored, nil
 }
 
-func readBucket(path string) (map[string]FileRecord, error) {
+func readBucket(path string) (result map[string]FileRecord, err error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer cleanup.CloseInto(&err, file)
 	records := make(map[string]FileRecord)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64<<10), 2<<20)
@@ -683,23 +684,20 @@ func (e *Engine) load() error {
 	return nil
 }
 
-func atomicWrite(path string, payload []byte) error {
+func atomicWrite(path string, payload []byte) (err error) {
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".integrity-state-*.tmp")
 	if err != nil {
 		return err
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer cleanup.RemoveInto(&err, temporaryPath)
 	if err = temporary.Chmod(0o600); err == nil {
 		_, err = temporary.Write(payload)
 	}
 	if err == nil {
 		err = temporary.Sync()
 	}
-	closeErr := temporary.Close()
-	if err == nil {
-		err = closeErr
-	}
+	err = errors.Join(err, temporary.Close())
 	if err != nil {
 		return err
 	}

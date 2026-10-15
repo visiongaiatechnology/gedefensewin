@@ -1,0 +1,38 @@
+/* STATUS: PLATIN */
+body:has(#startupDialog[open]){overflow:hidden}
+#startupDialog{width:min(680px,calc(100vw - 32px));max-height:calc(100dvh - 32px);padding:0;background:#091725;border:1px solid var(--line-strong);border-radius:16px;color:var(--text)}
+#startupDialog[open]{display:flex;flex-direction:column;overflow:hidden}
+.health-header,.health-progress,.health-actions{flex-shrink:0}
+#startupDialog::backdrop{background:rgba(2,7,13,.8)}
+.health-header{padding:28px 30px 18px;border-bottom:1px solid var(--line)}
+.health-header h2{margin:8px 0 12px;font-size:1.65rem;line-height:1.2}
+.health-header>p:last-child{color:var(--muted);line-height:1.6;margin-bottom:0}
+.health-brand{display:flex;align-items:center;gap:12px}
+.health-brand img{width:36px;height:40px;object-fit:contain}
+.health-brand .eyebrow{margin:0}
+.health-progress{padding:20px 30px 10px}
+.health-progress-label{display:flex;justify-content:space-between;gap:12px;font-size:.8rem;color:var(--muted);margin-bottom:12px}
+.health-progress-label span:last-child{white-space:nowrap;font-family:var(--mono)}
+.health-progress progress{width:100%;height:5px;display:block;accent-color:var(--blue);border:0;background:#172d3e;border-radius:4px;overflow:hidden}
+.health-progress progress::-webkit-progress-bar{background:#172d3e}
+.health-progress progress::-webkit-progress-value{background:var(--blue);transition:width .2s}
+.health-checks{overflow-y:auto;min-height:0;list-style:none;padding:0 30px;margin:0}
+.health-checks li{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:14px;align-items:start;padding:15px 0;border-bottom:1px solid var(--line)}
+.health-checks strong{font-size:.88rem;font-weight:600}
+.health-checks p{margin:5px 0 0;color:var(--muted);font-size:.77rem;line-height:1.5;overflow-wrap:anywhere}
+.health-marker{width:8px;height:8px;margin-top:6px;border-radius:50%;background:var(--muted)}
+.health-state{font-size:.72rem;white-space:nowrap;color:var(--muted);margin-top:3px}
+[data-state="healthy"] .health-marker{background:var(--green)}
+[data-state="healthy"] .health-state{color:var(--green)}
+[data-state="attention"] .health-marker{background:var(--amber)}
+[data-state="attention"] .health-state{color:var(--amber)}
+[data-state="running"] .health-marker{background:var(--blue);animation:health-pulse 1.2s ease-in-out infinite}
+[data-state="running"] .health-state{color:var(--blue)}
+.health-actions{display:flex;justify-content:flex-end;gap:10px;padding:22px 30px}
+.health-actions [hidden]{display:none}
+.topbar{user-select:none}
+.win-control-btn:disabled{opacity:.35;cursor:default}
+button:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+@keyframes health-pulse{50%{opacity:.35}}
+@media(max-width:520px){.health-header{padding:22px 20px 16px}.health-progress{padding:18px 20px 8px}.health-checks{padding:0 20px}.health-checks li{grid-template-columns:8px minmax(0,1fr);gap:10px}.health-state{grid-column:2;margin-top:-5px}.health-actions{padding:18px 20px;flex-direction:column}.health-header h2{font-size:1.35rem}}
+@media(prefers-reduced-motion:reduce){[data-state="running"] .health-marker{animation:none}.health-progress progress::-webkit-progress-value{transition:none}}

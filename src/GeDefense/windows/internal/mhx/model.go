@@ -2,6 +2,8 @@
 package mhx
 
 import (
+	"github.com/visiongaiatechnology/gedefense/windows/internal/kinetic"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/traffic"
 	"time"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/threatintel"
@@ -93,29 +95,46 @@ type ThreatEnforcementStatus struct {
 	Error             string    `json:"error,omitempty"`
 }
 
+type KineticIncident struct {
+	TimestampUTC     time.Time `json:"timestampUtc"`
+	RemoteIP         string    `json:"remoteIp"`
+	LocalPort        uint16    `json:"localPort"`
+	ThreatMatched    bool      `json:"threatMatched"`
+	ThreatSources    []string  `json:"threatSources,omitempty"`
+	VerifiedWFPBlock bool      `json:"verifiedWfpBlock"`
+	Classification   string    `json:"classification"`
+}
 type Status struct {
-	Engine                string                  `json:"engine"`
-	Realtime              bool                    `json:"realtime"`
-	Telemetry             string                  `json:"telemetry"`
-	TelemetryHeartbeatUTC time.Time               `json:"telemetryHeartbeatUtc"`
-	Enforcement           string                  `json:"enforcement"`
-	DefenderBridge        string                  `json:"defenderBridge"`
-	AppControl            string                  `json:"appControl"`
-	KernelEnforcement     bool                    `json:"kernelEnforcement"`
-	ProtectionMode        string                  `json:"protectionMode"`
-	ProtectionHealth      string                  `json:"protectionHealth"`
-	ProtectionVerifiedUTC time.Time               `json:"protectionVerifiedUtc,omitempty"`
-	EventsEvaluated       uint64                  `json:"eventsEvaluated"`
-	EventsBlocked         uint64                  `json:"eventsBlocked"`
-	KnownBenign           uint64                  `json:"knownBenign"`
-	ThreatIntelligence    threatintel.Status      `json:"threatIntelligence"`
-	ThreatEnforcement     ThreatEnforcementStatus `json:"threatEnforcement"`
-	NetworkTelemetry      string                  `json:"networkTelemetry"`
-	NetworkConnections    uint64                  `json:"networkConnections"`
-	WFPBlockTelemetry     string                  `json:"wfpBlockTelemetry"`
-	WFPBlockedEvents      uint64                  `json:"wfpBlockedEvents"`
-	ThreatNetworkHits     uint64                  `json:"threatNetworkHits"`
-	AttackStories         uint64                  `json:"attackStories"`
+	KineticIncidents           []KineticIncident       `json:"kineticIncidents"`
+	Traffic                    traffic.Sample          `json:"traffic"`
+	KineticArmed               bool                    `json:"kineticArmed"`
+	KineticThreatCorrelations  uint64                  `json:"kineticThreatCorrelations"`
+	KineticBlockedCorrelations uint64                  `json:"kineticBlockedCorrelations"`
+	Kinetic                    kinetic.Snapshot        `json:"kinetic"`
+	KineticReadiness           kinetic.Readiness       `json:"kineticReadiness"`
+	UncorrelatedThreatHits     uint64                  `json:"uncorrelatedThreatHits"`
+	Engine                     string                  `json:"engine"`
+	Realtime                   bool                    `json:"realtime"`
+	Telemetry                  string                  `json:"telemetry"`
+	TelemetryHeartbeatUTC      time.Time               `json:"telemetryHeartbeatUtc"`
+	Enforcement                string                  `json:"enforcement"`
+	DefenderBridge             string                  `json:"defenderBridge"`
+	AppControl                 string                  `json:"appControl"`
+	KernelEnforcement          bool                    `json:"kernelEnforcement"`
+	ProtectionMode             string                  `json:"protectionMode"`
+	ProtectionHealth           string                  `json:"protectionHealth"`
+	ProtectionVerifiedUTC      time.Time               `json:"protectionVerifiedUtc,omitempty"`
+	EventsEvaluated            uint64                  `json:"eventsEvaluated"`
+	EventsBlocked              uint64                  `json:"eventsBlocked"`
+	KnownBenign                uint64                  `json:"knownBenign"`
+	ThreatIntelligence         threatintel.Status      `json:"threatIntelligence"`
+	ThreatEnforcement          ThreatEnforcementStatus `json:"threatEnforcement"`
+	NetworkTelemetry           string                  `json:"networkTelemetry"`
+	NetworkConnections         uint64                  `json:"networkConnections"`
+	WFPBlockTelemetry          string                  `json:"wfpBlockTelemetry"`
+	WFPBlockedEvents           uint64                  `json:"wfpBlockedEvents"`
+	ThreatNetworkHits          uint64                  `json:"threatNetworkHits"`
+	AttackStories              uint64                  `json:"attackStories"`
 }
 
 type NetworkFinding struct {

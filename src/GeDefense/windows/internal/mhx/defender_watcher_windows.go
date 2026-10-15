@@ -77,7 +77,7 @@ func (defenderWatcher) Run(ctx context.Context, output chan<- defenderEvent, fau
 	for scanner.Scan() {
 		var event defenderEvent
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			deliverFault(faults, fmt.Errorf("Defender event validation failed"))
+			deliverFault(faults, fmt.Errorf("defender event validation failed"))
 			continue
 		}
 		select {
@@ -90,6 +90,6 @@ func (defenderWatcher) Run(ctx context.Context, output chan<- defenderEvent, fau
 		deliverFault(faults, err)
 	}
 	if err := command.Wait(); err != nil && ctx.Err() == nil {
-		deliverFault(faults, fmt.Errorf("Defender event bridge stopped: %w", err))
+		deliverFault(faults, fmt.Errorf("defender event bridge stopped: %w", err))
 	}
 }

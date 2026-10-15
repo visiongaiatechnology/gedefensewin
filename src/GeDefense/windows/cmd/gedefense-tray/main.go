@@ -38,8 +38,8 @@ func main() {
 		_ = winapi.CloseHandle(mutex)
 		return
 	}
-	defer winapi.CloseHandle(event)
-	defer winapi.CloseHandle(mutex)
+	defer func() { winapi.ReportError("tray event close", winapi.CloseHandle(event)) }()
+	defer func() { winapi.ReportError("tray mutex close", winapi.CloseHandle(mutex)) }()
 	iconPath, err := trayIconPath()
 	if err != nil {
 		return
@@ -95,7 +95,7 @@ func startCenter() error {
 	return command.Start()
 }
 
-func protectionHealthy() (bool, string) {
+func protectionHealthy() (healthy bool, detail string) {
 	programData := os.Getenv("ProgramData")
 	if programData == "" || !filepath.IsAbs(programData) {
 		return false, "Status nicht verfügbar"
@@ -120,7 +120,13 @@ func protectionHealthy() (bool, string) {
 	if err != nil {
 		return false, "Dienst nicht erreichbar"
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			healthy = false
+			detail = "Statusverbindung konnte nicht geschlossen werden"
+			winapi.ReportError("tray response close", err)
+		}
+	}()
 	if response.StatusCode != http.StatusOK {
 		return false, "Prüfung erforderlich"
 	}

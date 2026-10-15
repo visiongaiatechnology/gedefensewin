@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/cleanup"
 )
 
 const (
@@ -375,7 +377,7 @@ func blockingReadyCount(snapshots map[string]sourceSnapshot) int {
 	return ready
 }
 
-func (m *Manager) fetchSource(ctx context.Context, source Source) ([]netip.Prefix, Attribution, error) {
+func (m *Manager) fetchSource(ctx context.Context, source Source) (prefixes []netip.Prefix, attribution Attribution, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
 	if err != nil {
 		return nil, Attribution{}, err
@@ -386,7 +388,7 @@ func (m *Manager) fetchSource(ctx context.Context, source Source) ([]netip.Prefi
 	if err != nil {
 		return nil, Attribution{}, fmt.Errorf("fetch %s: %w", source.Name, err)
 	}
-	defer response.Body.Close()
+	defer cleanup.CloseInto(&err, response.Body)
 	if response.StatusCode != http.StatusOK {
 		return nil, Attribution{}, fmt.Errorf("fetch %s: HTTP %d", source.Name, response.StatusCode)
 	}

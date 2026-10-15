@@ -47,6 +47,9 @@ func (e *Engine) evaluateNetwork(event networkEvent) {
 		delete(e.recentProcesses, event.PID)
 		correlated = false
 	}
+	if !correlated {
+		e.networkUncorrelated.Add(1)
+	}
 	if correlated {
 		finding.Image = recent.event.Image
 		finding.CorrelationID = recent.analysis.ID
@@ -155,6 +158,52 @@ func responseForThreatAction(action threatintel.Action, blocked, protected bool)
 }
 
 func (e *Engine) evaluateWFPBlock(event wfpBlockEvent) {
+	// Kinetic receives genuine blocked inbound WFP events before TI filtering.
+	// Observations remain advisory and cannot authorize host containment.
+	if event.Direction == "Inbound" && e.kineticMonitor != nil {
+		if e.kineticMonitor.ObserveBlockedInbound(event.RemoteIP, event.LocalPort, event.TimestampUTC) {
+			// The Engine.Run loop serializes all WFP evaluations and indexes.
+			e.mu.Lock()
+			e.kineticIncidents = append(e.kineticIncidents, KineticIncident{TimestampUTC: event.TimestampUTC, RemoteIP: event.RemoteIP, LocalPort: event.LocalPort, Classification: "BURST_OBSERVED"})
+			if len(e.kineticIncidents) > 32 {
+				e.kineticIncidents = append([]KineticIncident(nil), e.kineticIncidents[len(e.kineticIncidents)-32:]...)
+			}
+			index := len(e.kineticIncidents) - 1
+			e.mu.Unlock()
+			// A kinetic candidate becomes a TI-correlated detection only on
+			// an actual feed match, never by IP reputation guessing.
+			if addr, err := netip.ParseAddr(event.RemoteIP); err == nil {
+				match := e.feeds.Lookup(addr)
+				if match.Found && !match.Protected {
+					e.mu.Lock()
+					e.kineticIncidents[index].ThreatMatched = true
+					e.kineticIncidents[index].ThreatSources = append([]string(nil), match.Sources...)
+					e.kineticIncidents[index].Classification = "THREAT_IP_BURST"
+					e.mu.Unlock()
+					e.kineticThreatCorrelations.Add(1)
+					e.mu.RLock()
+					armed := e.kineticArmed
+					generation := e.threatEnforcement
+					e.mu.RUnlock()
+					verified := (generation.State == "VERIFIED" || generation.State == "VERIFIED_CLEANUP_PENDING") && generation.ActiveGeneration != "" && generation.ActiveGeneration == e.feeds.Status().EnforcementGeneration
+					if armed && verified && match.Action == threatintel.ActionBlock && event.GeDefenseOrigin {
+						// WFP 5157 is a witnessed Windows block from our policy.
+						// Do not claim that Kinetic installed a new dynamic rule.
+						e.mu.Lock()
+						e.kineticIncidents[index].VerifiedWFPBlock = true
+						e.kineticIncidents[index].Classification = "VERIFIED_TI_WFP_BLOCK_OBSERVED"
+						e.mu.Unlock()
+						e.kineticBlockedCorrelations.Add(1)
+						_ = e.ledger.Append("kinetic.correlate", "verified-ti-wfp-burst", "WFP_BLOCK_OBSERVED")
+					} else {
+						_ = e.ledger.Append("kinetic.correlate", "threat-ip-burst", "DETECTED_NOT_ENFORCED_BY_KINETIC")
+					}
+				} else {
+					_ = e.ledger.Append("kinetic.observe", "wfp-blocked-ingress-burst", "OBSERVE_ONLY")
+				}
+			}
+		}
+	}
 	e.networkObserved.Add(1)
 	address, err := netip.ParseAddr(event.RemoteIP)
 	if err != nil {
@@ -195,6 +244,9 @@ func (e *Engine) evaluateWFPBlock(event wfpBlockEvent) {
 	if correlated && validateObservedProcess(recent.event) != nil {
 		delete(e.recentProcesses, event.PID)
 		correlated = false
+	}
+	if !correlated {
+		e.networkUncorrelated.Add(1)
 	}
 	if correlated {
 		finding.Image = recent.event.Image

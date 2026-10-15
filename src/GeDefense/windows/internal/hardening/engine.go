@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/visiongaiatechnology/gedefense/windows/internal/cleanup"
+
 	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/winexec"
 )
@@ -126,16 +128,7 @@ func (e *Engine) Posture(ctx context.Context) (Result, error) {
 		if !cachedAt.IsZero() {
 			return cached, nil
 		}
-		return Result{
-			WindowsProductName: "Windows",
-			Defender:           true,
-			DefenderService:    true,
-			RealTimeProtection: true,
-			CloudProtection:    true,
-			NetworkProtection:  true,
-			Firewall:           true,
-			WindowsUpdate:      true,
-		}, nil
+		return Result{}, fmt.Errorf("initial posture audit unavailable: %w", err)
 	}
 	return res, nil
 }
@@ -171,13 +164,13 @@ func (e *Engine) EnforceComponent(ctx context.Context, component string) ([]Comp
 	return componentsFromResult(result), nil
 }
 
-func (e *Engine) execute(parent context.Context, mode, profile, component string) (Result, error) {
+func (e *Engine) execute(parent context.Context, mode, profile, component string) (result Result, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
 	output := filepath.Join(e.operationRoot, fmt.Sprintf("result-%d.json", time.Now().UnixNano()))
-	defer os.Remove(output)
+	defer cleanup.RemoveInto(&err, output)
 	powerShell, pathErr := winexec.PowerShell()
 	if pathErr != nil {
 		if e.ledger != nil {
@@ -200,7 +193,7 @@ func (e *Engine) execute(parent context.Context, mode, profile, component string
 	var stderr bytes.Buffer
 	command.Stdout = io.Discard
 	command.Stderr = &stderr
-	err := command.Run()
+	err = command.Run()
 	if err != nil {
 		if e.ledger != nil {
 			_ = e.ledger.Append("hardening.operation", mode+":"+profile, "failed")
@@ -211,7 +204,6 @@ func (e *Engine) execute(parent context.Context, mode, profile, component string
 	if readErr != nil {
 		return Result{}, readErr
 	}
-	var result Result
 	if err := json.Unmarshal(bytes.TrimPrefix(raw, []byte{0xef, 0xbb, 0xbf}), &result); err != nil {
 		return Result{}, errors.New("hardening result decoding failed")
 	}

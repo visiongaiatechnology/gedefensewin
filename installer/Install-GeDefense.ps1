@@ -1,4 +1,4 @@
-# STATUS: DIAMANT VGT SUPREME
+﻿# STATUS: DIAMANT VGT SUPREME
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidatePattern('^[A-Za-z]:\\[^\r\n\0"]+$')][string]$PayloadRoot,
@@ -161,6 +161,10 @@ Copy-Item -LiteralPath (Join-Path $resolvedPayload 'bin') -Destination $installR
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'engine') -Destination $installRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'audit') -Destination $installRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'xdr') -Destination $installRoot -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $resolvedPayload 'LICENSES') -Destination $installRoot -Recurse -Force
+foreach ($noticeName in @('LICENSE','NOTICE','THIRD-PARTY-NOTICES.md','GEOIP_LICENSE_AND_DEPLOYMENT.md')) {
+    Copy-Item -LiteralPath (Join-Path $resolvedPayload $noticeName) -Destination (Join-Path $installRoot $noticeName) -Force
+}
 Copy-Item -LiteralPath $versionPath -Destination (Join-Path $installRoot 'VERSION') -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'branding\vgt-lockscreen.jpg') -Destination (Join-Path $brandingRoot 'vgt-lockscreen.jpg') -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'branding\vgt-oem-logo.bmp') -Destination (Join-Path $brandingRoot 'vgt-oem-logo.bmp') -Force
@@ -290,8 +294,8 @@ Write-VgtInstallPhase -Phase 'Installer' -State 'COMPLETE' -Detail ("GeDefense {
 # SIG # Begin signature block
 # MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBLFxfnd67/pLz1
-# w2QvY/5bMG/7qgH5EcTs7gPeI/5vaqCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCfoX92up3gt4W1
+# UT82TK31PTny5NdEID5rDq0mDiITi6CCBCwwggQoMIICkKADAgECAhBc5F62BB+R
 # m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
 # VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
 # MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
@@ -317,14 +321,14 @@ Write-VgtInstallPhase -Phase 'Installer' -State 'COMPLETE' -Detail ("GeDefense {
 # ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
 # ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
 # AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCAqBzcYg6Tl
-# IukYnkEIDzjs/wwe0UBTAq86vd/7bcgeTTANBgkqhkiG9w0BAQEFAASCAYBsolpv
-# ffBPnj41ST6EJPgM2eXz1wsorH6Sq/EBrcpbjAfiPkOLwJqNSkm5DQMFwylH0zfF
-# uTacgWmOlxJ0Qc/xkRaBXDZloAYEZW+9sxLX1q/gxznqVtuZf+kon5n5DyRGpPBm
-# c3pT4Ah8D9wxtaWV8YZ0OgKQlYeFGd1BjsnpuuWgBrXAaho6/ZEBJWF1pekunGAj
-# bDY/CdksDLOKbiKzgTwoJVW3OWbFBQXm9Abk6XNiloPW765ivuljMUtNnmQ+K+as
-# 26UEk+v8QPZRN+0JXFqUH4BbAUsMvLPJhrA13Z5yV895WptxBVaOHphDhPkjIAG4
-# me8u0tdBNRY1SMQivRbPRBnioTQ0Lxu4g5cXuLWVsDta1I+NsYad8q5jVtc6zTyD
-# a7M/lp54wVZx8CjDErp0+R72VRoZwIMfnvnRSDEfzgo69yEVUcxydlHugM9/fcD1
-# c5g62a9NY4dwSeecJ9NBiN+Irj3sT1zIWG9KgJHkglFfKUdJuC5siTwjElo=
+# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCCDOy0hMWK2
+# IsxzgacQQfPKx9reXSRwU3On+Xul09DTNDANBgkqhkiG9w0BAQEFAASCAYAxJ2+D
+# fIOrEuFMyrFdxJOxCjjRk+QuSOgtxTnPfje2N+C+xW5bh6eoPYmRBJDkhYaLrbn/
+# gEo23AwNjl79HjiAokuqIVagh1u23dauCLp/cuYbljG5urqRo9psyQjbflfoNVMA
+# rCZItxZ6CpWlL9q5l3XAHaBu2kNunBWpn2K3ux+K80BP82WQgfDlcm83g7dpjcM4
+# bmiYxN9kZ9Q+reP30qzQw2r3s0A0Lih85HEBFkPOyOanJ/R2Ggn+ayrr7Hojn1hK
+# LfZSdjKyoY1Emw6NLHcrwm2zdiqaYPLk+QHe3U6T4wTRS85ycDrWSED36DGL1wgU
+# K+GoRgpb6d67Ha2tS/W2x14BPqLsu65qJxOVYSjfY+R4Q0Y5xeyHSc7LTi6AlrpG
+# bV/auyQpiiPOiUdMaIr2PUDB8LA2uEZxxX/XcWdmyYirqCQShWlmJ+awLj6uUpim
+# /6RqcUzTtPB0n8wdi2svQEcWj3Y5F7R8PxNX4++IyKBvQkvDJhqEjms5pL4=
 # SIG # End signature block

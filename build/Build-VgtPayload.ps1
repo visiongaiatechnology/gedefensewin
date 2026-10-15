@@ -1,4 +1,4 @@
-# STATUS: DIAMANT VGT SUPREME
+﻿# STATUS: DIAMANT VGT SUPREME
 [CmdletBinding()]
 param(
     [switch]$TrustDevelopmentCertificate
@@ -106,6 +106,16 @@ Copy-VgtTree -Source (Join-Path $projectRoot 'engine') -Destination (Join-Path $
 Copy-VgtTree -Source (Join-Path $projectRoot 'audit') -Destination (Join-Path $payloadRoot 'audit')
 Copy-VgtTree -Source (Join-Path $projectRoot 'xdr') -Destination (Join-Path $payloadRoot 'xdr')
 Copy-VgtTree -Source (Join-Path $projectRoot 'branding') -Destination (Join-Path $payloadRoot 'branding')
+Copy-VgtTree -Source (Join-Path $projectRoot 'LICENSES') -Destination (Join-Path $payloadRoot 'LICENSES')
+foreach ($noticeName in @('LICENSE','NOTICE','THIRD-PARTY-NOTICES.md','GEOIP_LICENSE_AND_DEPLOYMENT.md')) {
+    Copy-Item -LiteralPath (Join-Path $projectRoot $noticeName) -Destination (Join-Path $payloadRoot $noticeName) -Force
+}
+if (Test-Path -LiteralPath (Join-Path $projectRoot 'data\geoip.csv')) {
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'data\geoip.csv') -Destination (Join-Path $payloadRoot 'bin\geoip.csv') -Force
+    if (Test-Path -LiteralPath (Join-Path $projectRoot 'data\geoip.csv.sha256')) {
+        Copy-Item -LiteralPath (Join-Path $projectRoot 'data\geoip.csv.sha256') -Destination (Join-Path $payloadRoot 'bin\geoip.csv.sha256') -Force
+    }
+}
 New-Item -Path (Join-Path $payloadRoot 'installer') -ItemType Directory -Force | Out-Null
 foreach ($scriptName in @('Install-GeDefense.ps1','Uninstall-GeDefense.ps1','Bootstrap-GeDefense.ps1')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "installer\$scriptName") -Destination (Join-Path $payloadRoot "installer\$scriptName") -Force
@@ -139,8 +149,8 @@ Write-Output "VGT payload built: $payloadRoot"
 # SIG # Begin signature block
 # MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAV8h03W+J6ZFFk
-# iExnUdGIdnpBaShAF6cIJO8HI5RZA6CCBCwwggQoMIICkKADAgECAhBc5F62BB+R
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCA8XUF9MV2CZRPs
+# u8bA5SmYI1kLKdSqApuSjRxxw9sI56CCBCwwggQoMIICkKADAgECAhBc5F62BB+R
 # m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
 # VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
 # MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
@@ -166,14 +176,14 @@ Write-Output "VGT payload built: $payloadRoot"
 # ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
 # ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
 # AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCDEkyZCKB5h
-# oEn/gU56e1vWG8Z40dQwbiOC2b/PxOtvlTANBgkqhkiG9w0BAQEFAASCAYAKn619
-# lFdG2p7fUxklHgTphkxj46KpBp+YWtbMesoFHHUzVreD9pudAsnvtdiJLjMbyUYg
-# kVPti4SPQDTtsWs2YSDlirnn4gNWYERVAADuTAJce6PdA8PoXsKHxOU6TXZxaqp5
-# Ly/bKo2Pt76myqqrbkxaq9uBdZFbGDErSOXbA+YH7ZjSetr5xWXwM5K/1EtUeSPl
-# kEeiBFaZHGTAO1lCz6NyfcBW/VpF/BcfH60R6u7pFUfX21OYIbI54yypG3zueXNm
-# 3K9y6pQpmTWtVxxpO0FR6pMRLYhN9f3cwAY9DiTpOd8zxFZGoUHQ26Y922uM8xeI
-# 4p1hckyL4cBXt5qonmImcdxshT4zUwhJNjHqE2+jslHPLYKmHuRm+w8WhETEKrAm
-# zMtNfwV5NpNS5hFkk9sERWL7oWgVlRwF3kXnczhnyYQoKmDIdt3RvG90h4VBhMxg
-# B6X+hA7U33LOPykB3EMCFDGiDlH0k5gnGGkqZJnIOQLM0ZnoiyEYPT6Mmec=
+# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCBBAlxGnhhZ
+# fDKvZ/Pe3lyM19YoF3j3w1OF7Za2LvvKszANBgkqhkiG9w0BAQEFAASCAYAqrq0v
+# bQYlaSt5mdYLY0PVZVyiac4gOB7noDHkA3ae2mQmRhIpg2017GFMALOKfWgOtwDh
+# dOE1/cdk/rUrVLH6GdyCcjfK7Mpz2taKLoScPVoPpbP86s9E3UUFtfuhzW4C0h6W
+# JshzR3l6qSY0Mr+p7TQmrgmqwpJJgXLMLeL9XsZJ5Ir968ZE4pcXaETa9LKJjqOG
+# A3C5422bn2wqPRfgbMXOBjzvmXosNy4GEt96NtKV1I4UBHDFsEDCyzx7R37ofF+a
+# X0p5hFk6pySMjenf9HwJ/Ek8Kz+QEAytGSC60NsFLfgPo5iPttoIEG8D/Zzgo5ZL
+# 9Gx8diq2rPm+lD2ChZ6gDvYOYXO3dC1xOYdELRtqXkYXFWk+x+lNokc20DhULU6X
+# pqHZAMuLW98l7R9iAFSKeORLEUDQahGKysYRiRw8Nq14Jj9ffSGp1nmDm0OAAgm0
+# dTGgGknRuZToOUKLv5GCxEU30z+ua+rDPOvyT21GjK+suV5Z09xHfc5cFso=
 # SIG # End signature block

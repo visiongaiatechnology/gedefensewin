@@ -1,4 +1,4 @@
-* text=auto
+* text=auto eol=lf
 *.go text eol=lf
 *.js text eol=lf
 *.css text eol=lf
@@ -7,8 +7,9 @@
 *.json text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
-*.ps1 text eol=crlf
-*.psm1 text eol=crlf
+# Preserve exact signed PowerShell bytes; newline conversion invalidates Authenticode.
+*.ps1 -text
+*.psm1 -text
 *.cmd text eol=crlf
 *.png binary
 *.jpg binary

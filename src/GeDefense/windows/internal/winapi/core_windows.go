@@ -214,14 +214,19 @@ func ShellOpenURL(target string) error {
 	return nil
 }
 
-func IsProcessElevated() bool {
+func IsProcessElevated() (elevated bool) {
 	process, _, _ := procGetCurrentProcess.Call()
 	var token Handle
 	result, _, _ := procOpenProcessToken.Call(process, uintptr(TokenQuery), uintptr(unsafe.Pointer(&token)))
 	if result == 0 || token == 0 {
 		return false
 	}
-	defer CloseHandle(token)
+	defer func() {
+		if err := CloseHandle(token); err != nil {
+			elevated = false
+			ReportError("elevation token close", err)
+		}
+	}()
 	var elevation uint32
 	var returned uint32
 	result, _, _ = procGetTokenInformation.Call(uintptr(token), uintptr(TokenElevation), uintptr(unsafe.Pointer(&elevation)), unsafe.Sizeof(elevation), uintptr(unsafe.Pointer(&returned)))
@@ -272,22 +277,14 @@ func OpenProcessIdentity(pid uint32, terminate bool) (ProcessIdentity, error) {
 	var creation, exit, kernel, user FileTime
 	result, _, timeErr := procGetProcessTimes.Call(handle, uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)), uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)))
 	if result == 0 {
-		CloseHandle(identity.Handle)
-		if err := errnoResult(timeErr); err != nil {
-			return ProcessIdentity{}, err
-		}
-		return ProcessIdentity{}, errors.New("GetProcessTimes failed")
+		return ProcessIdentity{}, errors.Join(CheckBOOL("GetProcessTimes", result, timeErr), CloseHandle(identity.Handle))
 	}
 	identity.CreationUnixNano = fileTimeUnixNano(creation)
 	buffer := make([]uint16, 32768)
 	size := uint32(len(buffer))
 	result, _, pathErr := procQueryFullProcessImage.Call(handle, 0, uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&size)))
 	if result == 0 || size == 0 || int(size) > len(buffer) {
-		CloseHandle(identity.Handle)
-		if err := errnoResult(pathErr); err != nil {
-			return ProcessIdentity{}, err
-		}
-		return ProcessIdentity{}, errors.New("QueryFullProcessImageNameW failed")
+		return ProcessIdentity{}, errors.Join(errors.New("QueryFullProcessImageNameW failed"), errnoResult(pathErr), CloseHandle(identity.Handle))
 	}
 	identity.ImagePath = syscall.UTF16ToString(buffer[:size])
 	return identity, nil
@@ -369,20 +366,14 @@ func OpenRegularFileNoReparse(path string) (*os.File, FileMetadata, error) {
 	var info byHandleFileInformation
 	result, _, infoErr := procGetFileInfoByHandle.Call(handle, uintptr(unsafe.Pointer(&info)))
 	if result == 0 {
-		procCloseHandle.Call(handle)
-		if err := errnoResult(infoErr); err != nil {
-			return nil, FileMetadata{}, err
-		}
-		return nil, FileMetadata{}, errors.New("GetFileInformationByHandle failed")
+		return nil, FileMetadata{}, errors.Join(CheckBOOL("GetFileInformationByHandle", result, infoErr), CloseHandle(Handle(handle)))
 	}
 	if info.FileAttributes&(FileAttributeDirectory|FileAttributeReparsePoint) != 0 {
-		procCloseHandle.Call(handle)
-		return nil, FileMetadata{}, errors.New("directory or reparse point rejected")
+		return nil, FileMetadata{}, errors.Join(errors.New("directory or reparse point rejected"), CloseHandle(Handle(handle)))
 	}
 	file := os.NewFile(handle, filepath.Base(path))
 	if file == nil {
-		procCloseHandle.Call(handle)
-		return nil, FileMetadata{}, errors.New("file handle conversion failed")
+		return nil, FileMetadata{}, errors.Join(errors.New("file handle conversion failed"), CloseHandle(Handle(handle)))
 	}
 	size := int64(uint64(info.FileSizeHigh)<<32 | uint64(info.FileSizeLow))
 	meta := FileMetadata{

@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/cleanup"
 )
 
 type Record struct {
@@ -121,7 +123,7 @@ func (l *Ledger) Append(kind, action, result string) error {
 	return nil
 }
 
-func (l *Ledger) Snapshot(limit int) ([]Record, error) {
+func (l *Ledger) Snapshot(limit int) (result []Record, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if limit < 1 || limit > 500 {
@@ -134,7 +136,7 @@ func (l *Ledger) Snapshot(limit int) ([]Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer cleanup.CloseInto(&err, file)
 	records := make([]Record, 0, limit)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 4096), 128<<10)
@@ -158,7 +160,7 @@ func (l *Ledger) Verify() error {
 	return l.verifyLocked()
 }
 
-func (l *Ledger) verifyLocked() error {
+func (l *Ledger) verifyLocked() (err error) {
 	file, err := os.Open(l.path)
 	if errors.Is(err, os.ErrNotExist) {
 		l.sequence, l.lastMAC = 0, ""
@@ -167,7 +169,7 @@ func (l *Ledger) verifyLocked() error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer cleanup.CloseInto(&err, file)
 	var sequence uint64
 	previous := ""
 	scanner := bufio.NewScanner(file)

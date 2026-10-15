@@ -19,6 +19,7 @@ func New(version, token string, engine HardeningEngine, auditEngine AuditEngine,
 		integrity: integrityEngine, ledger: ledger,
 		replay:         replayGuard{items: make(map[string]time.Time)},
 		bootstrapCodes: make(map[string]time.Time), sessions: make(map[string]time.Time), rates: make(map[string]rateWindow),
+		windowCommands: make(chan string, 1), windowStateVal: "normal",
 	}
 	mux := http.NewServeMux()
 	webRoot, err := fs.Sub(assets, "web")
@@ -32,6 +33,7 @@ func New(version, token string, engine HardeningEngine, auditEngine AuditEngine,
 	mux.HandleFunc("GET /", s.index)
 	mux.HandleFunc("POST /api/v1/session/bootstrap", s.masterAuthorize(s.bootstrap))
 	mux.HandleFunc("POST /api/v1/session/exchange", s.exchange)
+	mux.HandleFunc("POST /api/v1/health/refresh", s.authorize(s.healthRefresh))
 	mux.HandleFunc("GET /api/v1/status", s.authorize(s.status))
 	mux.HandleFunc("GET /api/v1/protection/readiness", s.authorize(s.protectionReadiness))
 	mux.HandleFunc("GET /api/v1/evidence", s.authorize(s.evidenceSnapshot))
@@ -44,6 +46,8 @@ func New(version, token string, engine HardeningEngine, auditEngine AuditEngine,
 	mux.HandleFunc("GET /api/v1/xdr/findings", s.authorize(s.xdrFindings))
 	mux.HandleFunc("POST /api/v1/xdr/scan", s.authorize(s.runXDR))
 	mux.HandleFunc("GET /api/v1/mhx/status", s.authorize(s.mhxStatus))
+	mux.HandleFunc("GET /api/v1/mhx/geo", s.authorize(s.kineticGeo))
+	mux.HandleFunc("POST /api/v1/mhx/kinetic/mode", s.authorize(s.kineticSetMode))
 	mux.HandleFunc("GET /api/v1/mhx/analyses", s.authorize(s.mhxAnalyses))
 	mux.HandleFunc("GET /api/v1/mhx/network", s.authorize(s.mhxNetwork))
 	mux.HandleFunc("GET /api/v1/mhx/stories", s.authorize(s.mhxStories))
@@ -60,7 +64,10 @@ func New(version, token string, engine HardeningEngine, auditEngine AuditEngine,
 	mux.HandleFunc("POST /api/v1/integrity/scan", s.authorize(s.integrityScan))
 	mux.HandleFunc("POST /api/v1/window/minimize", s.authorize(s.windowMinimize))
 	mux.HandleFunc("POST /api/v1/window/maximize", s.authorize(s.windowMaximize))
+	mux.HandleFunc("POST /api/v1/window/drag", s.authorize(s.windowDrag))
 	mux.HandleFunc("POST /api/v1/window/close", s.authorize(s.windowClose))
 	mux.HandleFunc("GET /api/v1/window/state", s.authorize(s.windowState))
+	mux.HandleFunc("GET /api/v1/window/poll", s.masterAuthorize(s.windowPoll))
+	mux.HandleFunc("POST /api/v1/window/ack", s.masterAuthorize(s.windowAck))
 	return s.headers(mux)
 }

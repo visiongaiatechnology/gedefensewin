@@ -271,8 +271,8 @@ func TestWindowControlEndpoints(t *testing.T) {
 		postReq.Header.Set("X-VGT-Request-ID", fmt.Sprintf("11111111-2222-3333-4444-%012d", i+1))
 		postRec := httptest.NewRecorder()
 		handler.ServeHTTP(postRec, postReq)
-		if postRec.Code != http.StatusOK {
-			t.Fatalf("%s POST got %d, want %d: %s", ep, postRec.Code, http.StatusOK, postRec.Body.String())
+		if postRec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s disconnected POST got %d, want %d: %s", ep, postRec.Code, http.StatusServiceUnavailable, postRec.Body.String())
 		}
 	}
 
@@ -285,5 +285,35 @@ func TestWindowControlEndpoints(t *testing.T) {
 	handler.ServeHTTP(stateRec, stateReq)
 	if stateRec.Code != http.StatusOK {
 		t.Fatalf("/api/v1/window/state got %d, want %d: %s", stateRec.Code, http.StatusOK, stateRec.Body.String())
+	}
+}
+
+func TestKineticModeRequiresAuthAndExplicitConsent(t *testing.T) {
+	handler := newTestServer(t)
+	for i, tc := range []struct {
+		name, body string
+		authorized bool
+		expected   int
+	}{
+		{"unauthenticated", `{"mode":"armed","confirmation":"ARM KINETIC TI","reason":"security audit testing"}`, false, http.StatusUnauthorized},
+		{"wrong confirmation", `{"mode":"armed","confirmation":"YES","reason":"security audit testing"}`, true, http.StatusBadRequest},
+		{"missing reason", `{"mode":"armed","confirmation":"ARM KINETIC TI","reason":""}`, true, http.StatusBadRequest},
+		{"backend not supported", `{"mode":"armed","confirmation":"ARM KINETIC TI","reason":"security audit testing"}`, true, http.StatusNotImplemented},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17831/api/v1/mhx/kinetic/mode", bytes.NewReader([]byte(tc.body)))
+			req.Host = "127.0.0.1:17831"
+			req.RemoteAddr = "127.0.0.1:49152"
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-VGT-Request-ID", fmt.Sprintf("aaaaaaaa-bbbb-4ccc-8ddd-%012d", i+1))
+			if tc.authorized {
+				req.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
+			}
+			res := httptest.NewRecorder()
+			handler.ServeHTTP(res, req)
+			if res.Code != tc.expected {
+				t.Fatalf("response=%d want=%d: %s", res.Code, tc.expected, res.Body.String())
+			}
+		})
 	}
 }

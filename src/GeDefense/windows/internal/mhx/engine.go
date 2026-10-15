@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/kinetic"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/threatintel"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/traffic"
 )
 
 const (
@@ -28,39 +30,46 @@ type recentProcess struct {
 }
 
 type Engine struct {
-	root                  string
-	ledger                *evidence.Ledger
-	feeds                 *threatintel.Manager
-	protection            protectionController
-	evaluator             Evaluator
-	mu                    sync.RWMutex
-	analyses              []Analysis
-	networkFindings       []NetworkFinding
-	attackStories         []AttackStory
-	recentProcesses       map[uint32]recentProcess
-	mode                  string
-	realtime              bool
-	telemetry             string
-	lastTelemetryUTC      time.Time
-	lastFault             string
-	networkRealtime       bool
-	networkLastUTC        time.Time
-	networkLastFault      string
-	wfpRealtime           bool
-	wfpLastUTC            time.Time
-	wfpLastFault          string
-	evaluated             atomic.Uint64
-	blocked               atomic.Uint64
-	knownBenign           atomic.Uint64
-	networkObserved       atomic.Uint64
-	wfpBlockedObserved    atomic.Uint64
-	networkThreatHits     atomic.Uint64
-	kernelEnforcement     atomic.Bool
-	policyOnce            sync.Once
-	policyGate            chan struct{}
-	protectionHealth      string
-	protectionVerifiedUTC time.Time
-	threatEnforcement     ThreatEnforcementStatus
+	root                       string
+	ledger                     *evidence.Ledger
+	feeds                      *threatintel.Manager
+	protection                 protectionController
+	evaluator                  Evaluator
+	mu                         sync.RWMutex
+	analyses                   []Analysis
+	networkFindings            []NetworkFinding
+	attackStories              []AttackStory
+	recentProcesses            map[uint32]recentProcess
+	mode                       string
+	realtime                   bool
+	telemetry                  string
+	lastTelemetryUTC           time.Time
+	lastFault                  string
+	networkRealtime            bool
+	networkLastUTC             time.Time
+	networkLastFault           string
+	wfpRealtime                bool
+	wfpLastUTC                 time.Time
+	wfpLastFault               string
+	evaluated                  atomic.Uint64
+	blocked                    atomic.Uint64
+	knownBenign                atomic.Uint64
+	networkObserved            atomic.Uint64
+	wfpBlockedObserved         atomic.Uint64
+	networkThreatHits          atomic.Uint64
+	networkUncorrelated        atomic.Uint64
+	kineticMonitor             *kinetic.Monitor
+	trafficMonitor             *traffic.Sampler
+	kineticArmed               bool
+	kineticIncidents           []KineticIncident
+	kineticThreatCorrelations  atomic.Uint64
+	kineticBlockedCorrelations atomic.Uint64
+	kernelEnforcement          atomic.Bool
+	policyOnce                 sync.Once
+	policyGate                 chan struct{}
+	protectionHealth           string
+	protectionVerifiedUTC      time.Time
+	threatEnforcement          ThreatEnforcementStatus
 }
 
 func NewEngine(root, protectionScript, firewallScript, allowScript, appControlScript, operationRoot string, ledger *evidence.Ledger) (*Engine, error) {
@@ -75,7 +84,7 @@ func NewEngine(root, protectionScript, firewallScript, allowScript, appControlSc
 	if err != nil {
 		return nil, err
 	}
-	engine := &Engine{root: root, ledger: ledger, feeds: feeds, protection: protection, evaluator: Evaluator{}, analyses: make([]Analysis, 0, maximumAnalyses), networkFindings: make([]NetworkFinding, 0, maximumNetworkFindings), attackStories: make([]AttackStory, 0, maximumAttackStories), recentProcesses: make(map[uint32]recentProcess, 256), mode: "guarded", telemetry: "STARTING", protectionHealth: "STARTING", threatEnforcement: ThreatEnforcementStatus{State: "UNVERIFIED"}}
+	engine := &Engine{root: root, ledger: ledger, feeds: feeds, protection: protection, evaluator: Evaluator{}, kineticMonitor: kinetic.NewMonitor(), trafficMonitor: traffic.NewSampler(), analyses: make([]Analysis, 0, maximumAnalyses), networkFindings: make([]NetworkFinding, 0, maximumNetworkFindings), attackStories: make([]AttackStory, 0, maximumAttackStories), recentProcesses: make(map[uint32]recentProcess, 256), mode: "guarded", telemetry: "STARTING", protectionHealth: "STARTING", threatEnforcement: ThreatEnforcementStatus{State: "UNVERIFIED"}}
 	_ = engine.loadMode()
 	return engine, nil
 }
@@ -106,6 +115,19 @@ func (e *Engine) Run(stop <-chan struct{}) {
 	launch(func() { (defenderWatcher{}).Run(ctx, defenderEvents, faults) })
 	launch(func() { (networkWatcher{}).Run(ctx, networkEvents, networkHealth, networkFaults) })
 	launch(func() { (wfpBlockWatcher{}).Run(ctx, wfpEvents, wfpHealth, wfpFaults) })
+	launch(func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				data, err := traffic.ReadInterfaces()
+				e.trafficMonitor.Record(data, now.UTC(), err)
+			}
+		}
+	})
 	_ = e.ledger.Append("mhx.realtime", "process-telemetry", "started")
 	for {
 		select {
@@ -270,16 +292,26 @@ func (e *Engine) Status() Status {
 	protectionHealth, protectionVerifiedUTC := e.protectionHealth, e.protectionVerifiedUTC
 	attackStoryCount := len(e.attackStories)
 	threatEnforcement := e.threatEnforcement
+	kineticArmed := e.kineticArmed
+	kineticIncidents := append([]KineticIncident(nil), e.kineticIncidents...)
 	e.mu.RUnlock()
 	enforcement := "AUDIT"
-	if mode == "guarded" {
+	switch mode {
+	case "guarded":
 		enforcement = "ENRICH_THEN_TERMINATE"
-	} else if mode == "sovereign" {
+	case "sovereign":
 		enforcement = "DEFAULT_DENY"
 	}
 	appControl := "AUDIT"
 	if e.kernelEnforcement.Load() {
 		appControl = "ENFORCED"
 	}
-	return Status{Engine: "VGT MHX 7.1", Realtime: realtime, Telemetry: telemetry, TelemetryHeartbeatUTC: lastTelemetryUTC, Enforcement: enforcement, DefenderBridge: "AMSI + ASR + OPERATIONAL EVENT STREAM", AppControl: appControl, KernelEnforcement: e.kernelEnforcement.Load(), ProtectionMode: mode, ProtectionHealth: protectionHealth, ProtectionVerifiedUTC: protectionVerifiedUTC, EventsEvaluated: e.evaluated.Load(), EventsBlocked: e.blocked.Load(), KnownBenign: e.knownBenign.Load(), ThreatIntelligence: e.feeds.Status(), ThreatEnforcement: threatEnforcement, NetworkTelemetry: map[bool]string{true: "NATIVE_TCP_OWNER_PID", false: "DEGRADED"}[networkRealtime], NetworkConnections: e.networkObserved.Load(), WFPBlockTelemetry: map[bool]string{true: "SECURITY_5157_FAILURE_AUDIT", false: "DEGRADED"}[wfpRealtime], WFPBlockedEvents: e.wfpBlockedObserved.Load(), ThreatNetworkHits: e.networkThreatHits.Load(), AttackStories: uint64(attackStoryCount)}
+	kineticSnap := e.kineticMonitor.Snapshot()
+	readiness := kinetic.EvaluateReadiness(networkRealtime, wfpRealtime, e.wfpBlockedObserved.Load(), threatEnforcement.State, e.feeds.Status().EnforcementGeneration, threatEnforcement.ActiveGeneration)
+	kineticSnap.Mode = "OBSERVE_ONLY"
+	if kineticArmed {
+		kineticSnap.Mode = "ARMED_TI_CORRELATION"
+		readiness.Mode = "ARMED_TI_CORRELATION"
+	}
+	return Status{Traffic: e.trafficMonitor.Snapshot(), KineticArmed: kineticArmed, KineticIncidents: kineticIncidents, KineticThreatCorrelations: e.kineticThreatCorrelations.Load(), KineticBlockedCorrelations: e.kineticBlockedCorrelations.Load(), Kinetic: kineticSnap, KineticReadiness: readiness, UncorrelatedThreatHits: e.networkUncorrelated.Load(), Engine: "VGT MHX 7.1", Realtime: realtime, Telemetry: telemetry, TelemetryHeartbeatUTC: lastTelemetryUTC, Enforcement: enforcement, DefenderBridge: "AMSI + ASR + OPERATIONAL EVENT STREAM", AppControl: appControl, KernelEnforcement: e.kernelEnforcement.Load(), ProtectionMode: mode, ProtectionHealth: protectionHealth, ProtectionVerifiedUTC: protectionVerifiedUTC, EventsEvaluated: e.evaluated.Load(), EventsBlocked: e.blocked.Load(), KnownBenign: e.knownBenign.Load(), ThreatIntelligence: e.feeds.Status(), ThreatEnforcement: threatEnforcement, NetworkTelemetry: map[bool]string{true: "NATIVE_TCP_OWNER_PID", false: "DEGRADED"}[networkRealtime], NetworkConnections: e.networkObserved.Load(), WFPBlockTelemetry: map[bool]string{true: "POLLING_5157_AUDIT_UNVERIFIED", false: "DEGRADED"}[wfpRealtime], WFPBlockedEvents: e.wfpBlockedObserved.Load(), ThreatNetworkHits: e.networkThreatHits.Load(), AttackStories: uint64(attackStoryCount)}
 }

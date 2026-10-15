@@ -4,13 +4,13 @@
   "serialNumber": "urn:uuid:0d7e1a48-cf8f-4ed5-938d-9edee4e40001",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-09-18T00:00:00Z",
+    "timestamp": "2026-10-15T00:00:00Z",
     "component": {
       "type": "application",
-      "bom-ref": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@4.1.1",
+      "bom-ref": "pkg:github/visiongaiatechnology/gedefensewin@4.1.3",
       "group": "VisionGaiaTechnology",
       "name": "GeDefense-Windows",
-      "version": "4.1.1",
+      "version": "4.1.3",
       "licenses": [
         {
           "license": {
@@ -18,13 +18,19 @@
           }
         }
       ],
-      "purl": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@4.1.1"
-    }
+      "purl": "pkg:github/visiongaiatechnology/gedefensewin@4.1.3"
+    },
+    "properties": [
+      {
+        "name": "gedefense:scope",
+        "value": "Application and external Go-module graph; see THIRD-PARTY-NOTICES.md for bundled map geometry and optional datasets."
+      }
+    ]
   },
   "components": [],
   "dependencies": [
     {
-      "ref": "pkg:github/VisionGaiaTechnology/GeDefense-Windows@4.1.1",
+      "ref": "pkg:github/visiongaiatechnology/gedefensewin@4.1.3",
       "dependsOn": []
     }
   ]
