@@ -103,13 +103,17 @@ type Object struct {
 // Actor is populated only from evidence Titan actually gathered. PID 0 and an
 // empty image mean no actor was observed; the UI must say so.
 type Actor struct {
-	PID                 uint32             `json:"pid,omitempty"`
-	ParentPID           uint32             `json:"parentPid,omitempty"`
-	Image               string             `json:"image,omitempty"`
-	Path                string             `json:"path,omitempty"`
-	User                string             `json:"user,omitempty"`
-	SHA256              string             `json:"sha256,omitempty"`
-	SignerSubject       string             `json:"signerSubject,omitempty"`
+	PID           uint32 `json:"pid,omitempty"`
+	ParentPID     uint32 `json:"parentPid,omitempty"`
+	Image         string `json:"image,omitempty"`
+	Path          string `json:"path,omitempty"`
+	User          string `json:"user,omitempty"`
+	SHA256        string `json:"sha256,omitempty"`
+	SignerSubject string `json:"signerSubject,omitempty"`
+	// ProcessChain is the bounded observed ancestry, leaf first. It is evidence,
+	// not invented file-to-process attribution: the sensor can only prove that
+	// these processes existed in the same observation window.
+	ProcessChain        []string           `json:"processChain,omitempty"`
 	CorrelationQuality  CorrelationQuality `json:"correlationQuality"`
 	CorrelationNote     string             `json:"correlationNote,omitempty"`
 	ObservedProcessTime time.Time          `json:"observedProcessTime,omitempty"`
@@ -243,13 +247,17 @@ type Permit struct {
 // Policy is the owner's authorization document. Titan does not infer
 // authorization from administrator rights, signatures or remote tools.
 type Policy struct {
-	SchemaVersion    int       `json:"schemaVersion"`
-	Mode             string    `json:"mode"`
-	AutoQuarantine   bool      `json:"autoQuarantine"`
-	Permits          []Permit  `json:"permits"`
-	DevelopmentRoots []string  `json:"developmentRoots"`
-	UpdatedUTC       time.Time `json:"updatedUtc"`
-	Reason           string    `json:"reason"`
+	SchemaVersion    int      `json:"schemaVersion"`
+	Mode             string   `json:"mode"`
+	AutoQuarantine   bool     `json:"autoQuarantine"`
+	Permits          []Permit `json:"permits"`
+	DevelopmentRoots []string `json:"developmentRoots"`
+	// OwnerProcessImages is an explicit owner-approved toolchain allowlist of
+	// absolute image paths. A match only downgrades ingress/user-content changes
+	// to TOLERATED; it never authorizes system, persistence or security changes.
+	OwnerProcessImages []string  `json:"ownerProcessImages,omitempty"`
+	UpdatedUTC         time.Time `json:"updatedUtc"`
+	Reason             string    `json:"reason"`
 	// ClockHighWaterUTC is the highest wall-clock timestamp observed by the
 	// policy store. It is persisted so a clock rollback across a restart cannot
 	// silently extend expired permits (DP-FIND-014).

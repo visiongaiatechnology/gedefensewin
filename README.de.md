@@ -207,6 +207,35 @@ VGTGeDefense Windows Service (LocalSystem)     sovereign control plane
 4. Starten Sie das Center. Center und Tray beziehen kurzlebige Bedienersitzungen über den Loopback-Broker; das langlebige Master-Token ist eine Break-Glass-Anmeldeinformation, die ausschließlich SYSTEM/Administratoren vorbehalten ist.
 5. Öffnen Sie das **Schutzcenter** und folgen Sie der Bereitschaftsanleitung. Der defensive Standard ist `OBSERVE_ONLY`; die scharfe Kinetic-Korrelation (`ARMED_TI_CORRELATION`) erfordert eine ausdrückliche Bestätigung durch den Bediener.
 
+
+### Ersteinrichtung (First-Run-Assistent)
+
+Beim ersten Start des Centers nach Installation oder Update öffnet sich der
+**Ersteinrichtungsassistent**, solange die Einrichtung nicht serverseitig
+abgeschlossen wurde. Er führt in vier Schritten durch Einsatzgebiet,
+Empfehlung, Aktivierung und Verifikation:
+
+1. **Einsatzgebiet:** persönlicher PC, Unternehmen/Büro, Server/Hochrisiko oder
+   Entwickler/Build.
+2. **Empfehlung:** Das Profil **Enterprise Balanced** ist der Standard für
+   Privat und Büro; **Isolation** ergänzt deaktivierten USB-Speicher und RDP und
+   ist nur für passende Server-/Hochrisiko-Umgebungen gedacht. Die
+   Schutzstufen-Tabelle erklärt ausdrücklich, was `OBSERVE`, `BALANCED` und
+   `ISOLATION` bedeuten.
+3. **Aktivierung:** Härtungsprofil, Integritätsmonitor, Titan-Richtlinie und
+   MHX-Policy-Abgleich werden über die vorhandenen Operator-APIs angewendet.
+   Der Assistent zeigt Fehler und ablehnende Voraussetzungen an; er täuscht
+   keinen Erfolg vor.
+4. **Verifikation:** Erst wenn Defender, ASR (11/11 blockierend), Controlled
+   Folder Access, Firewall, Schutzrichtlinie und Integritätsmonitor tatsächlich
+   verifiziert sind, kann die Einrichtung abgeschlossen werden.
+
+Die Abschlussmarkierung wird serverseitig authentifiziert gespeichert. Ein
+Browserwechsel, ein anderer Rechner oder eine neue Sitzung setzt den Assistenten
+nicht zurück; eine neue Programmversion kann ihn erneut anfordern. Der
+Assistent ersetzt keine Operator-Berechtigung: Änderungen bleiben an die lokale
+Bedienersitzung und die serverseitige Bestätigungsphrase gebunden.
+
 ### Wichtige Betriebshinweise
 
 1. **Lokale Souveränität:** Die Kontrollebene läuft ausschließlich auf Loopback; keine Cloud-Kontrollebene und keine stille Telemetrie an Dritte.

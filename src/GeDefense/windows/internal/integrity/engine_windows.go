@@ -137,6 +137,10 @@ func (e *Engine) Configure(enabled bool, intervalHours int) (Status, error) {
 	e.mu.Lock()
 	e.status.Enabled = enabled
 	e.status.IntervalHours = intervalHours
+	// A successful operator configuration replaces a previously rejected/
+	// legacy state; keeping the old error would make a healthy monitor look
+	// broken forever after repair.
+	e.status.Error = ""
 	if !enabled && !e.status.Running {
 		e.status.State = "DISABLED"
 	}
@@ -732,6 +736,22 @@ func (e *Engine) load() error {
 		return errors.New("integrity state validation failed")
 	}
 	if err := e.authenticateState(state); err != nil {
+		// Older GeDefense builds wrote an unsigned disabled placeholder before
+		// authenticated integrity state existed. If and only if it proves to be
+		// a disabled, empty state, migrate it to a signed state. Any enabled,
+		// populated, generated or MAC-bearing state is still rejected fail-closed.
+		if state.MAC == "" && state.Enabled == false && state.Generation == "" &&
+			state.LastScanUTC.IsZero() && state.Status.Enabled == false && state.Status.State == "DISABLED" &&
+			state.Status.FilesDiscovered == 0 && state.Status.FilesHashed == 0 && state.Status.BytesHashed == 0 &&
+			state.Status.ReadErrors == 0 && state.Status.Added == 0 && state.Status.Modified == 0 &&
+			state.Status.Deleted == 0 && state.Status.ChangesStored == 0 {
+			e.status = Status{Enabled: false, IntervalHours: state.IntervalHours, State: "DISABLED"}
+			if persistErr := e.persist(); persistErr != nil {
+				return persistErr
+			}
+			_ = e.appendEvidence("integrity.migration", "legacy-disabled-placeholder", "authenticated")
+			return nil
+		}
 		return err
 	}
 	if state.Generation != "" && !validGenerationID(state.Generation) {
@@ -741,6 +761,12 @@ func (e *Engine) load() error {
 	state.Status.StartedUTC = time.Time{}
 	state.Status.Enabled = state.Enabled
 	state.Status.IntervalHours = state.IntervalHours
+	// A persisted error from the old, unauthenticated state schema is stale once
+	// the state has authenticated successfully. Keep genuine scan errors, but do
+	// not make a repaired monitor look permanently degraded.
+	if strings.HasPrefix(state.Status.Error, "integrity state rejected:") {
+		state.Status.Error = ""
+	}
 	if state.Enabled {
 		state.Status.State = "SCHEDULED"
 		state.Status.NextScanUTC = state.LastScanUTC.Add(time.Duration(state.IntervalHours) * time.Hour)

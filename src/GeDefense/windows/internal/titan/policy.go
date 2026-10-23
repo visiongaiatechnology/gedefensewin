@@ -141,6 +141,21 @@ func (p Policy) Validate() error {
 		}
 		seenRoots[lower] = struct{}{}
 	}
+	seenOwnerImages := make(map[string]struct{}, len(p.OwnerProcessImages))
+	if len(p.OwnerProcessImages) > 32 {
+		return errors.New("titan owner process image count boundary rejected")
+	}
+	for _, image := range p.OwnerProcessImages {
+		normalized := filepath.Clean(strings.TrimSpace(image))
+		if !filepath.IsAbs(normalized) || len(normalized) > 260 || !strings.EqualFold(filepath.Ext(normalized), ".exe") {
+			return errors.New("titan owner process image path rejected")
+		}
+		lower := strings.ToLower(normalized)
+		if _, exists := seenOwnerImages[lower]; exists {
+			return errors.New("titan owner process image duplicated")
+		}
+		seenOwnerImages[lower] = struct{}{}
+	}
 	seen := make(map[string]struct{}, len(p.Permits))
 	for _, permit := range p.Permits {
 		if permit.ID == "" || len(permit.ID) > 64 {
@@ -248,6 +263,41 @@ func (s *PolicyStore) AddDevelopmentRoot(path, reason string) (Policy, error) {
 		}
 	}
 	next.DevelopmentRoots = append(next.DevelopmentRoots, path)
+	next.UpdatedUTC = time.Now().UTC()
+	next.Reason = reason
+	if err := next.Validate(); err != nil {
+		return Policy{}, err
+	}
+	if err := s.persist(next); err != nil {
+		return Policy{}, err
+	}
+	s.current = next
+	return clonePolicy(next), nil
+}
+
+func (s *PolicyStore) SetOwnerProcessImages(images []string, reason string) (Policy, error) {
+	reason = strings.TrimSpace(reason)
+	if len(reason) < 8 || len(reason) > 512 {
+		return Policy{}, errors.New("titan owner process reason boundary rejected")
+	}
+	normalized := make([]string, 0, len(images))
+	seen := make(map[string]struct{}, len(images))
+	for _, image := range images {
+		path := filepath.Clean(strings.TrimSpace(image))
+		if !filepath.IsAbs(path) || len(path) > 260 || !strings.EqualFold(filepath.Ext(path), ".exe") {
+			return Policy{}, errors.New("titan owner process image path rejected")
+		}
+		lower := strings.ToLower(path)
+		if _, exists := seen[lower]; exists {
+			continue
+		}
+		seen[lower] = struct{}{}
+		normalized = append(normalized, path)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := clonePolicy(s.current)
+	next.OwnerProcessImages = normalized
 	next.UpdatedUTC = time.Now().UTC()
 	next.Reason = reason
 	if err := next.Validate(); err != nil {
@@ -462,6 +512,7 @@ func clonePolicy(policy Policy) Policy {
 	clone := policy
 	clone.Permits = append([]Permit(nil), policy.Permits...)
 	clone.DevelopmentRoots = append([]string(nil), policy.DevelopmentRoots...)
+	clone.OwnerProcessImages = append([]string(nil), policy.OwnerProcessImages...)
 	return clone
 }
 

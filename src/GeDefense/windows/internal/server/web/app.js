@@ -54,6 +54,7 @@ import {
   bindThreatIntelSettingsPanel,
 } from './settings.js';
 import {bindTitan, loadTitan} from './titan.js';
+import {initSetupWizard} from './setup-wizard.js';
 import {locale} from './i18n.js';
 
 const pages=new Set(['overview','titan','protection','threat-intel','xdr','network','kinetic','integrity','hardening','audit','evidence','system']);
@@ -441,6 +442,15 @@ async function initialize(){
   const requested=location.hash.slice(1);
   if(authenticated){
     initWindowControls();
+    // First-run setup owns the first authenticated surface. It uses the same
+    // measured posture APIs as the rest of the console; do not stack the
+    // readiness dialog underneath it. Completion reloads into normal startup.
+    let setupPending=false;
+    try{setupPending=await initSetupWizard();}catch(error){if(error?.status===401)openDialog('authDialog');}
+    if(setupPending){
+      await activate(pages.has(requested)?requested:'overview',{silent:true,skipLoad:true});
+      return;
+    }
     void loadShellStatus();
     void initializeStartup();
     await activate(pages.has(requested)?requested:'overview',{silent:true});

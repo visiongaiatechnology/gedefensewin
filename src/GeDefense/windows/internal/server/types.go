@@ -324,6 +324,7 @@ type TitanEngine interface {
 	RestoreQuarantine(string, string) (titan.QuarantineEntry, error)
 	ReviewQuarantine(string, string) (titan.QuarantineEntry, error)
 	SetPolicy(string, bool, string) (titan.Policy, error)
+	SetOwnerProcessImages([]string, string) (titan.Policy, error)
 	Permits() []titan.Permit
 	CreatePermit(string, string, string, time.Duration, bool, string) (titan.Permit, error)
 	RevokePermit(string, string) (titan.Policy, error)

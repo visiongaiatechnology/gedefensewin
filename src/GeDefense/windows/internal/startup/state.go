@@ -37,6 +37,20 @@ type persisted struct {
 	Version         string    `json:"version"`
 	UptimeMS        uint64    `json:"uptimeMs"`
 	AcknowledgedUTC time.Time `json:"acknowledgedUtc"`
+	// SetupCompletedUTC is written only after the first-run wizard verified the
+	// active protection posture. It is deliberately separate from readiness: a
+	// reboot asks for readiness again, but must not force the first-run wizard.
+	SetupCompletedUTC time.Time `json:"setupCompletedUtc,omitempty"`
+	SetupProfile      string    `json:"setupProfile,omitempty"`
+}
+
+// SetupResult is the server-authoritative answer to "does this installation
+// still need its first-run setup?".
+type SetupResult struct {
+	Complete       bool      `json:"complete"`
+	Profile        string    `json:"profile,omitempty"`
+	CompletedUTC   time.Time `json:"completedUtc,omitempty"`
+	CurrentVersion string    `json:"currentVersion"`
 }
 
 type State struct {
@@ -104,7 +118,17 @@ func (s *State) Acknowledge(version string) (Result, error) {
 	defer s.mu.Unlock()
 
 	now := time.Now().UTC()
-	payload, err := json.Marshal(persisted{Version: version, UptimeMS: readUptime(), AcknowledgedUTC: now})
+	previous, loadErr := s.loadLocked()
+	setupProfile := ""
+	var setupCompleted time.Time
+	if loadErr == nil {
+		setupProfile = previous.SetupProfile
+		setupCompleted = previous.SetupCompletedUTC
+	}
+	payload, err := json.Marshal(persisted{
+		Version: version, UptimeMS: readUptime(), AcknowledgedUTC: now,
+		SetupProfile: setupProfile, SetupCompletedUTC: setupCompleted,
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -134,6 +158,84 @@ func (s *State) Acknowledge(version string) (Result, error) {
 		return Result{}, fmt.Errorf("startup state commit: %w", err)
 	}
 	return Result{Required: false, Reason: reasonNone, Version: version, CurrentVersion: version, AcknowledgedUTC: now, SinceUTC: now, LastBootUTC: time.Now().UTC().Add(-time.Duration(readUptime()) * time.Millisecond)}, nil
+}
+
+func (s *State) SetupStatus(version string) (SetupResult, error) {
+	if version == "" {
+		return SetupResult{}, errors.New("setup version is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous, err := s.loadLocked()
+	if errors.Is(err, os.ErrNotExist) {
+		return SetupResult{Complete: false, CurrentVersion: version}, nil
+	}
+	if err != nil {
+		return SetupResult{}, err
+	}
+	return SetupResult{
+		Complete:       !previous.SetupCompletedUTC.IsZero(),
+		Profile:        previous.SetupProfile,
+		CompletedUTC:   previous.SetupCompletedUTC,
+		CurrentVersion: version,
+	}, nil
+}
+
+// CompleteSetup records the first-run choice only after the caller has verified
+// that real protection is active. The readiness marker is preserved.
+func (s *State) CompleteSetup(profile, version string) (SetupResult, error) {
+	if version == "" {
+		return SetupResult{}, errors.New("setup version is required")
+	}
+	switch profile {
+	case "personal", "business", "server", "developer":
+	default:
+		return SetupResult{}, errors.New("setup profile is invalid")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	previous, loadErr := s.loadLocked()
+	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
+		return SetupResult{}, loadErr
+	}
+	if errors.Is(loadErr, os.ErrNotExist) {
+		previous = persisted{Version: version, AcknowledgedUTC: now}
+	}
+	previous.Version = version
+	previous.UptimeMS = readUptime()
+	previous.SetupCompletedUTC = now
+	previous.SetupProfile = profile
+	payload, err := json.Marshal(previous)
+	if err != nil {
+		return SetupResult{}, err
+	}
+	payload = append(payload, '\n')
+	temp, err := os.CreateTemp(filepath.Dir(s.path), ".startup-state-*.tmp")
+	if err != nil {
+		return SetupResult{}, err
+	}
+	tempName := temp.Name()
+	defer func() { _ = os.Remove(tempName) }()
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return SetupResult{}, err
+	}
+	if _, err := temp.Write(payload); err != nil {
+		_ = temp.Close()
+		return SetupResult{}, err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return SetupResult{}, err
+	}
+	if err := temp.Close(); err != nil {
+		return SetupResult{}, err
+	}
+	if err := os.Rename(tempName, s.path); err != nil {
+		return SetupResult{}, fmt.Errorf("setup state commit: %w", err)
+	}
+	return SetupResult{Complete: true, Profile: profile, CompletedUTC: now, CurrentVersion: version}, nil
 }
 
 func (s *State) loadLocked() (persisted, error) {

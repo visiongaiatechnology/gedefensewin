@@ -239,6 +239,27 @@ func (s *Server) titanRevokePermit(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, policy)
 }
 
+func (s *Server) titanSetOwnerProcessImages(w http.ResponseWriter, r *http.Request) {
+	if !s.titanAvailable(w) {
+		return
+	}
+	var input struct {
+		Images       []string `json:"images"`
+		Reason       string   `json:"reason"`
+		Confirmation string   `json:"confirmation"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil || validateReason(input.Reason) != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	policy, err := s.titan.SetOwnerProcessImages(input.Images, input.Reason)
+	if err != nil {
+		s.writeError(w, http.StatusConflict, "titan owner process images rejected")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, policy)
+}
+
 func (s *Server) titanAddDevelopmentRoot(w http.ResponseWriter, r *http.Request) {
 	if !s.titanAvailable(w) {
 		return

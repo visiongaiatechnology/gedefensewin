@@ -206,3 +206,22 @@ Keine dekorativen Hintergrundgitter, keine erfundenen KPIs, keine Attribution.
 3. Signierter Windows-Minifilter für echte Pre-Write-/Execute-Prävention.
 4. Permit-Verwaltung und Wartungsfenster in der UI — Permits sind in 5.1.1 umgesetzt; Wartungsfenster bleiben offen.
 5. Linux-Adapter (fanotify, auditd, IMA, TPM2) mit demselben Eventmodell.
+
+## 12. Owner-Toolchain-Prozessketten
+
+Titan speichert zu einem Ereignis eine begrenzte, ausschlieÃŸlich aus der realen
+Prozessliste gelesene `processChain` (Leaf first, maximal acht EintrÃ¤ge). Der
+Konsolenhost `conhost.exe` wird nicht mehr als Datei-Actor ausgegeben; er ist kein
+Schreiber und war die grÃ¶ÃŸte Einzelquelle irrefÃ¼hrender Zuordnungen.
+
+Die Owner-Policy kann mit `ownerProcessImages` explizite, absolute Image-Pfade
+freigeben, zum Beispiel den lokalen DeepSeek-Harness-Pfad. Ein Treffer in der
+Prozesskette darf **nur** Ingress-/User-Content-Ereignisse auf `TOLERATED`
+herabstufen; System-, Persistenz- und SicherheitsÃ¤nderungen bleiben unabhÃ¤ngig
+davon prÃ¼fpflichtig. Eine Freigabe ist damit keine AusfÃ¼hrungs- oder
+Systemautorisierung und erzeugt weiterhin vollstÃ¤ndige Evidenz.
+
+API: `POST /api/v1/titan/owner-process-images` mit
+`{"images":["C:\\Tools\\DeepSeek Harness.exe"],"reason":"...","confirmation":"UPDATE OWNER PROCESS IMAGES"}`.
+Die Route ist eine bestÃ¤tigungspflichtige Policy-Mutation; sie ist nicht als
+allgemeine Prozess-Allowlist gedacht.

@@ -254,10 +254,14 @@ function Get-VgtDefenderTelemetry {
         }
         $exclusionReport = [ordered]@{
             Available = [bool]($null -ne $pathValues -or $null -ne $processValues -or $null -ne $extensionValues -or $null -ne $ipValues)
-            PathCount = if ($null -ne $pathValues) { $pathValues.Count } else { $null }
-            ProcessCount = if ($null -ne $processValues) { $processValues.Count } else { $null }
-            ExtensionCount = if ($null -ne $extensionValues) { $extensionValues.Count } else { $null }
-            IpAddressCount = if ($null -ne $ipValues) { $ipValues.Count } else { $null }
+            # PowerShell unrolls a single-element function result to a scalar. Wrap every
+            # optional collection before reading .Count; under Set-StrictMode a scalar
+            # string has no Count property, which previously made the whole Defender
+            # telemetry snapshot unavailable whenever exactly one exclusion existed.
+            PathCount = if ($null -ne $pathValues) { @($pathValues).Count } else { $null }
+            ProcessCount = if ($null -ne $processValues) { @($processValues).Count } else { $null }
+            ExtensionCount = if ($null -ne $extensionValues) { @($extensionValues).Count } else { $null }
+            IpAddressCount = if ($null -ne $ipValues) { @($ipValues).Count } else { $null }
             Extensions = @($extensions.ToArray())
             ExtensionsTruncated = $extensionsTruncated
         }

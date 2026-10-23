@@ -26,6 +26,8 @@ const (
 	confirmationApplicationAllowlist  = "UPDATE APPLICATION ALLOWLIST"
 	confirmationAddDevelopmentRoot    = "ADD DEVELOPMENT ROOT"
 	confirmationRemoveDevelopmentRoot = "REMOVE DEVELOPMENT ROOT"
+	confirmationOwnerProcessImages    = "UPDATE OWNER PROCESS IMAGES"
+	setupConfirmation                 = "COMPLETE SETUP"
 )
 
 func New(version, token string, engine HardeningEngine, auditEngine AuditEngine, xdrEngine XDREngine, mhxEngine MHXEngine, integrityEngine IntegrityEngine, ledger *evidence.Ledger) http.Handler {
@@ -129,6 +131,8 @@ func (s *Server) routes() http.Handler {
 	read("/api/v1/health/status", s.healthStatus)
 	operate("/api/v1/health/refresh", s.healthRefresh)
 	read("/api/v1/startup/state", s.startupStatus)
+	read("/api/v1/setup/status", s.setupStatus)
+	confirmed("/api/v1/setup/complete", setupConfirmation, s.setupComplete)
 	operate("/api/v1/startup/ack", s.startupAcknowledge)
 	read("/api/v1/status", s.status)
 	read("/api/v1/protection/readiness", s.protectionReadiness)
@@ -194,6 +198,7 @@ func (s *Server) routes() http.Handler {
 	policy("/api/v1/titan/permits/{id}/revoke", s.titanRevokePermit)
 	confirmed("/api/v1/titan/development-roots", confirmationAddDevelopmentRoot, s.titanAddDevelopmentRoot)
 	confirmed("/api/v1/titan/development-roots/remove", confirmationRemoveDevelopmentRoot, s.titanRemoveDevelopmentRoot)
+	confirmed("/api/v1/titan/owner-process-images", confirmationOwnerProcessImages, s.titanSetOwnerProcessImages)
 	read("/api/v1/titan/checkpoints", s.titanCheckpoints)
 	operate("/api/v1/titan/verify", s.titanVerify)
 	read("/api/v1/titan/export", s.titanExport)

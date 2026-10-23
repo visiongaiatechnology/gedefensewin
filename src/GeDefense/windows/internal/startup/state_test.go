@@ -54,3 +54,27 @@ func TestRebootDetectionAndCorruptStateFailsTowardCheck(t *testing.T) {
 		t.Fatalf("corrupt marker must require a check: %+v err=%v", result, err)
 	}
 }
+
+func TestSetupMarkerSurvivesReadinessAcknowledgement(t *testing.T) {
+	state, err := Open(filepath.Join(t.TempDir(), "startup.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := state.SetupStatus("5.2.0")
+	if err != nil || status.Complete {
+		t.Fatalf("fresh setup status: %+v err=%v", status, err)
+	}
+	if _, err := state.CompleteSetup("business", "5.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Acknowledge("5.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	status, err = state.SetupStatus("5.2.0")
+	if err != nil || !status.Complete || status.Profile != "business" {
+		t.Fatalf("setup marker lost: %+v err=%v", status, err)
+	}
+	if _, err := state.CompleteSetup("not-a-profile", "5.2.0"); err == nil {
+		t.Fatal("unknown setup profile accepted")
+	}
+}

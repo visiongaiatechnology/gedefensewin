@@ -75,6 +75,9 @@ func TestIntegrityConfigurationBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	engine.mu.Lock()
+	engine.status.Error = "integrity state rejected: legacy state"
+	engine.mu.Unlock()
 	if _, err := engine.Configure(true, 13); err == nil {
 		t.Fatal("unsupported interval was accepted")
 	}
@@ -82,8 +85,60 @@ func TestIntegrityConfigurationBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Enabled || status.IntervalHours != 12 || status.State != "DISABLED" {
+	if status.Enabled || status.IntervalHours != 12 || status.State != "DISABLED" || status.Error != "" {
 		t.Fatalf("unexpected status: %+v", status)
+	}
+}
+
+func TestLegacyDisabledIntegrityStateIsMigratedButPopulatedStateIsNot(t *testing.T) {
+	root := t.TempDir()
+	ledger, err := evidence.Open(filepath.Join(root, "evidence.jsonl"), filepath.Join(root, "evidence.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrityRoot := filepath.Join(root, "integrity")
+	if err := os.MkdirAll(integrityRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := persistedState{
+		Enabled: false, IntervalHours: 24,
+		Status: Status{Enabled: false, IntervalHours: 24, State: "DISABLED"},
+	}
+	raw, _ := json.Marshal(legacy)
+	if err := os.WriteFile(filepath.Join(integrityRoot, "state.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(integrityRoot, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := engine.Status(); status.State == "DEGRADED" || status.Error != "" {
+		t.Fatalf("disabled legacy state was not migrated: %+v", status)
+	}
+	after, err := os.ReadFile(filepath.Join(integrityRoot, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrated persistedState
+	if err := json.Unmarshal(after, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.MAC == "" {
+		t.Fatal("migrated integrity state is not authenticated")
+	}
+
+	legacy.Enabled = true
+	legacy.Generation = "20260101T000000Z-0123456789abcdef"
+	enabledRaw, _ := json.Marshal(legacy)
+	if err := os.WriteFile(filepath.Join(integrityRoot, "state.json"), enabledRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine, err = New(integrityRoot, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := engine.Status(); status.State != "DEGRADED" {
+		t.Fatalf("populated legacy state was not rejected: %+v", status)
 	}
 }
 

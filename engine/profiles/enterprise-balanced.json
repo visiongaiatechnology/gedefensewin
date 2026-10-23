@@ -1,9 +1,9 @@
 {
   "name": "VGT Enterprise Balanced",
   "version": "1.0.0",
-  "asrMode": "AuditMode",
+  "asrMode": "Enabled",
   "cloudBlockLevel": "High",
-  "controlledFolderAccess": "AuditMode",
+  "controlledFolderAccess": "Enabled",
   "defaultOutboundAction": "Allow",
   "disableUsbStorage": false,
   "disableRemoteDesktop": true,

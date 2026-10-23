@@ -77,6 +77,14 @@ func Evaluate(policy Policy, store *PolicyStore, observation Observation, now ti
 		return authorization
 	}
 
+	if (riskClass == RiskIngress || riskClass == RiskUserContent) && ownerProcessChainAllowed(policy, observation.Actor.ProcessChain) {
+		authorization.Status = TrustTolerated
+		authorization.Reason = "Owner-approved development toolchain process chain observed; the change remains fully in evidence, but is not treated as ingress high risk. No authorization is granted for system, persistence or security changes."
+		authorization.NeedsReview = false
+		authorization.AutoQuarantine = false
+		return authorization
+	}
+
 	if isMaintenanceStartOnly(observation) {
 		authorization.Status = TrustTolerated
 		authorization.Reason = "Starttyp eines Windows-Wartungsdienstes wurde geändert; ImagePath, Diensttyp und Konto blieben unverändert. Die Änderung bleibt in der Evidenz, wird aber nicht als Persistenz-Hochrisiko eskaliert."
@@ -109,6 +117,22 @@ func Evaluate(policy Policy, store *PolicyStore, observation Observation, now ti
 	authorization.Status = TrustTolerated
 	authorization.NeedsReview = false
 	return authorization
+}
+
+func ownerProcessChainAllowed(policy Policy, chain []string) bool {
+	if len(chain) == 0 || len(policy.OwnerProcessImages) == 0 {
+		return false
+	}
+	allowed := make(map[string]struct{}, len(policy.OwnerProcessImages))
+	for _, image := range policy.OwnerProcessImages {
+		allowed[strings.ToLower(filepath.Clean(strings.TrimSpace(image)))] = struct{}{}
+	}
+	for _, image := range chain {
+		if _, ok := allowed[strings.ToLower(filepath.Clean(image))]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyObject(observation Observation) RiskClass {

@@ -31,6 +31,8 @@ type processObservation struct {
 	ParentPID   uint32
 	Image       string
 	Path        string
+	// Chain is the observed ancestry, leaf first, bounded by the process sensor.
+	Chain []string
 }
 
 type remoteObservation struct {
@@ -455,6 +457,21 @@ func (e *Engine) AddDevelopmentRoot(path, reason string) (Policy, error) {
 	return policy, nil
 }
 
+func (e *Engine) SetOwnerProcessImages(images []string, reason string) (Policy, error) {
+	policy, err := e.policy.SetOwnerProcessImages(images, reason)
+	if err != nil {
+		return Policy{}, err
+	}
+	_, _ = e.journal.Append(Observation{
+		Type: EventSelfIntegrity, Severity: SeverityMedium,
+		Object:        Object{Kind: ObjectSensor, Path: "titan://owner-process-images", Name: "owner-toolchain"},
+		Authorization: Authorization{Status: TrustAuthorized, RiskClass: RiskTitan, PolicyMode: policy.Mode, Reason: "Besitzer hat die Entwickler-Toolchain für Ingress-Evidenz freigegeben"},
+		Response:      Response{Action: "OWNER_PROCESS_IMAGES_UPDATED", State: "RECORDED", Detail: reason},
+		Source:        "titan-owner", Health: "HEALTHY", Detail: reason,
+	})
+	return policy, nil
+}
+
 func (e *Engine) RemoveDevelopmentRoot(path, reason string) (Policy, error) {
 	policy, err := e.policy.RemoveDevelopmentRoot(path, reason)
 	if err != nil {
@@ -723,8 +740,17 @@ func (e *Engine) processContext(now time.Time) (Actor, bool) {
 		if distance < 0 || distance > processCorrelation {
 			continue
 		}
+		// conhost.exe is a console host, not the process that performed a file
+		// operation. Returning it as the actor produces misleading attribution and
+		// was the largest single source of Titan false positives. Prefer the next
+		// observed process; if none exists, report an honest NONE actor.
+		if strings.EqualFold(process.Image, "conhost.exe") || strings.EqualFold(process.Image, "audiodg.exe") {
+			continue
+		}
 		return Actor{PID: process.PID, ParentPID: process.ParentPID, Image: process.Image, Path: process.Path,
-			CorrelationQuality: CorrelationTemporal, CorrelationNote: "Prozessstart zeitlich nahe der Dateiänderung; keine Datei-zu-PID-Zuordnung beobachtet.",
+			ProcessChain:        append([]string(nil), process.Chain...),
+			CorrelationQuality:  CorrelationTemporal,
+			CorrelationNote:     "Prozessstart zeitlich nahe der Dateiänderung; keine Datei-zu-PID-Zuordnung beobachtet.",
 			ObservedProcessTime: process.ObservedUTC}, true
 	}
 	return Actor{CorrelationQuality: CorrelationNone, CorrelationNote: "Keine direkte oder zeitlich nahe Prozesszuordnung beobachtet."}, false

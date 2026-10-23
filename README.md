@@ -195,6 +195,33 @@ VGTGeDefense Windows Service (LocalSystem)     sovereign control plane
 4. Start the Center. Center and Tray obtain short-lived operator sessions through the loopback broker; the long-lived master token is a SYSTEM/Administrators-only break-glass credential.
 5. Open the **Protection Center** and follow the readiness guidance. Defensive default is `OBSERVE_ONLY`; sharp Kinetic correlation (`ARMED_TI_CORRELATION`) requires explicit operator confirmation.
 
+
+### First-run setup
+
+On the first Center start after installation or update, the **first-run setup
+assistant** opens until setup has been completed server-side. It guides the
+operator through four steps: use case, recommendation, activation and
+verification:
+
+1. **Use case:** personal PC, business/office, server/high-risk or
+   developer/build.
+2. **Recommendation:** **Enterprise Balanced** is the default for personal and
+   business use; **Isolation** additionally disables USB storage and RDP and is
+   only appropriate for matching server/high-risk environments. The protection
+   level table explains what `OBSERVE`, `BALANCED` and `ISOLATION` mean.
+3. **Activation:** hardening profile, integrity monitor, Titan policy and MHX
+   policy reconciliation are applied through the existing operator APIs. The
+   assistant exposes errors and rejected preconditions; it never pretends that
+   an apply succeeded.
+4. **Verification:** setup can only be completed after Defender, ASR (11/11
+   blocking), Controlled Folder Access, firewall, protection policy and the
+   integrity monitor are actually verified.
+
+The completion marker is stored server-side and authenticated. A different
+browser, machine or session does not reset it; a new program version may request
+the setup again. The wizard is not an authorization bypass: mutations remain
+bound to the local operator session and the server-side confirmation phrases.
+
 ### Important operating notes
 
 1. **Local sovereignty:** the control plane runs on loopback only; no cloud control plane and no silent third-party telemetry.

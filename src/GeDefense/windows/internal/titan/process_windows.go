@@ -41,6 +41,10 @@ func (e *Engine) runProcessSensor(ctx context.Context) {
 					continue
 				}
 				current := make(map[uint32]struct{}, len(processes))
+				entries := make(map[uint32]winapi.ProcessEntry, len(processes))
+				for _, process := range processes {
+					entries[process.PID] = process
+				}
 				newProcesses := make([]processObservation, 0, 8)
 				for _, process := range processes {
 					current[process.PID] = struct{}{}
@@ -50,7 +54,8 @@ func (e *Engine) runProcessSensor(ctx context.Context) {
 					if _, exists := previous[process.PID]; exists {
 						continue
 					}
-					observation := processObservation{ObservedUTC: time.Now().UTC(), PID: process.PID, ParentPID: process.ParentPID, Image: process.Image}
+					observation := processObservation{ObservedUTC: time.Now().UTC(), PID: process.PID, ParentPID: process.ParentPID,
+						Image: process.Image, Chain: observedProcessChain(process.PID, entries)}
 					if identity, openErr := winapi.OpenProcessIdentity(process.PID, false); openErr == nil {
 						observation.Path = identity.ImagePath
 						observation.CreationUTC = time.Unix(0, identity.CreationUnixNano).UTC()
@@ -73,6 +78,35 @@ func (e *Engine) runProcessSensor(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// observedProcessChain returns at most eight image names, leaf first. It uses
+// only the process snapshot Titan actually read; a missing or reused parent PID
+// terminates the chain instead of inventing ancestry.
+func observedProcessChain(pid uint32, entries map[uint32]winapi.ProcessEntry) []string {
+	const maxChain = 8
+	chain := make([]string, 0, maxChain)
+	seen := make(map[uint32]struct{}, maxChain)
+	for pid != 0 && len(chain) < maxChain {
+		entry, ok := entries[pid]
+		if !ok || entry.Image == "" {
+			break
+		}
+		if _, exists := seen[pid]; exists {
+			break
+		}
+		seen[pid] = struct{}{}
+		image := entry.Image
+		if identity, openErr := winapi.OpenProcessIdentity(pid, false); openErr == nil {
+			if identity.ImagePath != "" {
+				image = identity.ImagePath
+			}
+			_ = identity.Close()
+		}
+		chain = append(chain, image)
+		pid = entry.ParentPID
+	}
+	return chain
 }
 
 func (e *Engine) refreshRemoteTelemetry(ctx context.Context, processes []winapi.ProcessEntry) {
