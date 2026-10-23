@@ -160,8 +160,10 @@ func (s *Server) mhxApplications(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) mhxSetApplication(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Action string `json:"action"`
-		Path   string `json:"path"`
+		Action       string `json:"action"`
+		Path         string `json:"path"`
+		Confirmation string `json:"confirmation"`
+		Reason       string `json:"reason"`
 	}
 	if err := decodeJSON(w, r, &input); err != nil || (input.Action != "Add" && input.Action != "Remove") || len(input.Path) < 3 || len(input.Path) > 1024 {
 		s.writeError(w, http.StatusBadRequest, "invalid request")

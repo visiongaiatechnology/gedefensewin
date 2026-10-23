@@ -40,6 +40,43 @@ func TestSinglePortAndQuietPeriod(t *testing.T) {
 		}
 	}
 }
+
+func TestPortlessBlocksRemainVisibleWithoutInventingBursts(t *testing.T) {
+	m := NewMonitor()
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 20; i++ {
+		if m.ObserveBlockedInbound("8.8.8.8", 0, now.Add(time.Duration(i)*time.Millisecond)) {
+			t.Fatal("a portless block cannot prove a port-diverse burst")
+		}
+	}
+	snapshot := m.Snapshot()
+	if snapshot.BlocksObserved != 20 || snapshot.TrackedSources != 1 || snapshot.BurstCandidates != 0 {
+		t.Fatalf("portless WFP observations disappeared: %+v", snapshot)
+	}
+	rows := m.SourceSnapshot(250)
+	if len(rows) != 1 || rows[0].IP != "8.8.8.8" || rows[0].Hits != 20 || rows[0].PortlessBlocks != 20 || rows[0].LastPort != 0 {
+		t.Fatalf("incorrect portless source detail: %+v", rows)
+	}
+}
+
+func TestSourceSnapshotIsBoundedSortedAndDetached(t *testing.T) {
+	m := NewMonitor()
+	now := time.Now().UTC()
+	m.ObserveBlockedInbound("8.8.8.8", 443, now)
+	m.ObserveBlockedInbound("1.1.1.1", 0, now.Add(time.Second))
+	rows := m.SourceSnapshot(1)
+	if len(rows) != 1 || rows[0].IP != "1.1.1.1" {
+		t.Fatal(rows)
+	}
+	rows[0].Hits = 900
+	if m.SourceSnapshot(1)[0].Hits != 1 {
+		t.Fatal("snapshot mutates monitor state")
+	}
+	m.ObserveBlockedInbound("1.1.1.1", 80, now)
+	if m.SourceSnapshot(1)[0].Hits != 1 {
+		t.Fatal("old observation replaced the current source")
+	}
+}
 func TestSourceCountIsBounded(t *testing.T) {
 	m := NewMonitor()
 	now := time.Now().UTC()

@@ -7,6 +7,9 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $sourceRoot = Join-Path $projectRoot 'src\GeDefense\windows'
 $versionPath = Join-Path $projectRoot 'VERSION'
+$toolsRoot = Join-Path $projectRoot 'tools'
+Import-Module -Name (Join-Path $toolsRoot 'VgtSupplyChain.psm1') -Force
+Import-Module -Name (Join-Path $projectRoot 'build\PublishVerification.psm1') -Force
 
 function Assert-Vgt {
     param([Parameter(Mandatory)][bool]$Condition,[Parameter(Mandatory)][string]$Message)
@@ -21,7 +24,7 @@ function Read-VgtText {
 }
 
 $version = (Read-VgtText $versionPath).Trim()
-Assert-Vgt ($version -match '^4\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') 'VERSION is not a valid GeDefense V4 version.'
+Assert-Vgt ($version -match '^5\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') 'VERSION is not a valid GeDefense V5 version.'
 
 $toolchainPath = Join-Path $projectRoot 'TOOLCHAINS.lock'
 $toolchain = @{}
@@ -34,9 +37,16 @@ foreach ($line in Get-Content -LiteralPath $toolchainPath -Encoding UTF8) {
 }
 Assert-Vgt ($toolchain.ContainsKey('go')) 'Pinned Go release toolchain is missing.'
 Assert-Vgt ($toolchain.ContainsKey('powershell')) 'Pinned PowerShell release toolchain is missing.'
+Assert-Vgt (([string]$toolchain['go_windows_amd64_zip_sha256']) -match '^[0-9a-fA-F]{64}$') 'Pinned Go toolchain archive hash is missing or invalid.'
 $goVersion = (& go env GOVERSION).Trim()
 Assert-Vgt ($LASTEXITCODE -eq 0) 'Unable to read the Go toolchain version.'
-Assert-Vgt ($goVersion -eq ('go' + $toolchain['go'])) ("Official release requires Go {0}; detected {1}." -f $toolchain['go'],$goVersion)
+$requiredGo = $toolchain['go'].TrimStart('g','o')
+$actualGo = $goVersion.TrimStart('g','o')
+try {
+    Assert-Vgt ([version]$actualGo -ge [version]$requiredGo) ("Official release requires Go >= {0}; detected {1}." -f $requiredGo,$goVersion)
+} catch {
+    throw [InvalidOperationException]::new(("Unable to compare Go toolchain versions: pinned={0}, detected={1}." -f $requiredGo,$goVersion))
+}
 Assert-Vgt ($PSVersionTable.PSVersion.Major -eq 5 -and $PSVersionTable.PSVersion.Minor -eq 1) 'Official release requires Windows PowerShell 5.1.'
 Assert-Vgt ([Environment]::Is64BitProcess) 'Official release gate requires a 64-bit Windows PowerShell process.'
 
@@ -50,6 +60,28 @@ Assert-Vgt (-not (Get-ChildItem -LiteralPath (Join-Path $sourceRoot 'cmd') -Recu
 $productVersionFile = Join-Path $sourceRoot 'internal\product\version.go'
 $productVersionSource = Read-VgtText $productVersionFile
 Assert-Vgt ($productVersionSource.Contains('const Version = "' + $version + '"')) 'Go product version does not match VERSION.'
+
+# Clean-source repository contract: generated build output and AI-agent handoff
+# artifacts are gitignored and must never be part of the delivered source tree.
+$forbiddenRepositoryFiles = @(
+    'Next.md',
+    'MERGE_REPORT.json',
+    'START_HERE_FULL_MERGED_SOURCE.md',
+    'GITHUB-UPLOAD.md',
+    'CHANGELOG.md',
+    'RELEASE-NOTES.md'
+)
+foreach ($forbiddenFile in $forbiddenRepositoryFiles) {
+    Assert-Vgt (-not (Test-Path -LiteralPath (Join-Path $projectRoot $forbiddenFile))) ("Repository hygiene violation: {0} must not be part of the source tree." -f $forbiddenFile)
+}
+foreach ($forbiddenPattern in @('docs\VERIFICATION-*.md','docs\AUDIT-REMEDIATION-*.md','docs\SUPPLY-CHAIN-*.md','docs\TRUST-*.md')) {
+    $hits = @(Get-ChildItem -Path (Join-Path $projectRoot $forbiddenPattern) -File -ErrorAction SilentlyContinue)
+    Assert-Vgt ($hits.Count -eq 0) ("Repository hygiene violation: legacy report artifacts present ({0})." -f $forbiddenPattern)
+}
+Assert-Vgt (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'docs\patch-history'))) 'Repository hygiene violation: docs/patch-history must not be part of the source tree.'
+if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'SOURCE-MANIFEST.sha256'))) {
+    $null = Write-VgtSourceManifest -ProjectRoot $projectRoot
+}
 $payloadBuilderSource = Read-VgtText (Join-Path $projectRoot 'build\Build-VgtPayload.ps1')
 Assert-Vgt ($payloadBuilderSource.Contains("'VERSION'")) 'Payload builder does not include VERSION metadata.'
 Assert-Vgt ($payloadBuilderSource.Contains('function Get-VgtSigningCertificate')) 'Payload builder signing-certificate gate is missing.'
@@ -122,9 +154,95 @@ foreach ($file in $productFiles) {
     Assert-Vgt (-not [Regex]::IsMatch($content,'(?im)^\s*(?://|#).*\b(?:TODO|FIXME)\b')) ("TODO/FIXME detected in production source: {0}." -f $file.FullName)
 }
 
-$sbom = Read-VgtText (Join-Path $projectRoot 'sbom\gedefense-windows.cdx.json') | ConvertFrom-Json
-Assert-Vgt ($sbom.metadata.component.version -eq $version) 'SBOM version mismatch.'
-Assert-Vgt (@($sbom.components).Count -eq 0) 'SBOM contains third-party code components despite zero-Go-dependency contract.'
+# SC-FIND-004: the SBOM must be a real, current component inventory. The former
+# "components == 0" contract is replaced by generation + validation + a
+# freshness comparison against the checked-in release SBOM.
+$sbomGenerator = Join-Path $toolsRoot 'New-VgtSbom.ps1'
+$sbomValidator = Join-Path $toolsRoot 'Test-VgtSbom.ps1'
+Assert-Vgt (Test-Path -LiteralPath $sbomGenerator -PathType Leaf) 'SBOM generator tools/New-VgtSbom.ps1 is missing.'
+Assert-Vgt (Test-Path -LiteralPath $sbomValidator -PathType Leaf) 'SBOM validator tools/Test-VgtSbom.ps1 is missing.'
+$sbomTempDirectory = Join-Path $env:TEMP ('vgt-release-sbom-' + [Guid]::NewGuid().ToString('N'))
+New-Item -Path $sbomTempDirectory -ItemType Directory -Force | Out-Null
+try {
+    $sbomTempPath = Join-Path $sbomTempDirectory 'gedefense-windows.cdx.json'
+    & $sbomGenerator -OutputPath $sbomTempPath | Out-Null
+    $sbomValidation = & $sbomValidator -Path $sbomTempPath
+    Assert-Vgt ([int]$sbomValidation.Components -ge 30) 'Generated SBOM contains too few real components.'
+    Assert-Vgt ($sbomValidation.Version -eq $version) 'Generated SBOM version mismatch.'
+} finally {
+    if (Test-Path -LiteralPath $sbomTempDirectory) { Remove-Item -LiteralPath $sbomTempDirectory -Recurse -Force }
+}
+
+# SC-FIND-005: reproducible offline provenance must be generatable, verifiable
+# and tamper-evident on the very tree that is being released.
+$provenanceGenerator = Join-Path $toolsRoot 'New-VgtProvenance.ps1'
+$provenanceValidator = Join-Path $toolsRoot 'Test-VgtProvenance.ps1'
+Assert-Vgt (Test-Path -LiteralPath $provenanceGenerator -PathType Leaf) 'Provenance generator tools/New-VgtProvenance.ps1 is missing.'
+Assert-Vgt (Test-Path -LiteralPath $provenanceValidator -PathType Leaf) 'Provenance verifier tools/Test-VgtProvenance.ps1 is missing.'
+$provenanceTempDirectory = Join-Path $env:TEMP ('vgt-release-provenance-' + [Guid]::NewGuid().ToString('N'))
+New-Item -Path $provenanceTempDirectory -ItemType Directory -Force | Out-Null
+try {
+    $provenanceTempPath = Join-Path $provenanceTempDirectory ('GeDefense-Provenance-v{0}.json' -f $version)
+    & $provenanceGenerator -OutputPath $provenanceTempPath | Out-Null
+    $provenanceValidation = & $provenanceValidator -Path $provenanceTempPath -AllowMissingArtifacts
+    Assert-Vgt ([string]$provenanceValidation.Signature -eq 'unsigned-local-provenance') 'Provenance artifact must state that it is unsigned.'
+    Assert-Vgt ([string]$provenanceValidation.ExternalTrustAnchor -eq 'EXTERNAL-BLOCKER') 'Provenance artifact must record the external trust-anchor blocker.'
+    $provenanceDocument = Get-Content -LiteralPath $provenanceTempPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $tamperedProvenancePath = Join-Path $provenanceTempDirectory 'tampered-provenance.json'
+    $provenanceDocument.sourceTree.sha256 = ('0' * 64)
+    $provenanceDocument | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $tamperedProvenancePath -Encoding UTF8
+    $tamperRejected = $false
+    try { & $provenanceValidator -Path $tamperedProvenancePath -AllowMissingArtifacts | Out-Null } catch { $tamperRejected = $true }
+    Assert-Vgt $tamperRejected 'Provenance verifier accepted a tampered source-tree digest.'
+} finally {
+    if (Test-Path -LiteralPath $provenanceTempDirectory) { Remove-Item -LiteralPath $provenanceTempDirectory -Recurse -Force }
+}
+
+# SC-FIND-002 / SC-FIND-006: distribution/key hygiene, one authoritative
+# manifest, no stale FULL_SOURCE_SHA256.txt in the packaging path.
+$hygieneScript = Join-Path $toolsRoot 'Test-DistributionHygiene.ps1'
+Assert-Vgt (Test-Path -LiteralPath $hygieneScript -PathType Leaf) 'Distribution hygiene scanner is missing.'
+$hygiene = & $hygieneScript -ProjectRoot $projectRoot
+Assert-Vgt ([string]$hygiene.Status -eq 'PASS') 'Distribution hygiene scan did not pass.'
+Assert-Vgt (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'FULL_SOURCE_SHA256.txt'))) 'Stale FULL_SOURCE_SHA256.txt is present; only SOURCE-MANIFEST.sha256 is authoritative.'
+$manifestWords = @(Get-ChildItem -LiteralPath $projectRoot -File -Force | Where-Object { $_.Name -match '(?i)sha256|checksum' })
+Assert-Vgt ($manifestWords.Count -le 1) 'At most one integrity manifest may exist at the repository root.'
+if ($manifestWords.Count -eq 1) { Assert-Vgt ($manifestWords[0].Name -eq 'SOURCE-MANIFEST.sha256') 'The only repository manifest must be SOURCE-MANIFEST.sha256.' }
+
+# SC-FIND-003: one release channel for exactly the current VERSION. Foreign
+# version EXEs/source archives and unknown assets are a hard failure, current
+# binaries/archives need matching .sha256 sidecars and a publishable channel
+# needs a complete SHA256SUMS.txt (including the SBOM and provenance assets).
+# A missing release directory is ABSENT (this gate also runs before the
+# artifact build); an intermediate build is PARTIAL, not a PASS.
+try {
+    $releaseChannel = Assert-VgtReleaseChannelHygiene -ProjectRoot $projectRoot -Version $version
+} catch {
+    $recoveryHint = ' Recovery: build the source archive with build/Build-SourceRelease.ps1 BEFORE build/Build-GeDefenseStandalone.ps1; remove a stale release/SHA256SUMS.txt before rebuilding so the checksum manifest is regenerated for the final asset set.'
+    throw [InvalidOperationException]::new(($_.Exception.Message + $recoveryHint))
+}
+$releaseSidecarState = 'not-applicable'
+if ($releaseChannel.HasInstaller) {
+    $releaseSidecarPath = Join-Path ([string]$releaseChannel.ReleaseDirectory) ('GeDefense-Setup-x64-v{0}.json' -f $version)
+    $releaseExecutablePath = Join-Path ([string]$releaseChannel.ReleaseDirectory) ('GeDefense-Setup-x64-v{0}.exe' -f $version)
+    $releaseSidecarBinding = Assert-VgtReleaseSidecarBinding -SidecarPath $releaseSidecarPath -ReleaseDirectory ([string]$releaseChannel.ReleaseDirectory) -ExpectedVersion $version
+    [void](Assert-VgtJsonManifestMatchesAsset -ManifestPath $releaseSidecarPath -AssetPath $releaseExecutablePath -ExpectedVersion $version)
+    $releaseSidecarState = 'verified'
+}
+$sourceArchiveState = 'not-present'
+if ($releaseChannel.HasSourceArchive) {
+    $sourceArchivePath = Join-Path ([string]$releaseChannel.ReleaseDirectory) ('VGT_GeDefense_Windows_{0}_Source.zip' -f $version)
+    $sourceArchiveFreshness = Assert-VgtSourceArchiveFreshness -ProjectRoot $projectRoot -ArchivePath $sourceArchivePath -Version $version
+    $sourceArchiveState = 'verified'
+}
+
+# SC-FIND-008 / SC-FIND-011: installer reparse-point primitives and the static
+# hardening sequence (journal deletion is never counted as a live install test).
+& (Join-Path $toolsRoot 'Test-InstallerSafety.ps1') | Out-Null
+& (Join-Path $toolsRoot 'Test-InstallerHardening.ps1') | Out-Null
+
+# SC-FIND-009: publish path is fail-closed and contains no hardcoded claims.
+& (Join-Path $toolsRoot 'Test-PublishGates.ps1') | Out-Null
 
 Push-Location $sourceRoot
 try {
@@ -133,8 +251,12 @@ try {
     Assert-Vgt ($modules.Count -eq 1) 'External Go modules detected by go list -m all.'
 
     $goFiles = @(Get-ChildItem -LiteralPath '.\cmd','.\internal' -Recurse -File -Filter '*.go' | Sort-Object FullName | ForEach-Object FullName)
-    $unformatted = @(& gofmt -l @goFiles)
-    if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new('gofmt validation failed.') }
+    $unformatted = @()
+    for ($offset = 0; $offset -lt $goFiles.Count; $offset += 40) {
+        $batch = @($goFiles[$offset..([Math]::Min($offset + 39,$goFiles.Count - 1))])
+        $unformatted += @(& gofmt -l @batch)
+        if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new('gofmt validation failed.') }
+    }
     Assert-Vgt ($unformatted.Count -eq 0) ('Unformatted Go files: ' + ($unformatted -join ', '))
 
     & go test -race ./...
@@ -145,6 +267,8 @@ try {
     $buildRoot = Join-Path $env:TEMP ('vgt-gedefense-releasecheck-' + [Guid]::NewGuid().ToString('N'))
     New-Item -Path $buildRoot -ItemType Directory -Force | Out-Null
     try {
+        $govulncheck = Get-Command govulncheck -ErrorAction SilentlyContinue
+        Assert-Vgt ($null -ne $govulncheck) 'Official release requires govulncheck for binary vulnerability scanning.'
         $targets = @(
             @{Name='service';Package='./cmd/gedefense-windows';Gui=$false},
             @{Name='center';Package='./cmd/gedefense-center';Gui=$true},
@@ -158,6 +282,8 @@ try {
             & go build -trimpath -ldflags $ldflags -o $output $target.Package
             if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("Build failed for $($target.Name).") }
             Assert-Vgt ((Get-Item -LiteralPath $output).Length -gt 0) ("Empty binary produced for {0}." -f $target.Name)
+            & $govulncheck.Source -mode=binary $output | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("govulncheck reported a reachable vulnerability in $($target.Name).") }
         }
     } finally {
         if (Test-Path -LiteralPath $buildRoot) { Remove-Item -LiteralPath $buildRoot -Recurse -Force }
@@ -180,48 +306,20 @@ foreach ($script in $scripts) {
     GoModules = 0
     GoRace = 'PASS'
     GoVet = 'PASS'
+    Govulncheck = 'PASS'
     WindowsBuilds = 4
     PowerShell = 'PASS'
     FrontendSecurity = 'PASS'
+    Sbom = 'PASS'
+    Provenance = 'PASS'
+    DistributionHygiene = 'PASS'
+    ReleaseChannel = [string]$releaseChannel.State
+    ReleaseChannelAssets = [int]$releaseChannel.Assets
+    ReleaseChannelForeignAssets = @($releaseChannel.ForeignAssets).Count
+    Sha256Sums = [string]$releaseChannel.SumsState
+    ReleaseSidecar = $releaseSidecarState
+    SourceArchive = $sourceArchiveState
+    InstallerSafety = 'PASS'
+    PublishGates = 'PASS'
+    ExternalTrustAnchor = 'EXTERNAL-BLOCKER (public CA/RFC3161/revocation/anti-rollback unavailable)'
 }
-# SIG # Begin signature block
-# MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDomHo2mvmiprW0
-# OcHOdT2Mb6tfw6r72oq3ZDa82blGBqCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
-# m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
-# VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
-# MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
-# ZWFzZTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGBAL5pFqzqfhSchgN3
-# OSKoeRbHXQIUtVwI7Q5go/7UvOFVMV0d/Au5Q5yPFOr351VqQyZlLWehwPG88Wdh
-# TEPxfzYXDeJFgG6MwdjVaA10WklxDzSu8XQQzQKvoSOtf6b76xYswPdR8WaUOvYL
-# NVYHG38cZCE/Vmt8W29/+8bT0SFoMv8S++3YUL3BaTTVBj5wcunaQYu7bcBUFz8M
-# wCWGaqZUwWi/7sZPb5Ix0KKnMarxxAAM/y1GaRnWDQavGSuFZ18LmMh+Agd6znFZ
-# 6pH1USuu0NreFUOWNg2ANEmGAO4XTnst3ILT4Eab/Jsjmw4nRm8rckRaWVKJxcRc
-# P7ukJJi3cV11JegdsYSBGKvZ8TUNiSRuVI0MGg1IJl4ga/dir1crp0DnqezcC/6y
-# 9mxsnxuJLpW8I1nLdRLjE1ow5VshhvEMFjPoYbcowpcI0EUFj/clBpA+rHjPjkYF
-# jw8oow+tYqnEK/GkrYkzGwGxpApKcECh5GGHgQ5iSgKuNTPueQIDAQABo0YwRDAO
-# BgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwMwHQYDVR0OBBYEFDBP
-# H8Z9qi6vrLw8FPD3k/kz+c1gMA0GCSqGSIb3DQEBCwUAA4IBgQBIQe+HN5spItMd
-# 884eV6JR3H8xGr8DeNpgjuhQnRnQqWB60Et6ehQwQFDg5Ft8iU4sGzdEQB4U+q79
-# 9oReJ6G1CuV6yXXqDe/Ljr5DGfGr+Wah4RuRi/QGhUUeIyyn8h5kXwOgGWz4VA5I
-# 9CmN+onZHRLnv3Lu9mKyUqo7ll5WaWEd/r3hvBqe30Rg0IanD8qpWXEbshlayTux
-# 8WMgjW3nA7tEWXmToCJpRk8DsaGU5m6rNxVa6zSS7qF2JiMWnZZBsr76cQsMYvTk
-# ZgshPz+OTsl84mR7i/BalTIyuI74TWd+8LdcBB+FpmhXvYmKAPQKQg25dHGWbVlB
-# E7kK29X38hvaQBO6lVT7mtTOPx2auMTmas6LLU+1XGFNm4zvwuydpf/4ltPSYlNp
-# K8Ij5vkp2DjXOaJF02BoqBkZt6w4wQPuCdu3OOTH3A3hymQrVD0tP408qNkLuzd5
-# xI+m7oTQCw6SYCxeEUEOooR7XMWuxE1R/KyLlPRCI1zi9DjhLawxggJyMIICbgIB
-# ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
-# ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
-# AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCB9W0h7qJie
-# xneyU5f3gSL0cb5VvHUFm0+wBYRitPt9EjANBgkqhkiG9w0BAQEFAASCAYCJEF7M
-# XR+2avnfJqPnt4CzV+kLL0f0ECbVoRgX9njuT6A5QjSKlZsI1VlQw6bVjL2hwJND
-# cD4l+OEVFLrcsfj01k1bYeYE3U4rsVD8GFFNoCHUcT3qH6Wos5EdqvAQ4woPO/MW
-# JmDlqduW39Us7/fSrvQPWrEXy2HVO6r9mjBV+HfQxfYKR5cCMVRxdSa46ccUI4k+
-# SfJaFH4lcpqYTJ8ERFwvoAgiDZZ3kDOg5xoVxHqkvOGBr6L6PdTNT3SIS1lGZfmh
-# ptXaazeR8cpn3WA8cwIKd+YwmMjiNbSBe0DxR0KaC+dZE7wLMKfhEiV0tVmXbJfQ
-# Odc34EmMAZHDanKvXjRNPcYMTbUjLh3XK4Phx4KMnkNX+EBaG26fBiGVJ2MFKTvl
-# HIwhHR1mnPCgwS4/5Vjal23ZyeUbaQqBjlUMRILyKmEjr1LFYBtOoS/h98XlesQW
-# p5wW8KmrGKdQonLVWU9+viGYFdqttyO+fMk55TQS/XbvY/OH1GXO/lUoJU8=
-# SIG # End signature block

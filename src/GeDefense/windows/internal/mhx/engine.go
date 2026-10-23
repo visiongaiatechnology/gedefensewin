@@ -70,9 +70,22 @@ type Engine struct {
 	protectionHealth           string
 	protectionVerifiedUTC      time.Time
 	threatEnforcement          ThreatEnforcementStatus
+	kineticRuntime             kineticRuntimeState
+	intelligenceWake           chan struct{}
+	policySettings             atomic.Pointer[PolicySettings]
+	policySettingsSource       string
+	policySettingsWarning      string
+	policySettingsUpdatedUTC   time.Time
+	policySettingsPersisted    bool
+	notifications              []Notification
+	defenderMu                 sync.Mutex
+	defenderCache              DefenderTelemetry
+	defenderCacheAt            time.Time
+	defenderProbe              defenderProbeFunc
+	terminate                  func(ProcessEvent) error
 }
 
-func NewEngine(root, protectionScript, firewallScript, allowScript, appControlScript, operationRoot string, ledger *evidence.Ledger) (*Engine, error) {
+func NewEngine(root, protectionScript, firewallScript, allowScript, denyScript, appControlScript, operationRoot string, ledger *evidence.Ledger) (*Engine, error) {
 	if ledger == nil || !filepath.IsAbs(root) {
 		return nil, errors.New("invalid MHX engine configuration")
 	}
@@ -80,12 +93,14 @@ func NewEngine(root, protectionScript, firewallScript, allowScript, appControlSc
 	if err != nil {
 		return nil, err
 	}
-	protection, err := newProtectionManager(protectionScript, firewallScript, allowScript, appControlScript, operationRoot)
+	protection, err := newProtectionManager(protectionScript, firewallScript, allowScript, denyScript, appControlScript, operationRoot)
 	if err != nil {
 		return nil, err
 	}
-	engine := &Engine{root: root, ledger: ledger, feeds: feeds, protection: protection, evaluator: Evaluator{}, kineticMonitor: kinetic.NewMonitor(), trafficMonitor: traffic.NewSampler(), analyses: make([]Analysis, 0, maximumAnalyses), networkFindings: make([]NetworkFinding, 0, maximumNetworkFindings), attackStories: make([]AttackStory, 0, maximumAttackStories), recentProcesses: make(map[uint32]recentProcess, 256), mode: "guarded", telemetry: "STARTING", protectionHealth: "STARTING", threatEnforcement: ThreatEnforcementStatus{State: "UNVERIFIED"}}
+	engine := &Engine{root: root, ledger: ledger, feeds: feeds, protection: protection, evaluator: Evaluator{}, kineticMonitor: kinetic.NewMonitor(), trafficMonitor: traffic.NewSampler(), analyses: make([]Analysis, 0, maximumAnalyses), networkFindings: make([]NetworkFinding, 0, maximumNetworkFindings), attackStories: make([]AttackStory, 0, maximumAttackStories), recentProcesses: make(map[uint32]recentProcess, 256), mode: "guarded", telemetry: "STARTING", protectionHealth: "STARTING", threatEnforcement: ThreatEnforcementStatus{State: "UNVERIFIED"}, intelligenceWake: make(chan struct{}, 1)}
 	_ = engine.loadMode()
+	engine.loadKineticState()
+	engine.loadPolicySettings()
 	return engine, nil
 }
 
@@ -151,7 +166,7 @@ func (e *Engine) Run(stop <-chan struct{}) {
 			e.mu.Unlock()
 		case <-healthTicker.C:
 			e.mu.Lock()
-			if e.lastTelemetryUTC.IsZero() || time.Since(e.lastTelemetryUTC) > 7*time.Second {
+			if e.lastTelemetryUTC.IsZero() || time.Since(e.lastTelemetryUTC) > 45*time.Second {
 				e.realtime = false
 				e.telemetry = "DEGRADED"
 			}
@@ -162,6 +177,10 @@ func (e *Engine) Run(stop <-chan struct{}) {
 				e.wfpRealtime = false
 			}
 			e.mu.Unlock()
+			// Kinetic never trusts a persisted armed flag. This loop is the only
+			// promotion path for a persisted arming intent and the only automatic
+			// disarm path for sustained verification loss or an elapsed window.
+			e.reconcileKinetic(time.Now().UTC())
 		case event := <-events:
 			e.evaluate(event)
 		case event := <-defenderEvents:
@@ -237,17 +256,21 @@ func (e *Engine) evaluateDefender(event defenderEvent) {
 	}
 	e.mu.Unlock()
 	_ = e.ledger.Append("defender.event", detection, fmt.Sprintf("event-%d", event.EventID))
+	if disposition == DispositionBlock {
+		e.notifyEvent(notificationKindDefender, severity, detection, fmt.Sprintf("Defender event %d", event.EventID))
+	}
 }
 
 func (e *Engine) evaluate(event ProcessEvent) {
 	result := e.evaluator.Analyze(event)
 	e.evaluated.Add(1)
 	mode := e.Mode()
+	settings := e.currentPolicySettings()
 	if result.Classification == "KNOWN BENIGN" {
 		e.knownBenign.Add(1)
 	}
-	if result.ResponseAuthority && mode != "monitor" {
-		if err := terminateProcess(event); err == nil {
+	if result.ResponseAuthority && mode != "monitor" && responsePolicyAllows(settings, result.EffectiveSeverity) {
+		if err := e.terminateObserved(event); err == nil {
 			e.blocked.Add(1)
 			_ = e.ledger.Append("mhx.block", result.Detection, "terminated")
 		} else {
@@ -265,6 +288,50 @@ func (e *Engine) evaluate(event ProcessEvent) {
 		e.analyses = e.analyses[:maximumAnalyses]
 	}
 	e.mu.Unlock()
+	if result.Disposition == DispositionBlock {
+		e.notifyBlockingAnalysis(result)
+	}
+}
+
+// terminateObserved is the single process-termination seam. Tests can replace
+// it to verify the auto-response policy gates without terminating a real
+// process; production engines always use the PID-reuse protected terminator.
+func (e *Engine) terminateObserved(event ProcessEvent) error {
+	if e.terminate != nil {
+		return e.terminate(event)
+	}
+	return terminateProcess(event)
+}
+
+// responsePolicyAllows applies the operator auto-response policy on top of the
+// evaluator's independent response authority. The default policy preserves the
+// historical behaviour exactly.
+func responsePolicyAllows(settings PolicySettings, severity Severity) bool {
+	if !settings.AutoResponse.TerminateProcess {
+		return false
+	}
+	return severityAtLeast(severity, settings.AutoResponse.MinimumSeverity)
+}
+
+func severityAtLeast(severity, floor Severity) bool {
+	return severityRank(severity) >= severityRank(floor)
+}
+
+func severityRank(severity Severity) int {
+	switch severity {
+	case SeverityCritical:
+		return 5
+	case SeverityHigh:
+		return 4
+	case SeverityMedium:
+		return 3
+	case SeverityLow:
+		return 2
+	case SeverityInformational:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (e *Engine) Analyses(limit int) []Analysis {
@@ -313,5 +380,17 @@ func (e *Engine) Status() Status {
 		kineticSnap.Mode = "ARMED_TI_CORRELATION"
 		readiness.Mode = "ARMED_TI_CORRELATION"
 	}
-	return Status{Traffic: e.trafficMonitor.Snapshot(), KineticArmed: kineticArmed, KineticIncidents: kineticIncidents, KineticThreatCorrelations: e.kineticThreatCorrelations.Load(), KineticBlockedCorrelations: e.kineticBlockedCorrelations.Load(), Kinetic: kineticSnap, KineticReadiness: readiness, UncorrelatedThreatHits: e.networkUncorrelated.Load(), Engine: "VGT MHX 7.1", Realtime: realtime, Telemetry: telemetry, TelemetryHeartbeatUTC: lastTelemetryUTC, Enforcement: enforcement, DefenderBridge: "AMSI + ASR + OPERATIONAL EVENT STREAM", AppControl: appControl, KernelEnforcement: e.kernelEnforcement.Load(), ProtectionMode: mode, ProtectionHealth: protectionHealth, ProtectionVerifiedUTC: protectionVerifiedUTC, EventsEvaluated: e.evaluated.Load(), EventsBlocked: e.blocked.Load(), KnownBenign: e.knownBenign.Load(), ThreatIntelligence: e.feeds.Status(), ThreatEnforcement: threatEnforcement, NetworkTelemetry: map[bool]string{true: "NATIVE_TCP_OWNER_PID", false: "DEGRADED"}[networkRealtime], NetworkConnections: e.networkObserved.Load(), WFPBlockTelemetry: map[bool]string{true: "POLLING_5157_AUDIT_UNVERIFIED", false: "DEGRADED"}[wfpRealtime], WFPBlockedEvents: e.wfpBlockedObserved.Load(), ThreatNetworkHits: e.networkThreatHits.Load(), AttackStories: uint64(attackStoryCount)}
+	kineticSettings := e.KineticSettings()
+	policySettings := e.PolicySettings()
+	var threatIntelPolling threatintel.PollingConfig
+	var threatIntelligence threatintel.Status
+	if e.feeds != nil {
+		threatIntelPolling = e.feeds.PollingConfig()
+		threatIntelligence = e.feeds.Status()
+	}
+	defenderTelemetry := e.cachedDefenderTelemetry()
+	e.mu.RLock()
+	notificationCount := len(e.notifications)
+	e.mu.RUnlock()
+	return Status{KineticSources: e.kineticMonitor.SourceSnapshot(250), Traffic: e.trafficMonitor.Snapshot(), KineticArmed: kineticArmed, KineticIncidents: kineticIncidents, KineticThreatCorrelations: e.kineticThreatCorrelations.Load(), KineticBlockedCorrelations: e.kineticBlockedCorrelations.Load(), Kinetic: kineticSnap, KineticReadiness: readiness, UncorrelatedThreatHits: e.networkUncorrelated.Load(), Engine: "VGT MHX 7.1", Realtime: realtime, Telemetry: telemetry, TelemetryHeartbeatUTC: lastTelemetryUTC, Enforcement: enforcement, DefenderBridge: "AMSI + ASR + OPERATIONAL EVENT STREAM", AppControl: appControl, KernelEnforcement: e.kernelEnforcement.Load(), ProtectionMode: mode, ProtectionHealth: protectionHealth, ProtectionVerifiedUTC: protectionVerifiedUTC, EventsEvaluated: e.evaluated.Load(), EventsBlocked: e.blocked.Load(), KnownBenign: e.knownBenign.Load(), ThreatIntelligence: threatIntelligence, ThreatEnforcement: threatEnforcement, NetworkTelemetry: map[bool]string{true: "NATIVE_TCP_OWNER_PID", false: "DEGRADED"}[networkRealtime], NetworkConnections: e.networkObserved.Load(), WFPBlockTelemetry: map[bool]string{true: "POLLING_5157_AUDIT_UNVERIFIED", false: "DEGRADED"}[wfpRealtime], WFPBlockedEvents: e.wfpBlockedObserved.Load(), ThreatNetworkHits: e.networkThreatHits.Load(), AttackStories: uint64(attackStoryCount), KineticSettings: kineticSettings, PolicySettings: policySettings, ThreatIntelPolling: threatIntelPolling, DefenderTelemetry: defenderTelemetry, NotificationCount: notificationCount}
 }

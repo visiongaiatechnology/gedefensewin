@@ -4,9 +4,13 @@
 
 | Version | Sicherheitsupdates |
 |---|---|
-| 4.0.x beta | Ja |
-| 2.3.x | Nur kritische Sicherheitskorrekturen während der V4-Beta |
-| kleiner als 2.3 | Nein |
+| 5.2.x (Public Beta) | Ja |
+| 5.1.x (Public Beta) | Ja, bis 5.2 als stabil gilt |
+| 5.0.x (Public Beta) | Nur kritische Sicherheitskorrekturen |
+| 4.0.x beta | Nur kritische Sicherheitskorrekturen |
+| kleiner als 4.0 | Nein |
+
+Die Beta-Versionen können Fehler einschließlich Sicherheitsdefekten enthalten; wir bearbeiten reproduzierbare Meldungen priorisiert. Der aktuelle Sicherheits- und Trust-Stand ist in [README.md](README.md#verification-and-trust) beschrieben. Eine öffentliche Vertrauensstellung (CA/RFC 3161/CRL/OCSP), Feed-Signaturschlüssel und ein extern verankerter Anti-Rollback-Kanal sind ausdrücklich externe Blocker und werden nicht als bestanden gezählt.
 
 ## Vertrauliche Meldung
 

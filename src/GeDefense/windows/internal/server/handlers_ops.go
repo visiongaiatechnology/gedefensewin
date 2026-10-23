@@ -3,15 +3,20 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/hardening"
 )
 
 func (s *Server) enforce(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Profile string `json:"profile"`
+		Profile      string `json:"profile"`
+		Confirmation string `json:"confirmation"`
+		Reason       string `json:"reason"`
 	}
 	if err := decodeJSON(w, r, &input); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request")
@@ -49,9 +54,93 @@ func (s *Server) hardeningComponents(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, components)
 }
 
+// hardeningCatalog is available without running the (potentially long) audit.
+// The UI renders the whole page immediately and then merges measured states.
+func (s *Server) hardeningCatalog(w http.ResponseWriter, _ *http.Request) {
+	definitions := hardening.Catalog()
+	catalog := make([]map[string]any, 0, len(definitions))
+	for _, definition := range definitions {
+		fields := definition.ConfigurableFields
+		catalog = append(catalog, map[string]any{
+			"id": definition.ID, "name": definition.Label, "label": definition.Label,
+			"category": definition.Category, "description": definition.Description,
+			"rebootRequired": definition.RebootRequired, "configurable": len(fields) > 0,
+			"fields": fields, "supportedModes": definition.SupportedModes,
+		})
+	}
+	s.writeJSON(w, http.StatusOK, catalog)
+}
+
+type defenderTelemetryProvider interface {
+	DefenderTelemetry(context.Context) (*hardening.DefenderTelemetry, error)
+}
+
+func (s *Server) defenderTelemetry(w http.ResponseWriter, r *http.Request) {
+	provider, ok := s.engine.(defenderTelemetryProvider)
+	if !ok {
+		s.writeError(w, http.StatusServiceUnavailable, "Defender telemetry is not available in this build")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	telemetry, err := provider.DefenderTelemetry(ctx)
+	if err != nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Defender telemetry unavailable")
+		return
+	}
+	if telemetry == nil {
+		s.writeJSON(w, http.StatusOK, map[string]any{"Available": false, "Reason": "No Defender audit snapshot has been measured yet"})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, telemetry)
+}
+
+type hardeningSettingsProvider interface {
+	ApplySettings(context.Context, hardening.SettingsConfig) (hardening.Result, error)
+}
+
+// applyHardeningSettings accepts only the strict settings schema owned by the
+// hardening package. The reason is recorded by the engine as part of the
+// operation evidence; no raw command or path is accepted here.
+func (s *Server) applyHardeningSettings(w http.ResponseWriter, r *http.Request) {
+	provider, ok := s.engine.(hardeningSettingsProvider)
+	if !ok {
+		s.writeError(w, http.StatusServiceUnavailable, "protection settings are not available in this build")
+		return
+	}
+	var input struct {
+		Config       json.RawMessage `json:"config"`
+		Reason       string          `json:"reason"`
+		Confirmation string          `json:"confirmation"`
+	}
+	if err := decodeJSONBounded(w, r, &input, 128<<10); err != nil || input.Confirmation != "APPLY PROTECTION SETTINGS" {
+		s.writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if validateReason(input.Reason) != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	config, err := hardening.ParseSettingsConfig(input.Config)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid protection settings")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	result, err := provider.ApplySettings(ctx, config)
+	if err != nil {
+		s.writeError(w, http.StatusConflict, "protection settings rejected")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) enforceHardeningComponent(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		ID string `json:"id"`
+		ID           string `json:"id"`
+		Confirmation string `json:"confirmation"`
+		Reason       string `json:"reason"`
 	}
 	if err := decodeJSON(w, r, &input); err != nil || len(input.ID) < 2 || len(input.ID) > 64 {
 		s.writeError(w, http.StatusBadRequest, "invalid request")
@@ -115,8 +204,10 @@ func (s *Server) integrityChanges(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) integrityConfiguration(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Enabled       bool `json:"enabled"`
-		IntervalHours int  `json:"intervalHours"`
+		Enabled       bool   `json:"enabled"`
+		IntervalHours int    `json:"intervalHours"`
+		Confirmation  string `json:"confirmation"`
+		Reason        string `json:"reason"`
 	}
 	if err := decodeJSON(w, r, &input); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request")

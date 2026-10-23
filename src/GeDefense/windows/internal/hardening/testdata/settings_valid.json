@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "defender": {
+    "cloudBlockLevel": "HighPlus",
+    "mapsReporting": "Advanced",
+    "submitSamplesConsent": "SendSafeSamples",
+    "networkProtection": "Enabled",
+    "puaProtection": "AuditMode",
+    "controlledFolderAccess": "AuditMode",
+    "asrRules": [
+      { "id": "56A863A9-875E-4185-98A7-B882C64B5CE5", "action": "Block" },
+      { "id": "d4f940ab-401b-4efc-aadc-ad5f3c50688a", "action": "Audit" }
+    ]
+  },
+  "firewall": {
+    "profiles": [
+      {
+        "name": "private",
+        "enabled": true,
+        "defaultInboundAction": "block",
+        "defaultOutboundAction": "allow",
+        "notifyOnListen": true,
+        "allowUnicastResponseToMulticast": false,
+        "logBlocked": true,
+        "logAllowed": false,
+        "logMaxSizeKilobytes": 16384
+      }
+    ]
+  },
+  "components": [ "ASR", "Firewall" ]
+}

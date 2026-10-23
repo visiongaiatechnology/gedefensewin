@@ -1,9 +1,10 @@
 # STATUS: DIAMANT VGT SUPREME
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('Audit','Enforce','Rollback','Component')][string]$Mode,
+    [Parameter(Mandatory)][ValidateSet('Audit','Enforce','Rollback','Component','ApplyConfig')][string]$Mode,
     [ValidateSet('EnterpriseBalanced','Isolation')][string]$Profile = 'EnterpriseBalanced',
     [ValidateSet('DefenderCloud','ASR','ControlledFolderAccess','Firewall','CredentialGuard','MemoryIntegrity','LSASS','SMB','PowerShellLogging','UAC','USBStorage','RemoteDesktop')][string]$Component,
+    [ValidatePattern('^[A-Za-z]:\\[^\r\n\0]+$')][string]$ConfigPath,
     [ValidatePattern('^[A-Za-z]:\\[^\r\n\0]+$')][string]$OutputPath
 )
 
@@ -75,6 +76,58 @@ function Set-VgtComponent {
     }
 }
 
+function Get-VgtComponentState {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Audit)
+    return @{
+        DefenderCloud = [bool]($Audit['CloudProtection'] -and $Audit['NetworkProtection'] -and $Audit['RealTimeProtection'])
+        ASR = [bool]($Audit['AsrRules'] -ge 11 -and $Audit['AsrBlockRules'] -ge 11)
+        ControlledFolderAccess = [bool]$Audit['ControlledFolderAccess']
+        Firewall = [bool]$Audit['Firewall']
+        CredentialGuard = [bool]$Audit['CredentialGuard']
+        MemoryIntegrity = [bool]($Audit['MemoryIntegrity'] -and $Audit['VulnerableDriverBlocklist'])
+        LSASS = [bool]$Audit['LsaProtection']
+        SMB = [bool]$Audit['SmbHardening']
+        PowerShellLogging = [bool]$Audit['PowerShellLogging']
+        UAC = [bool]$Audit['UacSecureDesktop']
+        USBStorage = [bool]$Audit['UsbStorageBlocked']
+        RemoteDesktop = [bool]$Audit['RemoteDesktopDisabled']
+    }
+}
+
+function Get-VgtMinimalTelemetry {
+    return [ordered]@{
+        CapturedUtc = [DateTime]::UtcNow.ToString('o')
+        SourcesAttempted = @('Get-MpComputerStatus','Get-MpPreference','Get-MpThreatDetection','Get-MpThreat','Get-NetFirewallProfile')
+        Available = $false
+        ComputerStatusAvailable = $false
+        PreferenceAvailable = $false
+        ThreatDetectionAvailable = $false
+        ThreatQueryAvailable = $false
+        FirewallAvailable = $false
+        Status = $null
+        Preference = $null
+        AttackSurfaceReduction = $null
+        Exclusions = $null
+        Threats = $null
+        Firewall = $null
+    }
+}
+
+function Get-VgtTelemetry {
+    try {
+        $telemetry = Get-VgtDefenderTelemetry
+        $firewallTelemetry = Get-VgtFirewallTelemetry
+        $telemetry['Firewall'] = $firewallTelemetry
+        $telemetry['FirewallAvailable'] = [bool]$firewallTelemetry['Available']
+        return $telemetry
+    } catch {
+        $message = [string]$_.Exception.Message
+        if ($message.Length -gt 320) { $message = $message.Substring(0,320) }
+        Write-VgtEvent -Level WARN -Message ('Defender telemetry unavailable: {0}' -f ($message -replace '[\r\n\0]',' '))
+        return Get-VgtMinimalTelemetry
+    }
+}
+
 function Get-VgtAudit {
     $mpStatus = Get-MpComputerStatus -ErrorAction SilentlyContinue
     $mpPreference = Get-MpPreference -ErrorAction SilentlyContinue
@@ -133,12 +186,124 @@ function Get-VgtAudit {
         UsbStorageBlocked = [bool]((Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Services\USBSTOR' 'Start') -eq 4)
         RemoteDesktopDisabled = [bool]((Get-VgtRegistryDword 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' 'fDenyTSConnections') -eq 1)
         WindowsUpdate = [bool]($windowsUpdate -and $windowsUpdate.StartMode -ne 'Disabled')
+        DefenderTelemetry = Get-VgtTelemetry
     }
+}
+
+function Assert-VgtConfigPathJail {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not $env:ProgramData) { throw [Security.SecurityException]::new('ProgramData is unavailable.') }
+    $resolved = [IO.Path]::GetFullPath($Path)
+    $operationsRoot = [IO.Path]::GetFullPath((Join-Path $env:ProgramData 'VGT\GeDefense\operations')).TrimEnd('\') + '\'
+    if (-not $resolved.StartsWith($operationsRoot,[StringComparison]::OrdinalIgnoreCase)) {
+        throw [Security.SecurityException]::new('Settings configuration path escaped the operation jail.')
+    }
+}
+
+function Assert-VgtApplyPreconditions {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Settings)
+    if ($Settings.Contains('defender')) { $null = Get-MpPreference -ErrorAction Stop }
+    if ($Settings.Contains('firewall')) {
+        foreach ($profile in @($Settings['firewall']['profiles'])) {
+            $null = Get-NetFirewallProfile -Name ([string]$profile['name']) -ErrorAction Stop
+        }
+    }
+}
+
+function Invoke-VgtApplyConfig {
+    param([Parameter(Mandatory)][string]$ConfigPath)
+    Assert-VgtConfigPathJail -Path $ConfigPath
+    $policy = Read-VgtSettingsConfig -ConfigPath $ConfigPath -MaxBytes 65536
+    $settings = $policy.Settings
+    Assert-VgtApplyPreconditions -Settings $settings
+    $baselinePath = Join-Path (Join-Path (Get-VgtDataRoot) 'State') 'baseline.json'
+    $baselineState = 'existing'
+    $baselineIntegrity = 'legacy'
+    if (-not (Test-Path -LiteralPath $baselinePath -PathType Leaf)) {
+        $baselineState = 'created'
+    } else {
+        $existingBaseline = Get-Content -LiteralPath $baselinePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not (Test-VgtBaselineState -State $existingBaseline -StateDirectory (Join-Path (Get-VgtDataRoot) 'State'))) {
+            throw [Security.SecurityException]::new('Existing VGT baseline failed validation.')
+        }
+        $baselineIntegrity = Test-VgtBaselineIntegrity -State $existingBaseline
+        if ($baselineIntegrity -eq 'Mismatch') {
+            throw [Security.SecurityException]::new('Existing VGT baseline failed integrity verification.')
+        }
+    }
+    $before = Get-VgtAudit
+    Save-VgtBaseline | Out-Null
+    $report = New-Object System.Collections.ArrayList
+    if ($settings.Contains('defender')) { Set-VgtDefenderSettings -Settings $settings['defender'] -Report $report }
+    if ($settings.Contains('firewall')) { Set-VgtFirewallSettings -Profiles @($settings['firewall']['profiles']) -Report $report }
+    $componentStateBefore = Get-VgtComponentState -Audit $before
+    if ($settings.Contains('components')) {
+        foreach ($component in @($settings['components'])) {
+            Set-VgtComponent -Id ([string]$component)
+            Write-VgtEvent -Level INFO -Message ('Settings component enforced: {0}' -f [string]$component)
+        }
+    }
+    $after = Get-VgtAudit
+    $componentEntries = New-Object System.Collections.ArrayList
+    if ($settings.Contains('components')) {
+        $componentStateAfter = Get-VgtComponentState -Audit $after
+        foreach ($component in @($settings['components'])) {
+            $id = [string]$component
+            $wasActive = [bool]$componentStateBefore[$id]
+            $isActive = [bool]$componentStateAfter[$id]
+            [void]$componentEntries.Add([ordered]@{ Id = $id; Before = $wasActive; After = $isActive; Changed = ($wasActive -ne $isActive) })
+        }
+    }
+    $changedCount = 0
+    $unchangedCount = 0
+    foreach ($entry in $report) { if ([bool]$entry['Changed']) { $changedCount++ } else { $unchangedCount++ } }
+    foreach ($entry in $componentEntries) { if ([bool]$entry['Changed']) { $changedCount++ } else { $unchangedCount++ } }
+    $applyReport = [ordered]@{
+        SchemaVersion = 1
+        TimestampUtc = [DateTime]::UtcNow.ToString('o')
+        SettingsSha256 = [string]$policy.Sha256
+        BaselineState = $baselineState
+        BaselineIntegrity = $baselineIntegrity
+        RollbackAvailable = [bool](Test-Path -LiteralPath $baselinePath -PathType Leaf)
+        ChangedCount = $changedCount
+        UnchangedCount = $unchangedCount
+        Entries = @($report.ToArray())
+        Components = @($componentEntries.ToArray())
+    }
+    Write-VgtEvent -Level INFO -Message ('Settings baseline state: {0} (integrity: {1})' -f $baselineState,$baselineIntegrity)
+    foreach ($entry in $report) {
+        if ([bool]$entry['Changed']) {
+            Write-VgtEvent -Level INFO -Message ('Settings change: {0} = {1}' -f [string]$entry['Setting'],[string]$entry['After'])
+        }
+    }
+    foreach ($componentEntry in $componentEntries) {
+        if ([bool]$componentEntry['Changed']) {
+            Write-VgtEvent -Level INFO -Message ('Settings component change: {0} = {1}' -f [string]$componentEntry['Id'],[string]$componentEntry['After'])
+        }
+    }
+    Write-VgtEvent -Level INFO -Message ('Settings applied: {0} changed, {1} unchanged.' -f $changedCount,$unchangedCount)
+    $after['ApplyReport'] = $applyReport
+    return $after
+}
+
+function Write-VgtSafeEvent {
+    param([Parameter(Mandatory)][ValidateSet('INFO','WARN','ERROR','SECURITY')][string]$Level,[Parameter(Mandatory)][string]$Message)
+    $text = [string]$Message
+    if ($text.Length -gt 480) { $text = $text.Substring(0,480) }
+    $text = $text -replace '[\r\n\0]', ' '
+    try { Write-VgtEvent -Level $Level -Message $text } catch { }
 }
 
 try {
     Assert-VgtAdministrator
-    if ($Mode -eq 'Audit') {
+    if ($ConfigPath -and $Mode -ne 'ApplyConfig') {
+        throw [Security.SecurityException]::new('Settings configuration is only accepted in ApplyConfig mode.')
+    }
+    if ($Mode -eq 'ApplyConfig') {
+        if (-not $ConfigPath) { throw [Security.SecurityException]::new('Settings configuration is required.') }
+        if ($Component) { throw [Security.SecurityException]::new('ApplyConfig does not accept a single component.') }
+        $result = Invoke-VgtApplyConfig -ConfigPath $ConfigPath
+    } elseif ($Mode -eq 'Audit') {
         $result = Get-VgtAudit
     } elseif ($Mode -eq 'Rollback') {
         Restore-VgtBaseline
@@ -162,7 +327,7 @@ try {
         Write-VgtEvent -Level INFO -Message ("Profile enforced: {0}" -f $configuration.name)
         $result = Get-VgtAudit
     }
-    $json = $result | ConvertTo-Json -Depth 5
+    $json = $result | ConvertTo-Json -Depth 8
     if ($OutputPath) {
         $resolvedParent = Split-Path -Parent $OutputPath
         if (-not (Test-Path -LiteralPath $resolvedParent -PathType Container)) { throw [IO.DirectoryNotFoundException]::new('Output directory unavailable.') }
@@ -172,53 +337,11 @@ try {
     } else { $json }
     exit 0
 } catch [Security.SecurityException] {
-    Write-VgtEvent -Level SECURITY -Message $_.Exception.Message
+    Write-VgtSafeEvent -Level SECURITY -Message ([string]$_.Exception.Message)
     Write-Error 'VGT security policy rejected the operation.'
     exit 10
 } catch {
-    Write-VgtEvent -Level ERROR -Message $_.Exception.Message
+    Write-VgtSafeEvent -Level ERROR -Message ([string]$_.Exception.Message)
     Write-Error 'VGT hardening operation failed. Review the protected log.'
     exit 20
 }
-
-# SIG # Begin signature block
-# MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAmY8EDqXzHEEGB
-# TNN20twQwyQWbFBp8kL/lPUvCoFRtKCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
-# m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
-# VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
-# MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
-# ZWFzZTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGBAL5pFqzqfhSchgN3
-# OSKoeRbHXQIUtVwI7Q5go/7UvOFVMV0d/Au5Q5yPFOr351VqQyZlLWehwPG88Wdh
-# TEPxfzYXDeJFgG6MwdjVaA10WklxDzSu8XQQzQKvoSOtf6b76xYswPdR8WaUOvYL
-# NVYHG38cZCE/Vmt8W29/+8bT0SFoMv8S++3YUL3BaTTVBj5wcunaQYu7bcBUFz8M
-# wCWGaqZUwWi/7sZPb5Ix0KKnMarxxAAM/y1GaRnWDQavGSuFZ18LmMh+Agd6znFZ
-# 6pH1USuu0NreFUOWNg2ANEmGAO4XTnst3ILT4Eab/Jsjmw4nRm8rckRaWVKJxcRc
-# P7ukJJi3cV11JegdsYSBGKvZ8TUNiSRuVI0MGg1IJl4ga/dir1crp0DnqezcC/6y
-# 9mxsnxuJLpW8I1nLdRLjE1ow5VshhvEMFjPoYbcowpcI0EUFj/clBpA+rHjPjkYF
-# jw8oow+tYqnEK/GkrYkzGwGxpApKcECh5GGHgQ5iSgKuNTPueQIDAQABo0YwRDAO
-# BgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwMwHQYDVR0OBBYEFDBP
-# H8Z9qi6vrLw8FPD3k/kz+c1gMA0GCSqGSIb3DQEBCwUAA4IBgQBIQe+HN5spItMd
-# 884eV6JR3H8xGr8DeNpgjuhQnRnQqWB60Et6ehQwQFDg5Ft8iU4sGzdEQB4U+q79
-# 9oReJ6G1CuV6yXXqDe/Ljr5DGfGr+Wah4RuRi/QGhUUeIyyn8h5kXwOgGWz4VA5I
-# 9CmN+onZHRLnv3Lu9mKyUqo7ll5WaWEd/r3hvBqe30Rg0IanD8qpWXEbshlayTux
-# 8WMgjW3nA7tEWXmToCJpRk8DsaGU5m6rNxVa6zSS7qF2JiMWnZZBsr76cQsMYvTk
-# ZgshPz+OTsl84mR7i/BalTIyuI74TWd+8LdcBB+FpmhXvYmKAPQKQg25dHGWbVlB
-# E7kK29X38hvaQBO6lVT7mtTOPx2auMTmas6LLU+1XGFNm4zvwuydpf/4ltPSYlNp
-# K8Ij5vkp2DjXOaJF02BoqBkZt6w4wQPuCdu3OOTH3A3hymQrVD0tP408qNkLuzd5
-# xI+m7oTQCw6SYCxeEUEOooR7XMWuxE1R/KyLlPRCI1zi9DjhLawxggJyMIICbgIB
-# ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
-# ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
-# AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCDoHcIFL6v+
-# iUEfzXhNJdhFQKGq0zAFzmlIlUj2U861djANBgkqhkiG9w0BAQEFAASCAYBdwd/e
-# l5aSWst7IJ/tRkBNWVaJFFhmN+0PpZGC/8Gne2XECDmgB40KdIT8yqAOowQDGXY7
-# C9HifKCXYB3uPWBU34Db3IBBLR3IVpOWebD8xGvk5EfZXupo4do8FAYTejiVqawP
-# Oe5dd1Q/6/2g4Ih42AbDg48IcEJy/qK525J4rrYs9ztBhFz0/l0qUt+bNJPujWAe
-# uBjfTT5XwKmLSuSk92oyQ7BbPdSCiAt9/u2rbZsd30fz5OMI8gje33cU8L/7E8qW
-# VXpVx21irM51jkppE1vy6WVwhIWLyGxl/wRknfBtZXd/5URyWIgN2w/UdbbWLyND
-# Iop+VRoTBSiWlD2BriQTNj0CY9cVTZplx9/cRRNW2yKQBSxFGxpNrrwQhkJYcJ8l
-# brz2WFijTF2enUgmKGwd0nhteNQucbZcmhZT48+RsyO5rBMo213oiDAOL0f1qR2i
-# OZe/Web0TryujTcJruYh6AC+o+T/51npBWPZK4JwOekLOA3EuN9XJoF0Awg=
-# SIG # End signature block

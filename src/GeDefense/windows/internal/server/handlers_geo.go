@@ -1,27 +1,38 @@
 package server
 
 import (
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/geoip"
 )
 
 type mapSource struct {
-	IP          string   `json:"ip"`
-	CountryCode string   `json:"country_code,omitempty"`
-	Country     string   `json:"country,omitempty"`
-	Latitude    *float64 `json:"latitude,omitempty"`
-	Longitude   *float64 `json:"longitude,omitempty"`
-	ASN         string   `json:"asn,omitempty"`
-	ASName      string   `json:"as_name,omitempty"`
-	State       string   `json:"state"`
-	Blocked     bool     `json:"blocked"`
-	Hits        int      `json:"hits"`
+	IP                     string    `json:"ip"`
+	CountryCode            string    `json:"country_code,omitempty"`
+	Country                string    `json:"country,omitempty"`
+	Latitude               *float64  `json:"latitude,omitempty"`
+	Longitude              *float64  `json:"longitude,omitempty"`
+	ASN                    string    `json:"asn,omitempty"`
+	ASName                 string    `json:"as_name,omitempty"`
+	State                  string    `json:"state"`
+	Blocked                bool      `json:"blocked"`
+	Hits                   uint64    `json:"hits"`
+	Area                   string    `json:"area"`
+	Areas                  []string  `json:"areas"`
+	LastSeen               time.Time `json:"last_seen"`
+	LocalPort              uint16    `json:"local_port"`
+	Summary                string    `json:"summary"`
+	Severity               string    `json:"severity"`
+	Rules                  []string  `json:"rules"`
+	Process                string    `json:"process"`
+	CorrelationID          string    `json:"correlation_id,omitempty"`
+	Direction              string    `json:"direction"`
+	VerifiedGeDefenseBlock bool      `json:"verified_gedefense_block"`
 }
 type mapCountry struct {
 	Code    string `json:"code"`
@@ -53,60 +64,13 @@ func (s *Server) kineticGeo(w http.ResponseWriter, _ *http.Request) {
 		Countries []mapCountry    `json:"countries"`
 		Unknown   int             `json:"unknown"`
 	}{Database: status, Sources: make([]mapSource, 0, 96), Countries: make([]mapCountry, 0, 64)}
-	if !status.Loaded {
-		s.writeJSON(w, http.StatusOK, result)
-		return
-	}
-	// Only genuinely observed Kinetic/WFP events and Threat-IP findings.
-	// Country/ASN are context, not proof of attacker location, intent or identity.
-	events := s.mhx.Status().KineticIncidents
-	findings := s.mhx.NetworkFindings(150)
-	hits := make(map[string]*mapSource)
-	add := func(ip, state string, verified bool) {
-		if net.ParseIP(ip) == nil {
-			return
-		}
-		existing := hits[ip]
-		if existing != nil {
-			existing.Hits++
-			if verified {
-				existing.Blocked = true
-				existing.State = "VERIFIED_WFP_BLOCK"
-			}
-			return
-		}
-		if len(hits) >= 150 {
-			return
-		}
-		geo, ok := s.geo.Lookup(net.ParseIP(ip))
-		row := &mapSource{IP: ip, State: state, Blocked: verified, Hits: 1}
-		if ok {
-			row.CountryCode = geo.CountryCode
-			row.Country = geo.Country
-			row.ASN = geo.ASN
-			row.ASName = geo.ASName
-			lat, lon := geo.Latitude, geo.Longitude
-			row.Latitude = &lat
-			row.Longitude = &lon
-		} else {
+	rows := s.collectMapSources(s.mhx.Status(), 150)
+	countryTotals := make(map[string]*mapCountry)
+	for _, item := range rows {
+		row := &item
+		if row.Latitude == nil {
 			result.Unknown++
 		}
-		hits[ip] = row
-	}
-	for _, item := range events {
-		add(item.RemoteIP, item.Classification, item.VerifiedWFPBlock)
-	}
-	for _, finding := range findings {
-		add(finding.RemoteIP, "THREAT_INTELLIGENCE_MATCH", false)
-	}
-	ips := make([]string, 0, len(hits))
-	for ip := range hits {
-		ips = append(ips, ip)
-	}
-	sort.Strings(ips)
-	countryTotals := make(map[string]*mapCountry)
-	for _, ip := range ips {
-		row := hits[ip]
 		if len(result.Sources) < 96 {
 			result.Sources = append(result.Sources, *row)
 		}
@@ -118,7 +82,7 @@ func (s *Server) kineticGeo(w http.ResponseWriter, _ *http.Request) {
 			total = &mapCountry{Code: row.CountryCode, Name: row.Country}
 			countryTotals[row.CountryCode] = total
 		}
-		total.Hits += row.Hits
+		total.Hits += int(row.Hits)
 		if row.Blocked {
 			total.Blocked++
 		}

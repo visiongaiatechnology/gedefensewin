@@ -206,7 +206,7 @@ The following mapping links each physical file relative to the project root to i
 ### Client Tier (Tray, Launcher, Web Dashboard)
 - `src/GeDefense/windows/cmd/gedefense-center/main.go` → Single-instance GUI launcher; requests bootstrap code and opens the native host and embeds its own Chromium process.
 - `src/GeDefense/windows/cmd/gedefense-tray/main.go` → System notification area background process; monitors status and triggers Center.
-- `src/GeDefense/windows/internal/launcher/launcher_windows.go` → HTTP client for `/api/v1/session/bootstrap`; opens target URL via `ShellExecuteW`.
+- `src/GeDefense/windows/internal/launcher/launcher_windows.go` → operator-session broker client and window coordinator; starts the Authenticode-verified external Chromium with the plain loopback URL.
 - `src/GeDefense/windows/internal/wintray/tray_windows.go` → Pure Win32 system tray implementation (window class, message loop, context menu).
 - `src/GeDefense/windows/internal/localhttp/client.go` → Loopback HTTP client with customized timeout and transport configuration.
 - `src/GeDefense/windows/internal/server/web/index.html` → Single-page application shell; semantic layout for all 9 views.
@@ -344,13 +344,14 @@ Provides an embedded, zero-dependency, authenticated web server listening strict
 ### 4.3 Operator Center Launcher Module
 
 #### Purpose
-Acts as the user-facing entrypoint (`GeDefenseCenter.exe`) executed by the operator. Ensures single-instance execution, securely retrieves a one-time bootstrap token from the service, and opens the default web browser to the authenticated security center.
+Acts as the user-facing entrypoint (`GeDefenseCenter.exe`) executed by the operator. It obtains a short-lived OS-identity-bound operator session from the local service and opens the external Chromium kiosk window in a native Win32 host.
 
 #### Capabilities
-- Prevents concurrent instances using a Win32 named mutex (`Local\VGT.GeDefense.Center.v4`).
-- Reads the protected master token from `%ProgramData%\VGT\GeDefense\dashboard.token`.
-- Initiates an authorized POST request to `/api/v1/session/bootstrap` to acquire an ephemeral bootstrap code.
-- Invokes the default browser via `ShellExecuteW` pointing to `http://127.0.0.1:17831/#bootstrap=<code>`.
+- Prevents concurrent instances using an identity-scoped Win32 single-instance object; foreign pre-created objects are not trusted and are taken over fail-closed (HP-FIND-005).
+- Never reads `dashboard.token`; requests a scoped operator session via `POST /api/v1/session/operator`. The service verifies the caller's Windows process token (operator group or Administrators), binds the session to that OS account, audits it and allows revocation.
+- Registers the launched browser process id with the scoped session; the browser exchanges the registration into its own cookie session bound to the loopback peer process.
+- Launches a machine-wide, Authenticode-verified Chromium browser in kiosk mode. The host is an external Chromium kiosk, not an embedded renderer.
+- Polls window commands and acknowledges window state with the scoped session (`/api/v1/window/*`).
 - Displays native Win32 message boxes if the service is unreachable or errors occur.
 
 #### Associated Files
@@ -597,7 +598,7 @@ Replaces external CGO and Go packages with direct, memory-safe, lazy-loaded Wind
 - **Process Management**: `OpenProcess`, `TerminateProcess`, `GetProcessTimes`, `QueryFullProcessImageNameW`, `OpenProcessToken`, `GetTokenInformation`.
 - **Filesystem & Drives**: `MoveFileExW` (atomic replace), `GetLogicalDrives`, `GetDriveTypeW`, `CreateFileW`, `GetFileInformationByHandle`.
 - **Network Telemetry**: Calls `iphlpapi.dll!GetExtendedTcpTable` for IPv4 (`AF_INET`) and IPv6 (`AF_INET6`), parsing connection states and mapping to Owning PIDs.
-- **Shell & UI**: `ShellExecuteW` for default browser launching; `MessageBoxW` for native error reporting.
+- **Shell & UI**: starts the external Chromium process (no shell interpolation); `MessageBoxW` for native error reporting.
 
 #### Associated Files
 - **Core Wrappers**: `src/GeDefense/windows/internal/winapi/core_windows.go`
@@ -614,9 +615,10 @@ Manages administrative authentication tokens and ensures cryptographic isolation
 
 #### Capabilities
 - Generates 32-byte cryptographically secure random tokens encoded in base64 URL format.
-- Stores the master token in `%ProgramData%\VGT\GeDefense\dashboard.token`.
-- Restricts filesystem access using Windows API file creation flags (`O_CREATE|O_EXCL|O_WRONLY`, 0600).
+- Stores the break-glass master token in `%ProgramData%\VGT\GeDefense\dashboard.token`; the installer restricts it to SYSTEM/Administrators. Center/Tray use the operator broker instead of the file.
+- Supports atomic rotation (`POST /api/v1/admin/token/rotate`) and reload; rotation revokes every session.
 - Performs constant-time token comparisons (`subtle.ConstantTimeCompare`) to prevent timing side-channel attacks.
+- Operator sessions are minted by `server/operator_broker.go` after Windows token verification, carry functional scopes and record the OS account in the evidence ledger.
 
 #### Associated Files
 - **Source**: `src/GeDefense/windows/internal/security/token.go`
@@ -935,7 +937,9 @@ All endpoints are hosted exclusively on `127.0.0.1:17831`. Mutating requests req
 |---|---|---|---|---|---|---|
 | `/` | GET | Browser Navigation | `s.index` | `internal/server` | Embedded `web/index.html` | Public (Loopback) |
 | `/assets/*` | GET | Browser Asset Loader | FileServer | `internal/server` | Embedded `web/*` assets | Public (Loopback) |
-| `/api/v1/session/bootstrap` | POST | `launcher.BootstrapURL` | `s.bootstrap` | `internal/server` | In-memory `bootstrapCodes` | Master Token |
+| `/api/v1/session/operator` | POST | `operatorclient` (launcher/tray) | `s.operatorBroker` | `internal/server` | Session store, OS-account attribution | Windows process token (Operator group/Administrators) |
+| `/api/v1/session/register-browser` | POST | `launcher` | `s.registerBrowser` | `internal/server` | In-memory registration | Operator session / Master |
+| `/api/v1/session/bootstrap` | POST | admin tooling (legacy) | `s.bootstrap` | `internal/server` | In-memory `bootstrapCodes` | Master Token (break-glass) |
 | `/api/v1/session/exchange` | POST | `api.js: exchangeBootstrap` | `s.exchange` | `internal/server` | In-memory `sessions` & cookie | Valid Bootstrap Code |
 | `/api/v1/status` | GET | `views.js: loadOverview`, `loadProtection`, `app.js` | `s.status` | `hardening`, `mhx`, `integrity` | WMI, Registry, Engine Statuses | Session / Master |
 | `/api/v1/protection/readiness` | GET | `views.js: readiness` | `s.protectionReadiness` | `internal/mhx` | MHX Engine Status | Session / Master |
@@ -969,35 +973,29 @@ All endpoints are hosted exclusively on `127.0.0.1:17831`. Mutating requests req
 
 ```text
 Operator launches GeDefenseCenter.exe
-        ↓
-GeDefenseCenter: claims named mutex "Local\VGT.GeDefense.Center.v4"
-        ↓
-launcher.BootstrapURL(): reads %ProgramData%\VGT\GeDefense\dashboard.token
-        ↓
-POST http://127.0.0.1:17831/api/v1/session/bootstrap
-  Headers: [Authorization: Bearer <master-token>, X-VGT-Request-ID: <uuid>]
-        ↓
-server/middleware.go: masterAuthorize() validates token in constant-time
-        ↓
-server/session.go: s.bootstrap() generates 43-char cryptographically random code
-        ↓
-Returns JSON: {"code": "<bootstrap-code>"}
-        ↓
-GeDefenseCenter invokes default browser via ShellExecuteW:
-  http://127.0.0.1:17831/#bootstrap=<bootstrap-code>
-        ↓
-Browser loads embedded index.html & app.js
-        ↓
-app.js extracts bootstrap code from URL fragment & clears hash
-        ↓
-POST http://127.0.0.1:17831/api/v1/session/exchange
-  Body: {"code": "<bootstrap-code>"}
-        ↓
-server/session.go: s.exchange() consumes code (single-use), issues session cookie
-        ↓
-Sets HTTP Cookie: VGTSESSION=<session-token>; Path=/; Max-Age=28800; HttpOnly; SameSite=Strict
-        ↓
-Subsequent dashboard requests are authenticated seamlessly via session cookie.
+        ->
+GeDefenseCenter claims an identity-scoped single-instance object (foreign objects are not trusted)
+        ->
+launcher calls POST http://127.0.0.1:17831/api/v1/session/operator
+  Headers: [X-VGT-Operator-Broker: 1, X-VGT-Request-ID: <uuid>, no Origin/Authorization]
+        ->
+server/operator_broker.go resolves the loopback peer process id,
+  inspects its Windows token (operator group / Administrators), fails closed otherwise
+        ->
+Returns JSON: {"token": "vgs.<scoped-session>", "subject": {"account": "<OS account>"}, ...}
+        ->
+launcher starts the Authenticode-verified Chromium kiosk with the plain loopback URL
+  (no secret in the browser command line)
+        ->
+launcher registers the browser pid: POST /api/v1/session/register-browser (scoped session + replay id)
+        ->
+Browser loads the embedded UI and calls POST /api/v1/session/exchange
+  (bound to the registered loopback peer process; single-use registration)
+        ->
+server/session.go issues a scoped HttpOnly/SameSite=Strict session cookie
+        ->
+Subsequent dashboard requests are authenticated via the session cookie; the master token
+  is never readable by the operator group and remains a local-administrator break-glass credential.
 ```
 
 ---
@@ -1245,8 +1243,8 @@ graph TD
         Disks["Fixed NTFS Drives (C:\, etc.)"]
     end
 
-    Center -->|1. ShellExecuteW| Browser
-    Center -->|2. POST /session/bootstrap| HttpServer
+    Center -->|1. Operator-Session + Chromium-Start| Browser
+    Center -->|2. POST /session/operator (scoped session)| HttpServer
     Tray -->|Status Poll /status| HttpServer
     Tray -->|Open Center| Center
     Browser -->|Loopback API Calls /api/v1/*| HttpServer
@@ -1492,3 +1490,83 @@ internal/winapi/result_windows.go separates BOOL and HRESULT error contracts fro
 ## 4.1.4 Addendum: Recoverable WFP bridge
 
 The WFP watcher supervises its own PowerShell bridge with capped retry backoff and a 30-second inactivity watchdog. Each attempt owns and joins its process and watchdog; stderr is bounded to 2 KiB. Health reflects message receipt time, while correlation retains the Windows event timestamp. The in-memory record cursor survives bridge restarts, with a latest-record check after log reset. Event-log access failures cannot emit ready/heartbeat; an empty readable query is handled independently. The startup telemetry check also requires an answering WFP bridge. None of these signals assert that the effective Windows audit policy is enabled or that all ingress traffic is covered.
+
+
+## 17.10.2026 — Overview threat map and complete Kinetic observations
+
+The Windows overview now shares the WP/Linux threat-map presentation: local Mercator geometry,
+quadratic trajectories with moving light points, source clusters, verified/configured host hub,
+a filterable six-column source/correlation table and a persistent source inspector. Existing
+Windows authentication, loopback restriction, rate limit and CSP apply to the new read-only route.
+
+Data path:
+`WFP 5157 inbound event -> mhx.evaluateWFPBlock -> kinetic.Monitor -> MHX Status.KineticSources
+-> server.collectMapSources -> /api/v1/overview/threat-map -> overview-map-data.js
+-> overview-map-renderer.js + overview-map.js`.
+
+- `internal/kinetic/monitor.go`: observations with transport port zero remain in the bounded source
+  index (2048 slots). They contribute no port diversity and cannot alone produce a burst candidate.
+  Per-source hit/portless/last-seen snapshots are bounded and detached from mutable monitor state.
+- `internal/server/overview_map.go`: joins recorded WFP sources with real network TI findings and
+  process attack stories, resolves local CSV GeoIP/ASN, and serves at most 500 sources / 300 recent
+  source records. Duplicate appearances of one event in different paths do not inflate hit counters.
+- `internal/server/handlers_geo.go`: Kinetic uses the same source collector. Missing CSV only removes
+  geographic coordinates; it no longer removes genuine observed sources from the response.
+- `web/overview-map-data.js`, `web/overview-map-renderer.js`, `web/overview-map.js`,
+  `web/overview-map-strings.js`, `web/overview-map.css`: bounded normalization, local SVG rendering,
+  lifecycle/table/inspector and German Windows product copy. At most 240 mapped sources and 40 arcs.
+- `web/views.js`: starts the overview module on actual page loading. Kinetic status and geo use
+  independent settled requests, so a map error cannot suppress the Kinetic status and counters.
+
+A Windows WFP block is evidence of an OS block, not necessarily GeDefense attribution or malicious
+intent. Feed policy alone never counts as a witnessed block. Private/unresolved sources remain in the
+table, without geographic pins. The existing burst threshold (12 observations / 10 s / 3 ports),
+TI guards and all enforcement/arming decisions remain unchanged. This adds visibility, not a raw
+packet sensor or SYN-flood proof.
+
+Host coordinates come only from local public interfaces and the same CSV, or an explicitly
+operator-configured `GEDEFENSE_MAP_HOST_IP` for the host's own public/NAT endpoint. The configured
+value never causes an external request. Unknown host position suppresses destination arcs. TI/process
+records with unknown traffic direction remain visible but do not fabricate inbound trajectories.
+
+Rendering pauses when hidden/backgrounded, on operator pause or reduced-motion preference. Failed
+refreshes mark the previous snapshot stale. Dynamic source data uses DOM/textContent; no external
+fonts, map tiles, scripts or geolocation services are introduced. Existing local MIT world data and
+GeoIP/ASN attribution are retained. Tests use isolated fixture peers and never target the installed
+security service. Detailed verification and honest limits are documented in the README and the release-gate results of the build.
+
+## GeDefense Titan (5.1.0)
+
+Titan is a separate integrity domain inside the Windows control plane. It does not reuse the
+full-drive integrity scanner as its event source; the existing scanner remains the periodic
+deep-baseline mechanism. Titan adds native, targeted collection and an owner-authorization layer.
+
+- `internal/titan/model.go`: event, trust, authorization, quarantine, checkpoint and status contracts.
+- `internal/titan/policy.go`: atomic owner policy, modes `OBSERVE`/`CONTAIN`/`STRICT`, scoped
+  one-time permits and validation boundaries.
+- `internal/titan/auth.go`: risk classification and trust evaluation. A change is never authorized
+  merely because it came from a signed binary or an administrator. Temporal correlation is not proof.
+- `internal/titan/engine.go`: bounded observation queue, lifecycle, sensor supervision, owner actions,
+  notification projection and status projection.
+- `internal/titan/inventory_windows.go`: service/Run/RunOnce/security/Secure-Boot measurement, baseline
+  diff and conservative baseline advancement. The baseline is only saved after evidence writes succeed.
+- `internal/titan/files_windows.go`: native `ReadDirectoryChangesW` roots, 750 ms per-path debounce,
+  stable SHA-256 hashing, Zone-Identifier context, process/network temporal context.
+- `internal/titan/process_windows.go`: Toolhelp32 process starts, native path enrichment, TCP context
+  for remote-management tools and ports. No process termination authority is added.
+- `internal/titan/journal.go`: append-only SHA-256 chain, Ed25519 checkpoints, tamper detection,
+  forensic quarantine of corrupt journals, bounded event ring and export.
+- `internal/titan/vault.go`: AES-256-GCM quarantine, bounded file size, hash verification, no-overwrite
+  restore and metadata persistence.
+- `internal/winapi/filewatch_windows.go`, `internal/winapi/process_windows.go`: owned native primitives
+  with bounded buffers, cancellation via `CancelIoEx`, overflow detection and process-table ceilings.
+- `internal/server/handlers_titan.go`, `router.go`: authenticated Titan API under the same loopback,
+  origin, request-ID, rate-limit and CSP middleware.
+- `internal/server/web/titan.js`, `titan.css`, `index.html`: five-area Titan control center using
+  DOM construction, no CDN assets and explicit `OBSERVED`/`TEMPORAL`/`NONE` correlation labels.
+- `internal/app/app.go`: Titan is created with the service, runs under the existing worker supervisor,
+  and is closed with a final checkpoint during shutdown.
+
+Deliberate limits: no TPM measured-boot attestation or external witness in this phase; no Windows
+minifilter execution prevention; no claim of complete kernel/firmware protection. These are product
+boundaries, not silent gaps. See `docs/TITAN.md`.

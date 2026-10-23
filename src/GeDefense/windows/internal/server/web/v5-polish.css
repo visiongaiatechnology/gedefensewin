@@ -1,0 +1,577 @@
+/* STATUS: DIAMANT VGT SUPREME — GeDefense Windows Beta V5
+   Composition polish layer (loaded after v5-refine.css).
+   Purpose: restore operator-console rhythm — balanced topbar, intentional
+   spacing between headers and content, full-width data surfaces, grouped
+   control surfaces, unmistakable switches and consistent empty states.
+   Glass 2100 language and all functional selectors stay unchanged. */
+
+/* ------------------------------------------------------------------ */
+/* Topbar — balanced vertical rhythm and 48 px operator actions        */
+/* ------------------------------------------------------------------ */
+.topbar{
+  min-height:86px;
+  padding:16px clamp(20px,2.4vw,32px);
+  align-items:center;
+  gap:20px;
+}
+.top-left{align-items:center;gap:12px}
+.title-stack{padding-block:2px}
+.title-stack .eyebrow{margin:0 0 3px;line-height:1.3}
+.title-line{margin:0}
+.title-line h1{font-size:1.2rem;line-height:1.22;margin:0}
+.title-line h1:focus,.title-line h1:focus-visible{outline:none}
+.view-subtitle{margin-top:5px;line-height:1.45;font-size:.72rem}
+.top-actions{gap:9px;align-items:center}
+.topbar .icon-button{
+  min-width:48px;min-height:48px;height:48px;padding:0 13px;
+  font-size:.72rem;
+}
+.topbar .health-button{min-width:150px;height:48px;justify-content:flex-start;gap:8px;padding:0 14px}
+.topbar .notification-button{min-width:48px;padding:0 12px}
+.top-actions .button.ghost{
+  min-height:48px;height:48px;padding:0 17px;
+  font-size:.77rem;border-radius:9px;
+}
+.top-actions .status-pill{
+  min-height:36px;padding:7px 12px;font-size:.55rem;border-radius:7px;
+}
+.window-controls{margin-left:5px;padding-left:8px;gap:1px}
+.win-control-btn{width:38px;height:36px;border-radius:6px}
+#clock{font-size:.68rem;min-width:62px;text-align:right}
+
+/* ------------------------------------------------------------------ */
+/* Global canvas rhythm, metric ledgers and empty states               */
+/* ------------------------------------------------------------------ */
+.view{padding-top:26px;padding-bottom:calc(60px + env(safe-area-inset-bottom))}
+.page-head{gap:22px;padding-bottom:17px;margin-bottom:22px}
+.page-head h2{margin-bottom:7px}
+.page-head p:not(.eyebrow){line-height:1.58}
+.section-card,.table-card{margin-top:20px}
+.section-head{margin-bottom:16px}
+.section-head p{margin-top:4px;line-height:1.55}
+
+/* Metric ledgers: consistent inner padding on every tile, including the
+   first one (previously flush against the ledger edge). */
+.metric-grid{
+  margin:18px 0 0;
+  border-radius:12px;
+  background:rgba(8,23,38,.55);
+}
+.metric-grid .metric-card{padding:14px 18px}
+.metric-grid .metric-card:first-child{padding-left:18px}
+.metric-grid .metric-card:last-child{padding-right:18px}
+.metric-card span{line-height:1.35}
+.metric-card strong{font-size:1.2rem;line-height:1.22;margin-top:7px}
+.metric-card small{margin-top:5px;line-height:1.45}
+
+/* Empty states read as deliberate placeholders, not dead rectangles. */
+.empty-state{padding:16px 18px;text-align:left;background:rgba(8,22,38,.32);border-radius:10px;font-size:.74rem;color:#8ba7ba}
+.empty-state strong{display:block;margin-bottom:3px;font-size:.78rem;color:#c8dcea}
+.story-list.empty-state{display:block;padding:16px 18px}
+.story-list.empty-state:before{content:"";display:inline-block;width:6px;height:6px;margin-right:9px;border-radius:2px;background:rgba(76,201,255,.55);vertical-align:1px}
+.table-wrap tbody td[colspan]{text-align:center;padding:28px 16px;color:#84a3b6;font-size:.74rem;line-height:1.5}
+.table-wrap tbody td[colspan]:before{content:"";display:block;width:34px;height:2px;margin:0 auto 10px;border-radius:2px;background:rgba(76,201,255,.3)}
+.table-card .section-head + .table-wrap{margin-top:2px}
+.table-wrap td:first-child,.table-wrap th:first-child{padding-left:16px}
+.table-wrap td:last-child,.table-wrap th:last-child{padding-right:16px}
+
+/* ------------------------------------------------------------------ */
+/* Overview — threat map header breathing room, compact stage          */
+/* ------------------------------------------------------------------ */
+.overview-threat-panel{margin-top:20px;border-radius:15px}
+.overview-threat-header{padding:20px 22px 21px;row-gap:12px}
+.overview-threat-title{gap:13px;flex:1 1 480px}
+.overview-threat-title h3{line-height:1.42;margin:0}
+.overview-threat-title p{margin-top:8px;line-height:1.55;color:#9db9cb}
+.overview-threat-badges{gap:9px}
+.overview-threat-chips{
+  margin:0 22px;padding:16px 0 17px;
+  border-bottom:1px solid rgba(100,180,235,.1);
+}
+.overview-threat-stage{margin:0 22px;min-height:0}
+.overview-threat-canvas{height:clamp(300px,24vw,380px);min-height:300px}
+.overview-threat-feed{margin:14px 22px 0}
+.overview-threat-stream-header{padding:12px 14px}
+.overview-threat-stream-table th,.overview-threat-stream-table td{padding:10px 12px}
+.overview-threat-footer{padding:10px 22px 14px}
+.overview-map-attribution{margin:12px 2px 0;line-height:1.55}
+
+/* ------------------------------------------------------------------ */
+/* Overview — realtime traffic: graph fills its column                 */
+/* ------------------------------------------------------------------ */
+.traffic-dashboard{padding:22px 24px 18px}
+.traffic-dashboard .section-head{margin-bottom:16px;align-items:flex-start}
+.traffic-layout{
+  grid-template-columns:214px minmax(0,1fr);
+  gap:18px;align-items:stretch;
+}
+.traffic-values{display:grid;grid-template-rows:1fr 1fr;gap:10px;min-height:182px}
+.traffic-values>div{
+  display:flex;flex-direction:column;justify-content:center;
+  min-height:0;padding:14px 16px;
+}
+.traffic-values span{line-height:1.35}
+.traffic-values strong{margin-top:7px;font-size:1.24rem;line-height:1.15;white-space:nowrap}
+.traffic-chart{
+  display:block;width:100%;height:182px;min-width:0;
+  border-radius:10px;
+}
+.traffic-dashboard>p{margin:12px 0 0;line-height:1.55}
+.traffic-dashboard>p:last-child{font-size:.62rem;color:#7c99ab}
+
+/* ------------------------------------------------------------------ */
+/* Hardening — filter rail, count and card grid separation             */
+/* ------------------------------------------------------------------ */
+.catalog-toolbar{
+  margin:18px 0 0;padding:10px 12px;
+  border-radius:10px;gap:14px;
+}
+.filter-chips{gap:6px;align-items:center}
+.filter-chip{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-height:28px;padding:5px 10px;font-size:.63rem;line-height:1.2;
+  border-radius:6px;
+}
+#hardeningCount{
+  display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  margin:12px 2px 20px;padding:11px 2px 0;
+  border-top:1px solid rgba(100,180,235,.1);
+  font-family:var(--vgt-font-data);font-size:.64rem;letter-spacing:.03em;color:#88a6b8;
+}
+#hardeningCount:after{
+  content:"Messwerte aus der Control Plane · Katalog vor der Messung vollständig";
+  color:#6f8b9d;font-size:.58rem;letter-spacing:.02em;
+}
+.component-grid{gap:15px;align-items:stretch}
+.component-card{padding:17px 18px;gap:8px}
+.component-card p{margin-bottom:2px}
+.component-card .component-check{margin-top:4px}
+.component-card .component-meta{padding-top:2px}
+.component-card .component-foot{margin-top:auto;padding-top:10px}
+.rollback-card{margin-top:20px;padding:20px 22px}
+
+/* ------------------------------------------------------------------ */
+/* SafetySys audit — hero/status block, metrics and controls aligned   */
+/* ------------------------------------------------------------------ */
+.view[data-page="audit"] .page-head{margin-bottom:20px}
+.audit-hero{
+  padding:20px 22px;margin-top:20px;gap:24px;
+  align-items:center;border-radius:14px;
+}
+.audit-hero h3{font-size:1.04rem;line-height:1.3;margin:2px 0 5px}
+.audit-hero p{margin:0;font-size:.78rem;line-height:1.55}
+.audit-hero .status-pill{flex:none;margin-left:auto}
+#auditMetrics{margin-top:18px}
+.view[data-page="audit"] .metric-grid{border-radius:12px}
+.view[data-page="audit"] .table-card{margin-top:20px}
+.audit-table-note{margin:12px 0 0;font-size:.7rem;line-height:1.5;color:#83a1b3}
+
+/* Threat Intelligence vitals — six deliberate columns, no orphan tile. */
+.ti-vitals{
+  margin:18px 0 18px;
+  grid-template-columns:repeat(6,minmax(0,1fr));
+}
+.ti-vital{padding:13px 16px}
+.ti-vital:first-child{padding-left:2px}
+.ti-vital strong{font-size:.96rem;line-height:1.3;margin-top:7px}
+.ti-vital small{font-size:.62rem;line-height:1.45;margin-top:5px}
+
+/* ------------------------------------------------------------------ */
+/* XDR — realtime status display                                       */
+/* ------------------------------------------------------------------ */
+.xdr-status{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:15px;margin:20px 0 0;
+}
+.xdr-status-group{
+  min-width:0;overflow:hidden;
+  border:1px solid rgba(100,180,235,.14);border-radius:13px;
+  background:linear-gradient(155deg,rgba(13,32,54,.7),rgba(5,14,26,.86));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+}
+.xdr-status-head{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:12px 16px;border-bottom:1px solid rgba(100,180,235,.11);
+  background:rgba(76,201,255,.035);
+}
+.xdr-status-head strong{
+  font:700 .63rem/1.35 var(--vgt-font-data);letter-spacing:.13em;
+  text-transform:uppercase;color:#9fd3ed;
+}
+.xdr-status-head .status-pill{font-size:.49rem;padding:3px 7px}
+.xdr-status-body{display:grid;gap:0;padding:5px 16px 8px}
+.xdr-status-row{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;
+  align-items:baseline;padding:9px 0;border-bottom:1px solid rgba(100,180,235,.08);
+}
+.xdr-status-row:last-child{border-bottom:0}
+.xdr-status-label{min-width:0;font-size:.7rem;font-weight:600;color:#b9cfe0;line-height:1.4}
+.xdr-status-label small{display:block;margin-top:2px;color:#7e9aac;font-size:.6rem;font-weight:400;line-height:1.45}
+.xdr-status-value{
+  font:700 .79rem/1.3 var(--vgt-font-data);text-align:right;
+  color:#eef8ff;overflow-wrap:anywhere;
+}
+.xdr-status-value small{display:block;margin-top:2px;color:#7e9aac;font-size:.58rem;font-weight:400}
+.xdr-status-value[data-tone="good"]{color:#6ce7c2}
+.xdr-status-value[data-tone="warn"]{color:#f5d38a}
+.xdr-status-value[data-tone="bad"]{color:#ff9aae}
+
+/* XDR — grouped policy control surfaces */
+.xdr-policy-card{padding:22px 24px}
+.xdr-policy-form,.kinetic-config{padding:0;border:0;background:transparent;margin-top:0}
+.control-surface{
+  margin:0 0 14px;padding:16px 18px;
+  border:1px solid rgba(100,180,235,.13);border-radius:12px;
+  background:rgba(7,20,35,.48);
+}
+.control-surface:last-of-type{margin-bottom:0}
+.control-surface-head{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+  margin-bottom:13px;padding-bottom:11px;
+  border-bottom:1px solid rgba(100,180,235,.1);
+}
+.control-surface-head .eyebrow{margin:0 0 3px;font-size:.5rem}
+.control-surface-head h4{margin:0;font-size:.92rem;line-height:1.35;font-weight:650}
+.control-surface .field-hint{margin:11px 0 0;line-height:1.55}
+.domain-controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.domain-control{
+  display:grid;gap:6px;padding:12px 13px;
+  border:1px solid rgba(100,180,235,.12);border-radius:9px;
+  background:rgba(4,13,24,.55);
+}
+.domain-control>span{font:600 .66rem var(--vgt-font-ui);color:#aecbdd;letter-spacing:.01em}
+.domain-control small{color:#7f9cae;font-size:.61rem;line-height:1.45}
+.switch-stack{display:grid;gap:9px;margin-bottom:14px}
+.field.standalone{display:grid;gap:6px;margin-top:2px}
+.settings-form .form-actions{margin-top:18px;padding-top:16px}
+.xdr-policy-form .form-actions{margin-top:6px;padding-top:16px}
+.settings-form[data-available="false"] .control-surface{background:rgba(7,20,35,.32)}
+
+/* XDR — application allowlist / network deny as dedicated policy cards */
+.app-policy-card{padding:22px 24px}
+.app-policy-card>.section-head{margin-bottom:14px}
+.app-list{
+  border:1px solid rgba(100,180,235,.12);border-radius:10px;
+  overflow:hidden;margin-top:2px;
+}
+.app-row{
+  padding:11px 15px;border-bottom:1px solid rgba(100,180,235,.09);
+  background:rgba(4,13,24,.35);gap:14px;
+}
+.app-row:last-child{border-bottom:0}
+.app-row-main strong{font-size:.71rem;line-height:1.45}
+.app-row-main small{margin-top:3px;font-size:.62rem;line-height:1.45}
+.app-list>p.field-hint{
+  margin:0;padding:22px 18px;text-align:center;
+  border:0;background:transparent;color:#7f9cae;font-size:.71rem;
+}
+.app-add{
+  display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;
+  align-items:end;margin-top:15px;padding-top:15px;
+  border-top:1px solid rgba(100,180,235,.1);
+}
+.app-add label{min-width:0}
+.app-add .button{min-height:38px;white-space:nowrap}
+#mhxApplicationsStatus,#mhxDeniesStatus{margin-top:10px}
+
+/* XDR — client-side pager for process decisions */
+.pager-bar{
+  display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  margin-top:15px;padding-top:14px;border-top:1px solid rgba(100,180,235,.1);
+}
+.pager-bar .pagination-info{font-size:.68rem;color:#8aa7b9}
+.pager-bar .button{min-height:30px;padding:5px 12px;font-size:.69rem}
+
+/* ------------------------------------------------------------------ */
+/* Kinetic — hero, metrics, settings surfaces                          */
+/* ------------------------------------------------------------------ */
+.view[data-page="kinetic"] .page-head{margin-bottom:20px}
+.kinetic-hero{padding:22px;gap:26px;align-items:flex-start}
+.kinetic-hero>div:first-child{flex:1 1 560px;min-width:0}
+.kinetic-hero h3{font-size:1.08rem;margin:2px 0 6px}
+.kinetic-hero p{margin-bottom:8px;line-height:1.58}
+.kinetic-hero p:last-child{margin-bottom:0}
+.kinetic-actions{min-width:270px;max-width:310px;gap:9px;flex:none}
+.kinetic-actions .button{min-height:40px}
+#kineticMetrics{margin-top:18px}
+.kinetic-policy-card{margin-top:20px;padding:22px 24px}
+.persisted-strip{
+  display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 22px;
+  padding:13px 16px;margin:14px 0 18px;
+  border:1px solid rgba(100,180,235,.12);border-radius:10px;
+  background:rgba(4,13,24,.4);
+}
+.persisted-strip>span{color:#7d99ab;font:700 .57rem var(--vgt-font-data);letter-spacing:.09em}
+.persisted-strip>strong{font:650 .73rem var(--vgt-font-data);color:#dcedf7}
+.persisted-strip .status-pill{margin-left:auto;font-size:.5rem;padding:3px 8px}
+.kinetic-config-grid{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.35fr);gap:14px;align-items:stretch}
+.kinetic-config-grid .control-surface{height:100%;margin-bottom:0}
+.threshold-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.threshold-grid label{gap:6px}
+.threshold-grid label>small{margin-top:0}
+.kinetic-config .control-surface{margin-bottom:14px}
+.kinetic-config .threshold-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.kinetic-config .form-actions{margin-top:4px;padding-top:16px}
+
+/* Kinetic geo + timeline/table rhythm */
+.kinetic-geocard{margin-top:20px;padding:22px 24px}
+.kinetic-geo-map{margin:18px 0 14px;min-height:280px;max-height:420px}
+.kinetic-world-svg{min-height:280px;max-height:420px}
+.kinetic-geocard .table-wrap{margin-top:14px}
+.kinetic-pipeline{padding:16px 0;gap:10px}
+.kinetic-pipeline span{padding:14px}
+.kinetic-pipeline + p{margin:8px 0 0;line-height:1.55}
+
+/* ------------------------------------------------------------------ */
+/* Switch component — unmistakable track, knob and states              */
+/* ------------------------------------------------------------------ */
+.switch{
+  grid-template-columns:auto minmax(0,1fr);gap:13px;align-items:center;
+  padding:12px 15px;border:1px solid rgba(100,180,235,.14);
+  border-radius:10px;background:rgba(8,22,38,.5);
+  transition:border-color .16s ease,background .16s ease;
+}
+.switch:hover{border-color:rgba(120,205,255,.28);background:rgba(10,26,45,.62)}
+.switch:focus-within{border-color:rgba(76,201,255,.5)}
+.switch-track{
+  position:relative;display:block;width:46px;height:26px;flex:none;
+  margin-top:0;border:1px solid rgba(120,205,255,.34);
+  border-radius:999px;background:rgba(2,9,17,.9);
+  transition:background .16s ease,border-color .16s ease;
+}
+.switch-track:after{
+  content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;
+  border-radius:50%;background:#7f9cae;
+  box-shadow:0 1px 3px rgba(0,0,0,.65);
+  transition:transform .16s ease,background .16s ease,box-shadow .16s ease;
+}
+.switch:hover .switch-track:after{background:#9fbcce}
+.switch input:checked+.switch-track{background:rgba(35,142,223,.4);border-color:rgba(120,215,255,.8)}
+.switch input:checked+.switch-track:after{
+  transform:translateX(20px);background:#eafaff;
+  box-shadow:0 0 12px rgba(76,201,255,.75);
+}
+.switch input:focus-visible+.switch-track{outline:2px solid var(--vgt-signal);outline-offset:3px}
+.switch input:disabled+.switch-track{opacity:.42}
+.switch:has(input:disabled){opacity:.78;background:rgba(8,22,38,.3)}
+.switch-copy strong{font-size:.77rem;line-height:1.35}
+.switch-copy small{margin-top:3px;font-size:.66rem;line-height:1.48;color:#8ba7ba}
+
+/* ------------------------------------------------------------------ */
+/* Network + Integrity — operational rhythm                            */
+/* ------------------------------------------------------------------ */
+.view[data-page="network"] .metric-grid,
+.view[data-page="integrity"] .metric-grid{margin-top:18px}
+.view[data-page="network"] .metric-card strong{font-size:1.02rem;line-height:1.35;letter-spacing:.01em}
+.view[data-page="network"] .metric-card small{margin-top:4px}
+.view[data-page="network"] .table-card,
+.view[data-page="integrity"] .table-card{margin-top:20px}
+.view[data-page="integrity"] .section-card{padding:20px 22px}
+.view[data-page="integrity"] .section-card .section-head{margin-bottom:12px}
+.view[data-page="integrity"] .section-card .progress{margin:6px 0 10px}
+#integritySchedule{margin:0;font-size:.72rem;line-height:1.5}
+.view[data-page="network"] .status-pill,
+.view[data-page="integrity"] .status-pill{margin-left:auto}
+
+/* ------------------------------------------------------------------ */
+/* Responsive composition                                              */
+/* ------------------------------------------------------------------ */
+@media(max-width:1180px){
+  .xdr-status{grid-template-columns:1fr 1fr}
+  .xdr-status-group:last-child{grid-column:1/-1}
+  .ti-vitals{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .kinetic-config-grid{grid-template-columns:1fr}
+  .kinetic-config-grid .control-surface{height:auto}
+  .traffic-layout{grid-template-columns:190px minmax(0,1fr)}
+  .traffic-values{min-height:168px}
+  .traffic-chart{height:168px}
+  .domain-controls{grid-template-columns:1fr 1fr}
+}
+@media(max-width:980px){
+  .xdr-status{grid-template-columns:1fr}
+  .xdr-status-group:last-child{grid-column:auto}
+  .domain-controls{grid-template-columns:1fr}
+  .kinetic-hero{flex-direction:column;align-items:stretch;gap:18px}
+  .kinetic-actions{min-width:0;max-width:none;width:100%;flex-direction:row;flex-wrap:wrap}
+  .kinetic-actions .button{flex:1 1 220px}
+  .topbar{min-height:80px;padding:13px 18px}
+  .topbar .health-button{min-width:132px}
+}
+@media(max-width:820px){
+  .topbar{min-height:66px;padding:11px 14px;gap:10px}
+  .ti-vitals{grid-template-columns:1fr 1fr;margin:14px 0 16px}
+  .ti-vital:first-child{padding-left:14px}
+  .title-line h1{font-size:1.06rem}
+  .view-subtitle{display:none}
+  .topbar .icon-button{min-width:40px;min-height:40px;height:40px;padding:0 10px}
+  .topbar .health-button{min-width:40px;height:40px;padding:0 10px}
+  #healthRefreshLabel{display:none}
+  .top-actions .button.ghost,.top-actions .status-pill{display:none}
+  .window-controls{display:none}
+  .view{padding-top:16px}
+  .page-head{padding-bottom:12px;margin-bottom:15px}
+  .section-card,.table-card{margin-top:15px}
+  .metric-grid .metric-card{padding:13px 14px}
+  .metric-grid .metric-card:first-child{padding-left:14px}
+  .metric-grid .metric-card:last-child{padding-right:14px}
+  .traffic-layout{grid-template-columns:1fr;gap:12px}
+  .traffic-values{grid-template-columns:1fr 1fr;grid-template-rows:auto;min-height:0;gap:9px}
+  .traffic-values>div{min-height:64px;padding:11px 12px}
+  .traffic-chart{height:150px}
+  .traffic-dashboard{padding:16px 15px}
+  .overview-threat-header{padding:16px 16px 14px}
+  .overview-threat-chips{margin:0 16px;padding:12px 0 14px}
+  .overview-threat-stage{margin:0 16px}
+  .overview-threat-canvas{height:280px;min-height:280px}
+  .overview-threat-feed{margin:12px 16px 0}
+  .overview-threat-footer{padding:9px 16px 12px}
+  .component-grid{gap:13px}
+  .catalog-toolbar{margin-top:15px}
+  #hardeningCount{margin-bottom:16px}
+  .xdr-status{gap:12px}
+  .xdr-policy-card,.app-policy-card,.kinetic-policy-card,.kinetic-geocard,.traffic-dashboard{padding:16px 15px}
+  .control-surface{padding:13px 13px}
+  .domain-controls{gap:10px}
+  .threshold-grid{grid-template-columns:1fr}
+  .app-add{grid-template-columns:1fr;align-items:stretch}
+  .app-add .button{width:100%}
+  .audit-hero{padding:16px 15px;gap:14px;flex-wrap:wrap}
+  .audit-hero .status-pill{margin-left:0}
+  .persisted-strip{gap:8px 16px;padding:12px 13px}
+  .persisted-strip .status-pill{margin-left:0}
+  .pager-bar{gap:10px}
+  .pager-bar .pagination-actions{width:100%}
+  .pager-bar .button{flex:1 1 auto;min-height:36px}
+}
+@media(max-width:560px){
+  .topbar{min-height:62px;padding:10px 12px}
+  .ti-vitals{grid-template-columns:1fr}
+  .title-line h1{font-size:1.02rem}
+  .posture-badge{font-size:.43rem;padding:2px 5px}
+  .xdr-status{grid-template-columns:1fr}
+  .xdr-status-head{padding:11px 13px}
+  .xdr-status-body{padding:4px 13px 6px}
+  .control-surface{padding:12px}
+  .control-surface-head h4{font-size:.86rem}
+  .domain-control{padding:11px}
+  .switch{padding:11px 12px;gap:11px}
+  .switch-copy strong{font-size:.73rem}
+  .switch-copy small{font-size:.62rem}
+  .app-row{padding:10px 12px}
+  .app-add .button{min-height:42px}
+  .metric-card strong{font-size:1.05rem}
+  .traffic-values{grid-template-columns:1fr}
+  .traffic-values>div{min-height:58px}
+}
+@media(prefers-reduced-motion:reduce){
+  .switch,.switch-track,.switch-track:after{transition:none!important}
+}
+
+/* Overview map containment: no child may widen the operator canvas. */
+.view{min-width:0;overflow-x:clip;margin-inline:auto}
+.overview-threat-panel{max-width:100%;min-width:0;overflow:hidden}
+.overview-threat-header,.overview-threat-chips,.overview-threat-stage,.overview-threat-feed,.overview-threat-footer{min-width:0;max-width:100%}
+/* The stage keeps its horizontal gutter. width:auto (not 100%) is required:
+   a 100%-wide stage plus side margins pushes its right edge past the panel and
+   clips the map inside the rounded corner. */
+.overview-threat-stage{width:auto}
+.overview-threat-canvas{max-width:100%;overflow:hidden}
+.overview-world-map{display:block;width:100%;height:100%;max-width:100%}
+.overview-threat-table-wrapper{width:100%;max-width:100%}
+
+/* Startup synchronization feedback. */
+.health-sync-meta{display:inline-flex;align-items:center;gap:10px;color:#8fb0c4}
+#startupElapsed{font-size:.65rem;color:#9eb9ca;min-width:4ch;text-align:right}
+.health-spinner{
+  width:12px;height:12px;border-radius:50%;border:1.5px solid rgba(76,201,255,.24);
+  border-top-color:var(--vgt-signal);animation:health-spin .85s linear infinite;
+}
+@keyframes health-spin{to{transform:rotate(360deg)}}
+#startupProgress[data-busy="true"]{filter:saturate(125%)}
+.health-actions .button[hidden]{display:none!important}
+
+/* Protection transition feedback: a mode change applies Defender/ASR/Firewall
+   policy synchronously and can take several seconds. Never leave the operator
+   with a silent dialog button. */
+.protection-progress{
+  display:flex;align-items:center;gap:12px;margin:16px 0 0;padding:13px 14px;
+  border:1px solid rgba(76,201,255,.2);border-radius:10px;background:rgba(7,21,37,.6);
+}
+.protection-progress[hidden]{display:none!important}
+.protection-progress>div{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.protection-progress strong{font-size:.76rem;color:#e4f3ff}
+.protection-progress small{font-size:.66rem;line-height:1.45;color:#8fb0c4}
+.protection-progress-elapsed{
+  min-width:4.5ch;text-align:right;font:600 .67rem var(--vgt-font-data);
+  color:#8fb0c4;font-variant-numeric:tabular-nums;
+}
+.protection-progress[data-tone="good"]{border-color:rgba(49,208,170,.35);background:rgba(12,45,40,.42)}
+.protection-progress[data-tone="good"] strong{color:#86f0d4}
+.protection-progress[data-tone="bad"]{border-color:rgba(255,92,124,.35);background:rgba(48,14,26,.4)}
+.protection-progress[data-tone="bad"] strong{color:#ffb2c0}
+#protectionDialog[data-busy="true"] .health-spinner{display:inline-block}
+#protectionDialog:not([data-busy="true"]) .health-spinner{display:none}
+#protectionDialog[data-busy="true"] input{opacity:.55}
+
+/* Windows toast preferences inside the MHX notification surface. */
+.toast-config{margin-top:14px;padding:13px 14px;border:1px solid rgba(100,180,235,.14);border-radius:10px;background:rgba(7,21,37,.46)}
+.toast-config>.control-surface-head{margin-bottom:7px}
+.toast-config .field-hint{margin:0 0 10px;max-width:900px}
+.toast-config .switch-stack{gap:0}
+.toast-config .field{margin-top:10px}
+.toast-config .field select{max-width:360px}
+
+/* ------------------------------------------------------------------ */
+/* Threat Intelligence feed authority editor                          */
+/* ------------------------------------------------------------------ */
+.ti-feed-policy{margin-top:20px;padding:22px 24px}
+.ti-feed-policy>.section-head{align-items:flex-start;margin-bottom:14px}
+.ti-feed-policy>.section-head>div:first-child{max-width:920px}
+.feed-policy-badges{flex-wrap:wrap;gap:7px;justify-content:flex-end}
+.feed-policy-list{display:grid;gap:8px;margin-top:14px}
+.feed-policy-row{
+  display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:16px;align-items:center;
+  padding:13px 14px;border:1px solid rgba(100,180,235,.12);border-radius:10px;
+  background:rgba(7,21,37,.44);
+}
+.feed-policy-main{min-width:0}
+.feed-policy-name{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.feed-policy-name strong{font-size:.78rem;font-weight:650;color:#edf7ff}
+.feed-policy-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:5px;color:#82a0b2;font:500 .61rem var(--vgt-font-data)}
+.feed-policy-meta .feed-state{color:#9bb8c9}
+.feed-role{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border:1px solid transparent;
+  border-radius:5px;font:700 .53rem var(--vgt-font-data);letter-spacing:.055em;white-space:nowrap;
+}
+.feed-role[data-role="BLOCK"]{color:#ffd0d9;background:rgba(255,92,124,.13);border-color:rgba(255,92,124,.3)}
+.feed-role[data-role="CORRELATE_ONLY"]{color:#aee8ff;background:rgba(76,201,255,.11);border-color:rgba(76,201,255,.28)}
+.feed-role[data-role="ANNOTATE_ONLY"]{color:#e5d4ff;background:rgba(179,140,255,.1);border-color:rgba(179,140,255,.25)}
+.feed-role[data-role="DEFAULT"]{color:#b7c9d6;background:rgba(160,190,210,.06);border-color:rgba(160,190,210,.2)}
+.feed-role-dot{width:5px;height:5px;border-radius:50%;background:currentColor}
+.feed-policy-count{text-align:right;font:700 .72rem var(--vgt-font-data);color:#dcebf5;white-space:nowrap}
+.feed-policy-count small{display:block;margin-top:2px;color:#7e9aac;font:500 .56rem var(--vgt-font-data)}
+.feed-policy-select{
+  min-width:170px;padding:7px 9px;border:1px solid rgba(100,180,235,.18);border-radius:7px;
+  background:rgba(3,12,23,.82);color:#eaf6ff;font:.68rem var(--vgt-font-ui);cursor:pointer;
+}
+.feed-policy-select:focus{outline:2px solid var(--vgt-signal);outline-offset:1px}
+.feed-policy-select[data-dirty="true"]{border-color:rgba(246,200,95,.46);background:rgba(50,39,13,.45)}
+.feed-policy-footer{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:16px;padding-top:14px;border-top:1px solid rgba(100,180,235,.1)}
+.feed-policy-footer .field-hint{max-width:760px;margin:0;flex:1 1 420px}
+.feed-policy-footer .action-row{flex:0 0 auto;flex-wrap:wrap;justify-content:flex-end}
+.feed-policy-footer .form-status{min-height:0;flex-basis:100%;text-align:right}
+.feed-policy-notice{margin-top:10px;padding:10px 12px;border:1px solid rgba(100,180,235,.12);border-radius:8px;background:rgba(8,25,42,.42);font-size:.68rem;color:#8ba9ba}
+.feed-policy-notice[data-tone="warn"]{border-color:rgba(246,200,95,.28);color:#f1d495}
+.feed-policy-notice[data-tone="bad"]{border-color:rgba(255,92,124,.28);color:#ffb0be}
+@media(max-width:980px){
+  .feed-policy-row{grid-template-columns:minmax(0,1fr) auto}
+  .feed-policy-select{grid-column:1 / -1;width:100%}
+}
+@media(max-width:560px){
+  .ti-feed-policy{padding:16px}
+  .feed-policy-row{padding:11px 12px;gap:10px}
+  .feed-policy-count{display:none}
+  .feed-policy-select{min-width:0}
+  .feed-policy-footer .action-row{width:100%}
+  .feed-policy-footer .button{flex:1 1 auto}
+}

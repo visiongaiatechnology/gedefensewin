@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -39,10 +40,24 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = encoder.Encode(payload)
 }
 
-func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
+func (s *Server) newErrorID() string {
 	id := make([]byte, 8)
 	if _, err := rand.Read(id); err != nil {
 		id = []byte{0, 0, 0, 0, 0, 0, 0, 0}
 	}
-	s.writeJSON(w, status, map[string]string{"error": message, "errorId": hex.EncodeToString(id)})
+	return hex.EncodeToString(id)
+}
+
+func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
+	s.writeJSON(w, status, map[string]string{"error": message, "errorId": s.newErrorID()})
+}
+
+// writeInternalError logs the engine/validation detail on the service side and
+// returns only an opaque client message plus the random error id (AN-FIND-009 /
+// UI-FIND-006). Client responses must never contain raw err.Error() text.
+func (s *Server) writeInternalError(w http.ResponseWriter, status int, clientMessage, operation string, err error) {
+	if err != nil {
+		log.Printf("%s: %v", operation, err)
+	}
+	s.writeError(w, status, clientMessage)
 }

@@ -1,9 +1,14 @@
-﻿# STATUS: DIAMANT VGT SUPREME
+# STATUS: DIAMANT VGT SUPREME
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidatePattern('^[A-Za-z]:\\[^\r\n\0"]+$')][string]$PayloadRoot,
     [ValidatePattern('^$|^[A-Za-z]:\\[^\r\n\0"]+\.exe$')][string]$InstallerPath = '',
-    [ValidatePattern('^$|^[A-Za-z]:\\[^\r\n\0"]+\.log$')][string]$DiagnosticLogPath = ''
+    [ValidatePattern('^$|^[A-Za-z]:\\[^\r\n\0"]+\.log$')][string]$DiagnosticLogPath = '',
+    # Explicit, auditable rollback switch. The default is fail-closed and
+    # refuses to replace a newer installation (SC-FIND-003 local hardening);
+    # the externally anchored anti-rollback channel remains an owner-accepted
+    # external blocker.
+    [switch]$AllowDowngrade
 )
 
 Set-StrictMode -Version Latest
@@ -12,40 +17,55 @@ $serviceName = 'VGTGeDefense'
 $installRoot = Join-Path $env:ProgramFiles 'VGT\GeDefense'
 $dataRoot = Join-Path $env:ProgramData 'VGT\GeDefense'
 $brandingRoot = Join-Path $env:ProgramData 'VGT\Branding'
+$installerLogRoot = Join-Path $env:ProgramData 'VGT\InstallerLogs'
+$startMenuRoot = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\VGT'
+$stateKey = 'HKLM:\SOFTWARE\VGT\GeDefense'
 $operatorGroup = 'VGT GeDefense Operators'
 $operatorGroupDescription = 'VGT GeDefense security center operators.'
-$installLog = Join-Path $dataRoot 'install.log'
+$installLog = Join-Path $installerLogRoot 'install.log'
 $resolvedDiagnosticLog = ''
-if ($DiagnosticLogPath) {
-    $diagnosticRoot = [IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'VGT\InstallerDiagnostics')).TrimEnd('\') + '\'
-    $candidateDiagnosticLog = [IO.Path]::GetFullPath($DiagnosticLogPath)
-    if (-not $candidateDiagnosticLog.StartsWith($diagnosticRoot,[StringComparison]::OrdinalIgnoreCase)) { throw [Security.SecurityException]::new('Diagnostic log path escaped the user diagnostic jail.') }
-    New-Item -Path ([IO.Path]::GetDirectoryName($candidateDiagnosticLog)) -ItemType Directory -Force | Out-Null
-    $resolvedDiagnosticLog = $candidateDiagnosticLog
+$script:installLogReady = $false
+$script:installLogBuffer = [Collections.Generic.List[string]]::new()
+$safetyModule = Join-Path $PSScriptRoot 'InstallerSafety.psm1'
+if (-not (Test-Path -LiteralPath $safetyModule -PathType Leaf)) { throw [IO.FileNotFoundException]::new('Installer safety module is missing.') }
+Import-Module -Name $safetyModule -Force
+
+function Write-VgtLogLine {
+    param([Parameter(Mandatory)][string]$Line)
+    if ($resolvedDiagnosticLog) {
+        try {
+            Add-Content -LiteralPath $resolvedDiagnosticLog -Value $Line -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            Start-Sleep -Milliseconds 50
+            try { Add-Content -LiteralPath $resolvedDiagnosticLog -Value $Line -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+        }
+    }
+    try {
+        Add-Content -LiteralPath $installLog -Value $Line -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch {}
 }
 
 function Write-VgtInstallPhase {
     param([Parameter(Mandatory)][string]$Phase,[Parameter(Mandatory)][string]$State,[AllowEmptyString()][string]$Detail = '')
-    New-Item -Path $dataRoot -ItemType Directory -Force | Out-Null
     $safeDetail = if ($Detail) { $Detail.Replace("`r",' ').Replace("`n",' ') } else { '' }
     $line = '{0}|{1}|{2}|{3}' -f [DateTime]::UtcNow.ToString('o'),$Phase,$State,$safeDetail
-    if ($resolvedDiagnosticLog) {
-        try {
-            Add-Content -LiteralPath $resolvedDiagnosticLog -Value $line -Encoding UTF8 -ErrorAction Stop
-        } catch {
-            Start-Sleep -Milliseconds 50
-            try { Add-Content -LiteralPath $resolvedDiagnosticLog -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
-        }
+    # The log target is only used after Initialize-VgtInstallLogging has proven
+    # the path reparse-free and applied the restrictive log-directory ACL.
+    if (-not $script:installLogReady) {
+        [void]$script:installLogBuffer.Add($line)
+        return
     }
-    try {
-        Add-Content -LiteralPath $installLog -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
-    } catch {}
+    Write-VgtLogLine -Line $line
 }
 
 trap {
     try {
         $msg = if ($_.Exception) { $_.Exception.Message } else { 'Unknown installer exception' }
-        Write-VgtInstallPhase -Phase 'Installer' -State 'FAILED' -Detail $msg
+        if ($script:installLogReady) {
+            Write-VgtInstallPhase -Phase 'Installer' -State 'FAILED' -Detail $msg
+        } elseif ($resolvedDiagnosticLog) {
+            try { Add-Content -LiteralPath $resolvedDiagnosticLog -Value ('{0}|Installer|FAILED|{1}' -f [DateTime]::UtcNow.ToString('o'),$msg.Replace("`r",' ').Replace("`n",' ')) -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+        }
     } catch {}
     exit 90
 }
@@ -90,11 +110,47 @@ function Invoke-IcaclsChecked {
     Write-VgtInstallPhase -Phase $Phase -State 'OK' -Detail ("icacls exit 0: {0}" -f $nativeOutput)
 }
 
+function Assert-VgtInstallerPaths {
+    $programDataRoot = [IO.Path]::GetFullPath($env:ProgramData)
+    $programFilesRoot = [IO.Path]::GetFullPath($env:ProgramFiles)
+    if ([string]::IsNullOrWhiteSpace($programDataRoot) -or [string]::IsNullOrWhiteSpace($programFilesRoot)) { throw [IO.InvalidDataException]::new('ProgramData/ProgramFiles environment is unavailable.') }
+    Assert-VgtNoReparseTraversal -Path $installRoot -AllowedRoot $programFilesRoot
+    Assert-VgtNoReparseTraversal -Path $dataRoot -AllowedRoot $programDataRoot
+    Assert-VgtNoReparseTraversal -Path $brandingRoot -AllowedRoot $programDataRoot
+    Assert-VgtNoReparseTraversal -Path $installerLogRoot -AllowedRoot $programDataRoot
+    Assert-VgtNoReparseTraversal -Path $startMenuRoot -AllowedRoot $programDataRoot
+}
+
+function Initialize-VgtInstallLogging {
+    $programDataRoot = [IO.Path]::GetFullPath($env:ProgramData)
+    $localAppDataRoot = [IO.Path]::GetFullPath([Environment]::GetFolderPath('LocalApplicationData'))
+    Assert-VgtInstallerPaths
+    if ($DiagnosticLogPath) {
+        if ([string]::IsNullOrWhiteSpace($localAppDataRoot)) { throw [IO.InvalidDataException]::new('LocalAppData environment is unavailable.') }
+        $diagnosticRoot = [IO.Path]::GetFullPath((Join-Path $localAppDataRoot 'VGT\InstallerDiagnostics')).TrimEnd('\') + '\'
+        $candidateDiagnosticLog = [IO.Path]::GetFullPath($DiagnosticLogPath)
+        if (-not $candidateDiagnosticLog.StartsWith($diagnosticRoot,[StringComparison]::OrdinalIgnoreCase)) { throw [Security.SecurityException]::new('Diagnostic log path escaped the user diagnostic jail.') }
+        Assert-VgtNoReparseTraversal -Path $candidateDiagnosticLog -AllowedRoot $localAppDataRoot
+        New-VgtSafeDirectory -Path ([IO.Path]::GetDirectoryName($candidateDiagnosticLog)) -AllowedRoot $localAppDataRoot | Out-Null
+        $script:resolvedDiagnosticLog = $candidateDiagnosticLog
+    }
+    New-VgtSafeDirectory -Path $installerLogRoot -AllowedRoot $programDataRoot | Out-Null
+    # Restrictive ACL for the persistent installer audit log before the first write.
+    Invoke-IcaclsChecked -Target $installerLogRoot -Phase 'InstallerLogACL' -Arguments @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F')
+    Assert-VgtSafeFileTarget -Path $installLog -AllowedRoot $installerLogRoot | Out-Null
+    $script:installLogReady = $true
+    foreach ($bufferedLine in $script:installLogBuffer) { Write-VgtLogLine -Line $bufferedLine }
+    $script:installLogBuffer.Clear()
+}
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw [Security.SecurityException]::new('Administrative token required.')
 }
+# Reparse-point validation, restricted log directory creation and ACL hardening
+# all complete before the first persistent log line is written.
+Initialize-VgtInstallLogging
 Write-VgtInstallPhase -Phase 'Elevation' -State 'OK' -Detail $identity.Name
 $resolvedPayload = (Resolve-Path -LiteralPath $PayloadRoot -ErrorAction Stop).Path
 if (-not (Test-Path -LiteralPath (Join-Path $resolvedPayload 'bin\gedefense-windows.exe') -PathType Leaf)) {
@@ -103,7 +159,37 @@ if (-not (Test-Path -LiteralPath (Join-Path $resolvedPayload 'bin\gedefense-wind
 $versionPath = Join-Path $resolvedPayload 'VERSION'
 if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) { throw [IO.FileNotFoundException]::new('GeDefense release version metadata is missing.') }
 $releaseVersion = (Get-Content -LiteralPath $versionPath -Raw -Encoding UTF8).Trim()
-if ($releaseVersion -notmatch '^4\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') { throw [IO.InvalidDataException]::new('GeDefense release version metadata is invalid.') }
+if ($releaseVersion -notmatch '^5\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') { throw [IO.InvalidDataException]::new('GeDefense release version metadata is invalid.') }
+
+# Downgrade guard (SC-FIND-003 local hardening): never silently replace a newer
+# installation with an older one. The externally anchored, manipulation-proof
+# anti-rollback channel is an owner-accepted external blocker; this guard is the
+# local best-effort control and is auditable in the install log.
+function ConvertTo-VgtVersionParts {
+    param([string]$Value)
+    if ($Value -match '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)') {
+        return @([int]$Matches.major, [int]$Matches.minor, [int]$Matches.patch)
+    }
+    return $null
+}
+$installedVersionPath = Join-Path $installRoot 'VERSION'
+$installedVersion = ''
+if (Test-Path -LiteralPath $installedVersionPath -PathType Leaf) {
+    $installedVersion = (Get-Content -LiteralPath $installedVersionPath -Raw -Encoding UTF8).Trim()
+} else {
+    $installedVersion = [string](Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\VGTGeDefense' -Name DisplayVersion -ErrorAction SilentlyContinue).DisplayVersion
+}
+$newParts = ConvertTo-VgtVersionParts -Value $releaseVersion
+$oldParts = ConvertTo-VgtVersionParts -Value $installedVersion
+if ($oldParts -and $newParts) {
+    $olderThanInstalled = ($oldParts[0] -gt $newParts[0]) -or
+        (($oldParts[0] -eq $newParts[0]) -and ($oldParts[1] -gt $newParts[1])) -or
+        (($oldParts[0] -eq $newParts[0]) -and ($oldParts[1] -eq $newParts[1]) -and ($oldParts[2] -gt $newParts[2]))
+    if ($olderThanInstalled -and -not $AllowDowngrade) {
+        throw [InvalidOperationException]::new(('Downgrade rejected: installed version {0} is newer than release {1}. Use -AllowDowngrade only for an authorized, documented rollback.' -f $installedVersion, $releaseVersion))
+    }
+    Write-VgtInstallPhase -Phase 'VersionGuard' -State 'OK' -Detail ('installed={0}|release={1}|downgradeAllowed={2}' -f $installedVersion, $releaseVersion, [bool]$AllowDowngrade)
+}
 $releaseCertificate = Join-Path $resolvedPayload 'vgt-release.cer'
 if (-not (Test-Path -LiteralPath $releaseCertificate -PathType Leaf)) { throw [IO.FileNotFoundException]::new('VGT release certificate is missing.') }
 $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($releaseCertificate)
@@ -125,7 +211,20 @@ $catalog = Test-FileCatalog -Path $resolvedPayload -CatalogFilePath $catalogPath
 if ($catalog.Status -ne 'Valid') { throw [Security.SecurityException]::new('VGT payload catalog verification failed.') }
 # The signing chain must already be trusted. Only publisher trust is persisted so
 # LocalSystem can execute the signed GeDefense maintenance scripts under AllSigned.
-Import-Certificate -FilePath $releaseCertificate -CertStoreLocation 'Cert:\LocalMachine\TrustedPublisher' | Out-Null
+# Use the .NET store API instead of Import-Certificate: the cmdlet can request an
+# interactive confirmation that is unavailable in the non-interactive elevated
+# transaction and would abort the whole install with exit code 90.
+$publisherStore = [Security.Cryptography.X509Certificates.X509Store]::new(
+    [Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher,
+    [Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
+try {
+    $publisherStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    $publisherStore.Add([Security.Cryptography.X509Certificates.X509Certificate2]::new($releaseCertificate))
+} catch {
+    throw [Security.SecurityException]::new(('Trusted publisher import failed: {0}' -f $_.Exception.Message))
+} finally {
+    $publisherStore.Close()
+}
 Write-VgtInstallPhase -Phase 'Trust' -State 'OK' -Detail $certificate.Thumbprint
 $resolvedInstaller = ''
 if ($InstallerPath) {
@@ -156,7 +255,10 @@ if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
     Invoke-ScChecked @('delete',$serviceName)
     Start-Sleep -Milliseconds 700
 }
-New-Item -Path $installRoot,$dataRoot,$brandingRoot -ItemType Directory -Force | Out-Null
+Assert-VgtInstallerPaths
+New-VgtSafeDirectory -Path $installRoot -AllowedRoot ([IO.Path]::GetFullPath($env:ProgramFiles)) | Out-Null
+New-VgtSafeDirectory -Path $dataRoot -AllowedRoot ([IO.Path]::GetFullPath($env:ProgramData)) | Out-Null
+New-VgtSafeDirectory -Path $brandingRoot -AllowedRoot ([IO.Path]::GetFullPath($env:ProgramData)) | Out-Null
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'bin') -Destination $installRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'engine') -Destination $installRoot -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'audit') -Destination $installRoot -Recurse -Force
@@ -172,25 +274,46 @@ Copy-Item -LiteralPath (Join-Path $resolvedPayload 'branding\gedefense-logo-v1.p
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'branding\gedefense.ico') -Destination (Join-Path $brandingRoot 'gedefense.ico') -Force
 Write-VgtInstallPhase -Phase 'Files' -State 'OK' -Detail $installRoot
 
+$operatorGroupCreated = $false
 if (-not (Get-LocalGroup -Name $operatorGroup -ErrorAction SilentlyContinue)) {
     if ($operatorGroupDescription.Length -gt 48) { throw [IO.InvalidDataException]::new('Operator group description exceeds the Windows SAM boundary.') }
     New-LocalGroup -Name $operatorGroup -Description $operatorGroupDescription | Out-Null
+    $operatorGroupCreated = $true
 }
 $operatorGroupObject = Get-LocalGroup -Name $operatorGroup -ErrorAction Stop
 $operatorGroupSid = [string]$operatorGroupObject.SID.Value
 if ($operatorGroupSid -notmatch '^S-1-5-21-\d+-\d+-\d+-\d+$') { throw [Security.SecurityException]::new('Operator group SID validation failed.') }
 $identitySid = [string]$identity.User.Value
 if ($identitySid -notmatch '^S-1-(?:\d+-)+\d+$') { throw [Security.SecurityException]::new('Installing identity SID validation failed.') }
+$installerAddedMembers = [Collections.Generic.List[string]]::new()
 if ($identitySid -ne 'S-1-5-18') {
     $isOperator = @(Get-LocalGroupMember -Group $operatorGroup -ErrorAction Stop | Where-Object { [string]$_.SID.Value -eq $identitySid }).Count -gt 0
-    if (-not $isOperator) { Add-LocalGroupMember -Group $operatorGroup -Member $identity.Name -ErrorAction Stop }
+    if (-not $isOperator) {
+        Add-LocalGroupMember -Group $operatorGroup -Member $identity.Name -ErrorAction Stop
+        [void]$installerAddedMembers.Add($identitySid)
+    }
 }
 Write-VgtInstallPhase -Phase 'OperatorGroup' -State 'OK' -Detail ("{0}|{1}|member={2}" -f $operatorGroup,$operatorGroupSid,$identitySid)
+# Product-owned install state: uninstall may only remove trust anchors, runtime
+# credentials and group members that this installer actually created.
+New-Item -Path $stateKey -Force | Out-Null
+New-ItemProperty -Path $stateKey -Name Product -Value 'VGT GeDefense Titan' -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $stateKey -Name OperatorGroupCreated -Value ([int]($(if ($operatorGroupCreated) { 1 } else { 0 }))) -PropertyType DWord -Force | Out-Null
+New-ItemProperty -Path $stateKey -Name OperatorGroupSid -Value $operatorGroupSid -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $stateKey -Name InstallerAddedMembers -Value ($installerAddedMembers.ToArray() -join ';') -PropertyType String -Force | Out-Null
+Write-VgtInstallPhase -Phase 'InstallState' -State 'OK' -Detail ("groupCreated={0}|members={1}" -f $operatorGroupCreated,$installerAddedMembers.Count)
 Invoke-IcaclsChecked -Target $installRoot -Phase 'ProgramACL' -Arguments @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)RX')
-$dataAclArguments = @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F',("*{0}:(OI)(CI)(RX)" -f $operatorGroupSid))
-if ($identitySid -ne 'S-1-5-18') { $dataAclArguments += ("*{0}:(OI)(CI)(RX)" -f $identitySid) }
+# Product data and runtime secrets are SYSTEM/Administrators only. Operators no
+# longer read files directly: Center/Tray authenticate through the OS-identity
+# operator broker and the master token remains a break-glass credential for
+# local administrators. This removes the recursive operator RX ACE that exposed
+# evidence/vault keys (DP-FIND-001 / UI-FIND-001).
+$dataAclArguments = @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F')
 Invoke-IcaclsChecked -Target $dataRoot -Phase 'DataACL' -Arguments $dataAclArguments
-Write-VgtInstallPhase -Phase 'ACL' -State 'OK' -Detail 'Program and data roots secured'
+# Branding content is non-secret but was previously left fully inherited. Keep
+# Windows/Tray readable (Users RX) without granting standard users write access.
+Invoke-IcaclsChecked -Target $brandingRoot -Phase 'BrandingACL' -Arguments @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)RX')
+Write-VgtInstallPhase -Phase 'ACL' -State 'OK' -Detail 'Program, data and branding roots secured'
 
 $executable = Join-Path $installRoot 'bin\gedefense-windows.exe'
 $quotedExecutable = '"{0}"' -f $executable
@@ -213,8 +336,9 @@ New-ItemProperty -Path $personalization -Name LockScreenImage -Value (Join-Path 
 New-ItemProperty -Path $personalization -Name NoChangingLockScreen -Value 1 -PropertyType DWord -Force | Out-Null
 Write-VgtInstallPhase -Phase 'Branding' -State 'OK' -Detail 'OEM and lock screen policies applied'
 
-$startMenu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\VGT'
-New-Item -Path $startMenu -ItemType Directory -Force | Out-Null
+$startMenu = $startMenuRoot
+Assert-VgtNoReparseTraversal -Path $startMenu -AllowedRoot ([IO.Path]::GetFullPath($env:ProgramData))
+New-VgtSafeDirectory -Path $startMenu -AllowedRoot ([IO.Path]::GetFullPath($env:ProgramData)) | Out-Null
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut((Join-Path $startMenu 'GeDefense Security Center.lnk'))
 $centerExecutable = Join-Path $installRoot 'bin\GeDefenseCenter.exe'
@@ -248,11 +372,14 @@ if ($resolvedInstaller) {
 Write-VgtInstallPhase -Phase 'ApplicationRegistration' -State 'OK' -Detail ("center={0}|tray={1}|autostart=HKLM" -f $centerExecutable,$trayExecutable)
 
 $mhxStateRoot = Join-Path $dataRoot 'mhx'
-New-Item -Path $mhxStateRoot -ItemType Directory -Force | Out-Null
+Assert-VgtNoReparseTraversal -Path $mhxStateRoot -AllowedRoot $dataRoot
+New-VgtSafeDirectory -Path $mhxStateRoot -AllowedRoot $dataRoot | Out-Null
 $intelligenceRoot = Join-Path $mhxStateRoot 'intelligence'
-New-Item -Path $intelligenceRoot -ItemType Directory -Force | Out-Null
+Assert-VgtNoReparseTraversal -Path $intelligenceRoot -AllowedRoot $dataRoot
+New-VgtSafeDirectory -Path $intelligenceRoot -AllowedRoot $dataRoot | Out-Null
 Invoke-IcaclsChecked -Target $intelligenceRoot -Phase 'ThreatIntelACL' -Arguments @('/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F','*S-1-5-32-544:(OI)(CI)F')
 $mhxModePath = Join-Path $mhxStateRoot 'mode.json'
+Assert-VgtSafeFileTarget -Path $mhxModePath -AllowedRoot $dataRoot | Out-Null
 $mhxModeTemporary = "$mhxModePath.$PID.tmp"
 [ordered]@{ mode = 'guarded'; updatedUtc = [DateTime]::UtcNow.ToString('o') } |
     ConvertTo-Json -Compress |
@@ -270,8 +397,8 @@ if ($state -ne 'Running') { throw [InvalidOperationException]::new('GeDefense se
 Write-VgtInstallPhase -Phase 'ServiceStart' -State 'OK' -Detail $state
 $tokenPath = Join-Path $dataRoot 'dashboard.token'
 if (-not (Test-Path -LiteralPath $tokenPath -PathType Leaf)) { throw [IO.FileNotFoundException]::new('GeDefense dashboard token was not created.') }
-$tokenAclArguments = @('/inheritance:r','/grant:r','*S-1-5-18:F','*S-1-5-32-544:F',("*{0}:R" -f $operatorGroupSid))
-if ($identitySid -ne 'S-1-5-18') { $tokenAclArguments += ("*{0}:R" -f $identitySid) }
+Assert-VgtSafeFileTarget -Path $tokenPath -AllowedRoot $dataRoot | Out-Null
+$tokenAclArguments = @('/inheritance:r','/grant:r','*S-1-5-18:F','*S-1-5-32-544:F')
 Invoke-IcaclsChecked -Target $tokenPath -Phase 'TokenACL' -Arguments $tokenAclArguments
 $defenderDeadline = [DateTime]::UtcNow.AddMinutes(2)
 do {
@@ -290,45 +417,3 @@ Write-VgtInstallPhase -Phase 'MHXRealtime' -State 'OK' -Detail 'Guarded + Defend
 if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new('Initial App Control audit policy deployment failed.') }
 Write-VgtInstallPhase -Phase 'AppControl' -State 'OK' -Detail 'Kernel audit policy deployed'
 Write-VgtInstallPhase -Phase 'Installer' -State 'COMPLETE' -Detail ("GeDefense {0} installed" -f $releaseVersion)
-
-# SIG # Begin signature block
-# MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCfoX92up3gt4W1
-# UT82TK31PTny5NdEID5rDq0mDiITi6CCBCwwggQoMIICkKADAgECAhBc5F62BB+R
-# m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
-# VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
-# MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
-# ZWFzZTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGBAL5pFqzqfhSchgN3
-# OSKoeRbHXQIUtVwI7Q5go/7UvOFVMV0d/Au5Q5yPFOr351VqQyZlLWehwPG88Wdh
-# TEPxfzYXDeJFgG6MwdjVaA10WklxDzSu8XQQzQKvoSOtf6b76xYswPdR8WaUOvYL
-# NVYHG38cZCE/Vmt8W29/+8bT0SFoMv8S++3YUL3BaTTVBj5wcunaQYu7bcBUFz8M
-# wCWGaqZUwWi/7sZPb5Ix0KKnMarxxAAM/y1GaRnWDQavGSuFZ18LmMh+Agd6znFZ
-# 6pH1USuu0NreFUOWNg2ANEmGAO4XTnst3ILT4Eab/Jsjmw4nRm8rckRaWVKJxcRc
-# P7ukJJi3cV11JegdsYSBGKvZ8TUNiSRuVI0MGg1IJl4ga/dir1crp0DnqezcC/6y
-# 9mxsnxuJLpW8I1nLdRLjE1ow5VshhvEMFjPoYbcowpcI0EUFj/clBpA+rHjPjkYF
-# jw8oow+tYqnEK/GkrYkzGwGxpApKcECh5GGHgQ5iSgKuNTPueQIDAQABo0YwRDAO
-# BgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwMwHQYDVR0OBBYEFDBP
-# H8Z9qi6vrLw8FPD3k/kz+c1gMA0GCSqGSIb3DQEBCwUAA4IBgQBIQe+HN5spItMd
-# 884eV6JR3H8xGr8DeNpgjuhQnRnQqWB60Et6ehQwQFDg5Ft8iU4sGzdEQB4U+q79
-# 9oReJ6G1CuV6yXXqDe/Ljr5DGfGr+Wah4RuRi/QGhUUeIyyn8h5kXwOgGWz4VA5I
-# 9CmN+onZHRLnv3Lu9mKyUqo7ll5WaWEd/r3hvBqe30Rg0IanD8qpWXEbshlayTux
-# 8WMgjW3nA7tEWXmToCJpRk8DsaGU5m6rNxVa6zSS7qF2JiMWnZZBsr76cQsMYvTk
-# ZgshPz+OTsl84mR7i/BalTIyuI74TWd+8LdcBB+FpmhXvYmKAPQKQg25dHGWbVlB
-# E7kK29X38hvaQBO6lVT7mtTOPx2auMTmas6LLU+1XGFNm4zvwuydpf/4ltPSYlNp
-# K8Ij5vkp2DjXOaJF02BoqBkZt6w4wQPuCdu3OOTH3A3hymQrVD0tP408qNkLuzd5
-# xI+m7oTQCw6SYCxeEUEOooR7XMWuxE1R/KyLlPRCI1zi9DjhLawxggJyMIICbgIB
-# ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
-# ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
-# AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCCDOy0hMWK2
-# IsxzgacQQfPKx9reXSRwU3On+Xul09DTNDANBgkqhkiG9w0BAQEFAASCAYAxJ2+D
-# fIOrEuFMyrFdxJOxCjjRk+QuSOgtxTnPfje2N+C+xW5bh6eoPYmRBJDkhYaLrbn/
-# gEo23AwNjl79HjiAokuqIVagh1u23dauCLp/cuYbljG5urqRo9psyQjbflfoNVMA
-# rCZItxZ6CpWlL9q5l3XAHaBu2kNunBWpn2K3ux+K80BP82WQgfDlcm83g7dpjcM4
-# bmiYxN9kZ9Q+reP30qzQw2r3s0A0Lih85HEBFkPOyOanJ/R2Ggn+ayrr7Hojn1hK
-# LfZSdjKyoY1Emw6NLHcrwm2zdiqaYPLk+QHe3U6T4wTRS85ycDrWSED36DGL1wgU
-# K+GoRgpb6d67Ha2tS/W2x14BPqLsu65qJxOVYSjfY+R4Q0Y5xeyHSc7LTi6AlrpG
-# bV/auyQpiiPOiUdMaIr2PUDB8LA2uEZxxX/XcWdmyYirqCQShWlmJ+awLj6uUpim
-# /6RqcUzTtPB0n8wdi2svQEcWj3Y5F7R8PxNX4++IyKBvQkvDJhqEjms5pL4=
-# SIG # End signature block

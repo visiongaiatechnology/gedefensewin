@@ -151,7 +151,10 @@ func TestSovereignModeRequiresExactConfirmation(t *testing.T) {
 
 func TestApplicationAllowRejectsOversizedPath(t *testing.T) {
 	handler := newTestServer(t)
-	payload, _ := json.Marshal(map[string]string{"action": "Add", "path": "C:\\" + strings.Repeat("a", 1100) + ".exe"})
+	payload, _ := json.Marshal(map[string]string{
+		"action": "Add", "path": "C:\\" + strings.Repeat("a", 1100) + ".exe",
+		"confirmation": "UPDATE APPLICATION ALLOWLIST", "reason": "operator allowlist regression test",
+	})
 	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17831/api/v1/mhx/applications", bytes.NewReader(payload))
 	request.Host = "127.0.0.1:17831"
 	request.RemoteAddr = "127.0.0.1:49152"
@@ -190,6 +193,7 @@ func TestBootstrapCodeIsSingleUseAndCreatesHttpOnlySession(t *testing.T) {
 		exchangeRequest.RemoteAddr = "127.0.0.1:49152"
 		exchangeRequest.Header.Set("Origin", "http://127.0.0.1:17831")
 		exchangeRequest.Header.Set("Content-Type", "application/json")
+		exchangeRequest.Header.Set("X-VGT-Request-ID", fmt.Sprintf("bbbbbbbb-cccc-4ddd-8eee-%012d", attempt+1))
 		exchangeResponse := httptest.NewRecorder()
 		handler.ServeHTTP(exchangeResponse, exchangeRequest)
 		if attempt == 0 {

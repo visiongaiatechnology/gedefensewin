@@ -5,6 +5,7 @@ package integrity
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -70,14 +71,6 @@ type Status struct {
 	Error           string    `json:"error,omitempty"`
 }
 
-type persistedState struct {
-	Enabled       bool      `json:"enabled"`
-	IntervalHours int       `json:"intervalHours"`
-	LastScanUTC   time.Time `json:"lastScanUtc,omitempty"`
-	Generation    string    `json:"generation,omitempty"`
-	Status        Status    `json:"status"`
-}
-
 type Engine struct {
 	root       string
 	statePath  string
@@ -97,7 +90,13 @@ func New(root string, ledger *evidence.Ledger) (*Engine, error) {
 		return nil, err
 	}
 	engine := &Engine{root: filepath.Clean(root), statePath: filepath.Join(root, "state.json"), ledger: ledger, status: Status{IntervalHours: 24, State: "DISABLED"}}
-	_ = engine.load()
+	if err := engine.load(); err != nil {
+		// A rejected (unauthenticated or invalid) state is never trusted: the
+		// next scan rebuilds a fresh authenticated baseline and the operator sees
+		// the failure in the status projection.
+		engine.status.Error = "integrity state rejected: " + err.Error()
+		engine.status.State = "DEGRADED"
+	}
 	return engine, nil
 }
 
@@ -154,9 +153,13 @@ func (e *Engine) Configure(enabled bool, intervalHours int) (Status, error) {
 	if err := e.persist(); err != nil {
 		return Status{}, err
 	}
-	_ = e.ledger.Append("integrity.configuration", fmt.Sprintf("interval-%dh", intervalHours), map[bool]string{true: "enabled", false: "disabled"}[enabled])
+	if err := e.appendEvidence("integrity.configuration", fmt.Sprintf("interval-%dh", intervalHours), map[bool]string{true: "enabled", false: "disabled"}[enabled]); err != nil {
+		return e.Status(), err
+	}
 	if enabled && status.NextScanUTC.Before(time.Now().UTC().Add(time.Second)) {
-		_ = e.Start()
+		if startErr := e.Start(); startErr != nil {
+			return e.Status(), startErr
+		}
 	}
 	return e.Status(), nil
 }
@@ -198,7 +201,28 @@ func (e *Engine) Changes(limit, offset int) (changes []Change, err error) {
 	if status.Generation == "" {
 		return []Change{}, nil
 	}
-	path := filepath.Join(e.root, "snapshots", status.Generation, "changes.jsonl")
+	if !validGenerationID(status.Generation) {
+		return nil, errors.New("integrity generation rejected")
+	}
+	directory := filepath.Join(e.root, "snapshots", status.Generation)
+	manifest, manifestErr := readSnapshotManifest(directory)
+	if manifestErr != nil {
+		return nil, manifestErr
+	}
+	if err := e.authenticateSnapshotManifest(manifest); err != nil {
+		return nil, err
+	}
+	if manifest.Generation != status.Generation {
+		return nil, errors.New("integrity manifest generation mismatch")
+	}
+	changesDigest, hashErr := hashFileSHA256(filepath.Join(directory, "changes.jsonl"))
+	if hashErr != nil {
+		return nil, hashErr
+	}
+	if changesDigest != manifest.ChangesSHA256 {
+		return nil, errors.New("integrity changes report does not match its authenticated manifest")
+	}
+	path := filepath.Join(directory, "changes.jsonl")
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return []Change{}, nil
@@ -257,6 +281,10 @@ func (e *Engine) scan(ctx context.Context) {
 		e.finishFailure(err)
 		return
 	}
+	if err := e.writeSnapshotManifest(temporary, generation, int64(counters.hashed)); err != nil {
+		e.finishFailure(err)
+		return
+	}
 	if err := os.Rename(temporary, final); err != nil {
 		e.finishFailure(err)
 		return
@@ -283,7 +311,8 @@ func (e *Engine) scan(ctx context.Context) {
 		e.finishFailure(err)
 		return
 	}
-	_ = e.ledger.Append("integrity.scan", "fixed-drive-sha256", "verified")
+	e.pruneGenerations(maximumRetainedGenerations)
+	_ = e.appendEvidence("integrity.scan", "fixed-drive-sha256", "verified")
 }
 
 type scanCounters struct{ discovered, hashed, bytes, errors uint64 }
@@ -416,18 +445,21 @@ func (e *Engine) walkFixedDrives(ctx context.Context, jobs chan<- string, discov
 				return nil
 			}
 			cleaned := filepath.Clean(path)
-			if entry.IsDir() {
-				if shouldSkipDirectory(cleaned, e.root, entry) {
+			info, err := entry.Info()
+			if err != nil {
+				walkErrors.Add(1)
+				if entry.IsDir() {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			info, err := entry.Info()
-			if err != nil {
-				walkErrors.Add(1)
+			if entry.IsDir() {
+				if shouldSkipDirectory(cleaned, e.root, info) {
+					return filepath.SkipDir
+				}
 				return nil
 			}
-			if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			if !info.Mode().IsRegular() || isReparseInfo(info) {
 				return nil
 			}
 			discovered.Add(1)
@@ -445,14 +477,14 @@ func (e *Engine) walkFixedDrives(ctx context.Context, jobs chan<- string, discov
 	return ctx.Err()
 }
 
-func shouldSkipDirectory(path, scannerRoot string, entry os.DirEntry) bool {
+func shouldSkipDirectory(path, scannerRoot string, info os.FileInfo) bool {
 	if strings.EqualFold(path, scannerRoot) || strings.HasPrefix(strings.ToLower(path), strings.ToLower(scannerRoot)+string(os.PathSeparator)) {
 		return true
 	}
-	if entry.Type()&os.ModeSymlink != 0 {
+	if isReparseInfo(info) {
 		return true
 	}
-	name := strings.ToLower(entry.Name())
+	name := strings.ToLower(filepath.Base(path))
 	return name == "$recycle.bin" || name == "system volume information" || name == "recovery"
 }
 
@@ -527,7 +559,23 @@ func (e *Engine) compare(previous, currentDirectory string) (added, modified, de
 		}
 		return 0, 0, 0, 0, nil
 	}
+	if !validGenerationID(previous) {
+		return 0, 0, 0, 0, errors.New("integrity previous generation rejected")
+	}
 	previousDirectory := filepath.Join(e.root, "snapshots", previous)
+	previousManifest, manifestErr := readSnapshotManifest(previousDirectory)
+	if manifestErr != nil {
+		return 0, 0, 0, 0, manifestErr
+	}
+	if err := e.authenticateSnapshotManifest(previousManifest); err != nil {
+		return 0, 0, 0, 0, err
+	}
+	if previousManifest.Generation != previous {
+		return 0, 0, 0, 0, errors.New("integrity previous manifest generation mismatch")
+	}
+	if err := verifySnapshotBuckets(previousDirectory, previousManifest); err != nil {
+		return 0, 0, 0, 0, err
+	}
 
 	for index := 0; index < bucketCount; index++ {
 		oldRecords, err := readBucket(filepath.Join(previousDirectory, fmt.Sprintf("%02x.jsonl", index)))
@@ -647,13 +695,18 @@ func (e *Engine) finishFailure(err error) {
 	e.status.Error = err.Error()
 	e.scanCancel = nil
 	e.mu.Unlock()
-	_ = e.ledger.Append("integrity.scan", "fixed-drive-sha256", "failed")
+	_ = e.appendEvidence("integrity.scan", "fixed-drive-sha256", "failed")
 }
 
 func (e *Engine) persist() error {
 	e.mu.RLock()
 	state := persistedState{Enabled: e.status.Enabled, IntervalHours: e.status.IntervalHours, LastScanUTC: e.status.LastScanUTC, Generation: e.status.Generation, Status: e.status}
 	e.mu.RUnlock()
+	mac, err := e.signState(state)
+	if err != nil {
+		return err
+	}
+	state.MAC = mac
 	payload, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -664,11 +717,25 @@ func (e *Engine) persist() error {
 func (e *Engine) load() error {
 	payload, err := os.ReadFile(e.statePath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
+	if len(payload) == 0 || len(payload) > 1<<20 {
+		return errors.New("integrity state size rejected")
+	}
 	var state persistedState
-	if err := json.Unmarshal(payload, &state); err != nil || (state.IntervalHours != 12 && state.IntervalHours != 24) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&state); err != nil || (state.IntervalHours != 12 && state.IntervalHours != 24) {
 		return errors.New("integrity state validation failed")
+	}
+	if err := e.authenticateState(state); err != nil {
+		return err
+	}
+	if state.Generation != "" && !validGenerationID(state.Generation) {
+		return errors.New("integrity state generation rejected")
 	}
 	state.Status.Running = false
 	state.Status.StartedUTC = time.Time{}

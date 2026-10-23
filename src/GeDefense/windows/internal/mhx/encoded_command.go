@@ -12,9 +12,31 @@ import (
 
 const maxEncodedCommandBytes = 1 << 20
 
-var encodedSwitches = map[string]struct{}{
-	"-encodedcommand": {}, "-enc": {}, "-enco": {}, "-encod": {}, "-encode": {}, "-encoded": {},
-	"/encodedcommand": {}, "/enc": {},
+// encodedCommandParameter is the full Windows PowerShell 5.1 parameter name.
+// powershell.exe also accepts every unambiguous prefix of it plus the special
+// short alias "ec" (verified dynamically against powershell.exe 5.1: -e, -en,
+// -ec, -encodedc, -encodedco, ... and /e, /en, /ec, /encodedc all execute the
+// encoded payload, while -ecc, -ecx, -ee and -encodedcommandx are rejected).
+const encodedCommandParameter = "encodedcommand"
+const encodedCommandShortAlias = "ec"
+
+func isEncodedCommandSwitch(argument string) bool {
+	if len(argument) < 2 {
+		return false
+	}
+	switch argument[0] {
+	case '-', '/':
+	default:
+		return false
+	}
+	candidate := strings.ToLower(argument[1:])
+	if candidate == encodedCommandShortAlias {
+		return true
+	}
+	if candidate == "" || len(candidate) > len(encodedCommandParameter) {
+		return false
+	}
+	return strings.HasPrefix(encodedCommandParameter, candidate)
 }
 
 func DecodePowerShellCommand(commandLine string) (string, string, bool, error) {
@@ -23,8 +45,7 @@ func DecodePowerShellCommand(commandLine string) (string, string, bool, error) {
 		return "", "", false, err
 	}
 	for index := 0; index < len(args); index++ {
-		key := strings.ToLower(args[index])
-		if _, exists := encodedSwitches[key]; !exists {
+		if !isEncodedCommandSwitch(args[index]) {
 			continue
 		}
 		if index+1 >= len(args) {

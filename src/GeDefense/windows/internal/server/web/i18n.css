@@ -1,0 +1,44 @@
+/* STATUS: PLATIN VGT SUPREME */
+/* Locale switcher: a compact, keyboard-accessible topbar control that fits the
+   existing glass material language and never competes with status signals. */
+.language-switcher {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+}
+.language-switcher select {
+  appearance: none;
+  -webkit-appearance: none;
+  color: var(--text-strong, #f2f7fb);
+  background: rgba(9, 20, 30, 0.72);
+  border: 1px solid rgba(120, 170, 200, 0.32);
+  border-radius: 8px;
+  padding: 5px 24px 5px 9px;
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, rgba(200, 225, 240, 0.8) 50%),
+    linear-gradient(135deg, rgba(200, 225, 240, 0.8) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 50%, calc(100% - 8px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.language-switcher select:hover {
+  border-color: rgba(150, 205, 235, 0.55);
+}
+.language-switcher select:focus-visible {
+  outline: 2px solid var(--accent-ice, #7fd8f2);
+  outline-offset: 2px;
+}
+.language-switcher option {
+  color: #f2f7fb;
+  background: #0a1622;
+}
+@media (max-width: 1100px) {
+  .language-switcher select {
+    max-width: 92px;
+    padding-right: 20px;
+  }
+}

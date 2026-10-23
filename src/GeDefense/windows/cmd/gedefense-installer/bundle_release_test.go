@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestEmbeddedPayloadExtractsCoreModules(t *testing.T) {
@@ -28,9 +29,18 @@ func TestEmbeddedPayloadExtractsCoreModules(t *testing.T) {
 		"payload/bin/GeDefenseCenter.exe",
 		"payload/vgt-payload.cat",
 	} {
-		info, err := os.Stat(filepath.Join(destination, filepath.FromSlash(relativePath)))
-		if err != nil || !info.Mode().IsRegular() {
-			t.Fatalf("embedded module unavailable: %s", relativePath)
+		path := filepath.Join(destination, filepath.FromSlash(relativePath))
+		var info os.FileInfo
+		var statErr error
+		for attempt := 0; attempt < 20; attempt++ {
+			info, statErr = os.Stat(path)
+			if statErr == nil && info.Mode().IsRegular() {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if statErr != nil || !info.Mode().IsRegular() {
+			t.Fatalf("embedded module unavailable: %s (%v)", relativePath, statErr)
 		}
 	}
 }

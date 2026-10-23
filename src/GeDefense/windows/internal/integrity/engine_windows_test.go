@@ -23,8 +23,10 @@ func TestPartitionedGenerationDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previous := filepath.Join(engine.root, "snapshots", "previous")
-	current := filepath.Join(engine.root, "snapshots", "current")
+	previousGeneration := "20260101T000000Z-0123456789abcdef"
+	currentGeneration := "20260102T000000Z-0123456789abcdef"
+	previous := filepath.Join(engine.root, "snapshots", previousGeneration)
+	current := filepath.Join(engine.root, "snapshots", currentGeneration)
 	createBucketSet(t, previous, []FileRecord{
 		{Path: `C:\stable.dll`, Size: 10, SHA256: repeatedHash('a')},
 		{Path: `C:\modified.dll`, Size: 11, SHA256: repeatedHash('b')},
@@ -35,15 +37,24 @@ func TestPartitionedGenerationDiff(t *testing.T) {
 		{Path: `C:\modified.dll`, Size: 13, SHA256: repeatedHash('d')},
 		{Path: `C:\added.dll`, Size: 14, SHA256: repeatedHash('e')},
 	})
-	added, modified, deleted, stored, err := engine.compare("previous", current)
+	if err := os.WriteFile(filepath.Join(previous, "changes.jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.writeSnapshotManifest(previous, previousGeneration, 3); err != nil {
+		t.Fatal(err)
+	}
+	added, modified, deleted, stored, err := engine.compare(previousGeneration, current)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if added != 1 || modified != 1 || deleted != 1 || stored != 3 {
 		t.Fatalf("unexpected diff counts: added=%d modified=%d deleted=%d stored=%d", added, modified, deleted, stored)
 	}
+	if err := engine.writeSnapshotManifest(current, currentGeneration, 3); err != nil {
+		t.Fatal(err)
+	}
 	engine.mu.Lock()
-	engine.status.Generation = "current"
+	engine.status.Generation = currentGeneration
 	engine.mu.Unlock()
 	changes, err := engine.Changes(10, 0)
 	if err != nil {

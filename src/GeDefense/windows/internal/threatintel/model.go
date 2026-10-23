@@ -65,6 +65,19 @@ type FeedState struct {
 	LastAttemptUTC time.Time `json:"lastAttemptUtc,omitempty"`
 	LastSuccessUTC time.Time `json:"lastSuccessUtc,omitempty"`
 	Error          string    `json:"error,omitempty"`
+
+	// Per-feed authority projection (V5). Action stays the immutable catalog
+	// authority for backward compatibility; these fields expose the operator
+	// override and the authority the compiler actually applied.
+	DefaultAction    Action `json:"defaultAction,omitempty"`
+	ConfiguredAction Action `json:"configuredAction,omitempty"`
+	EffectiveAction  Action `json:"effectiveAction,omitempty"`
+	ActionSource     string `json:"actionSource,omitempty"`
+
+	// Signed-authority and hard-TTL projection.
+	AuthorityVerified      bool      `json:"authorityVerified"`
+	AuthoritySequence      uint64    `json:"authoritySequence,omitempty"`
+	AuthorityValidUntilUTC time.Time `json:"authorityValidUntilUtc,omitempty"`
 }
 
 type Status struct {
@@ -84,6 +97,29 @@ type Status struct {
 	State                 string      `json:"state"`
 	Error                 string      `json:"error,omitempty"`
 	Feeds                 []FeedState `json:"feeds"`
+
+	// Polling policy projection. The values are derived from the persisted
+	// manager polling configuration; they are never inferred by the UI.
+	PollingIntervalSeconds        int       `json:"pollingIntervalSeconds"`
+	PollingIntervalSource         string    `json:"pollingIntervalSource"`
+	PollingIntervalMinSeconds     int       `json:"pollingIntervalMinSeconds"`
+	PollingIntervalMaxSeconds     int       `json:"pollingIntervalMaxSeconds"`
+	PollingIntervalDefaultSeconds int       `json:"pollingIntervalDefaultSeconds"`
+	PollingUpdatedUTC             time.Time `json:"pollingUpdatedUtc,omitempty"`
+
+	// Per-feed policy store projection (V5).
+	FeedPolicySource     string    `json:"feedPolicySource,omitempty"`
+	FeedPolicyUpdatedUTC time.Time `json:"feedPolicyUpdatedUtc,omitempty"`
+	FeedPolicyOverrides  int       `json:"feedPolicyOverrides"`
+	FeedPolicyError      string    `json:"feedPolicyError,omitempty"`
+
+	// Feed authenticity / freshness projection (DP-FIND-002/003/014).
+	FeedAuthenticity      string `json:"feedAuthenticity"`
+	FeedAuthorityKeys     int    `json:"feedAuthorityKeys"`
+	FeedAuthoritySequence uint64 `json:"feedAuthoritySequence"`
+	FeedAuthorityError    string `json:"feedAuthorityError,omitempty"`
+	FeedClockRollback     bool   `json:"feedClockRollback"`
+	MaxFeedAgeSeconds     int    `json:"maxFeedAgeSeconds"`
 }
 
 type Match struct {
@@ -101,6 +137,10 @@ type sourceSnapshot struct {
 	Attribution      Attribution `json:"attribution"`
 	GenerationSHA256 string      `json:"generationSha256"`
 	Indicators       []string    `json:"indicators"`
+	// Authority is the detached Ed25519 signed attestation for this exact
+	// generation (DP-FIND-002). It is embedded so a cached snapshot can be
+	// re-verified offline, without network access or the original feed body.
+	Authority *feedAuthorityDocument `json:"authority,omitempty"`
 }
 
 type enforcementSnapshot struct {

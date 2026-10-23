@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence/secretfs"
 )
 
 const (
@@ -51,47 +53,48 @@ func protectedPolicyPath(root string) string {
 }
 
 func protectedPolicyKeyPath(root string) string {
+	return filepath.Join(root, "keys", "protected-network-policy.key")
+}
+
+func legacyProtectedPolicyKeyPath(root string) string {
 	return filepath.Join(root, "protected-network-policy.key")
 }
 
 func loadOrCreateProtectedPolicyKey(root string) ([]byte, error) {
 	path := protectedPolicyKeyPath(root)
+	legacy := legacyProtectedPolicyKeyPath(root)
+	if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+		if raw, legacyErr := os.ReadFile(legacy); legacyErr == nil {
+			key, decodeErr := base64.RawStdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+			if decodeErr != nil || len(key) != sha256.Size {
+				return nil, errors.New("protected network policy key rejected")
+			}
+			if err := secretfs.CreateSecretFile(path, []byte(base64.RawStdEncoding.EncodeToString(key))); err != nil {
+				return nil, err
+			}
+			_ = os.Remove(legacy)
+			return key, nil
+		}
+	}
 	if raw, err := os.ReadFile(path); err == nil {
 		key, decodeErr := base64.RawStdEncoding.DecodeString(strings.TrimSpace(string(raw)))
 		if decodeErr != nil || len(key) != sha256.Size {
 			return nil, errors.New("protected network policy key rejected")
 		}
+		if _, hardenErr := secretfs.HardenFile(path); hardenErr != nil {
+			return nil, hardenErr
+		}
 		return key, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
 	key := make([]byte, sha256.Size)
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if errors.Is(err, os.ErrExist) {
-		return loadOrCreateProtectedPolicyKey(root)
-	}
-	if err != nil {
-		return nil, err
-	}
 	encoded := []byte(base64.RawStdEncoding.EncodeToString(key) + "\n")
-	_, writeErr := file.Write(encoded)
-	if writeErr == nil {
-		writeErr = file.Sync()
-	}
-	closeErr := file.Close()
-	if writeErr != nil {
-		_ = os.Remove(path)
-		return nil, writeErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(path)
-		return nil, closeErr
+	if err := secretfs.CreateSecretFile(path, encoded); err != nil {
+		return nil, err
 	}
 	return key, nil
 }

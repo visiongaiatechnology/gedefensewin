@@ -117,7 +117,18 @@ func FindWindowByPID(pid uint32) (Handle, error) {
 // FindGeDefenseWindow locates only the launcher-owned native host class.
 // Folder names, browser titles and URLs never identify an application window.
 func FindGeDefenseWindow() (Handle, error) {
-	className, err := utf16Ptr("VGT.GeDefense.Center.Host.v4")
+	return findWindowByClassName("VGT.GeDefense.Center.Host.v4")
+}
+
+// FindGeDefenseTrayWindow locates the tray's own native window class. The
+// single-instance decision uses it as a liveness cross-check: a named object
+// without a live UI is treated as pre-created (HP-FIND-005).
+func FindGeDefenseTrayWindow() (Handle, error) {
+	return findWindowByClassName("VGTGeDefenseTrayWindowV4")
+}
+
+func findWindowByClassName(classNameValue string) (Handle, error) {
+	className, err := utf16Ptr(classNameValue)
 	if err != nil {
 		return 0, err
 	}

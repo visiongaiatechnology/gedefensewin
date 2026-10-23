@@ -22,6 +22,21 @@ type healthReport struct {
 	Checks     []healthCheck `json:"checks"`
 }
 
+// healthStatus returns the current readiness from the monitor cache. The
+// startup gate must not wait for a fresh PowerShell audit or a feed download;
+// healthRefresh remains the explicit "re-measure now" path.
+func (s *Server) healthStatus(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	posture, err := s.engine.Posture(ctx)
+	if err != nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Windows-Sicherheitsstatus konnte nicht gelesen werden")
+		return
+	}
+	report := evaluateHealth(posture, s.mhx.Status(), s.ledger.Verify() == nil)
+	s.writeJSON(w, http.StatusOK, report)
+}
+
 // healthRefresh measures OS state after reconciliation, bypassing the posture cache.
 func (s *Server) healthRefresh(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
@@ -55,7 +70,7 @@ func evaluateHealth(p hardening.Result, m mhx.Status, evidenceValid bool) health
 	add("firewall", "Windows Firewall", p.Firewall,
 		"Firewall-Profile sind aktiv.",
 		"Firewall-Konfiguration benötigt Aufmerksamkeit. Im Bereich Härtung die Firewall prüfen.")
-	fresh := !m.TelemetryHeartbeatUTC.IsZero() && time.Since(m.TelemetryHeartbeatUTC) <= 10*time.Second
+	fresh := !m.TelemetryHeartbeatUTC.IsZero() && time.Since(m.TelemetryHeartbeatUTC) <= 30*time.Second
 	add("telemetry", "Prozess- und Netzwerk-Telemetrie", m.Realtime && fresh && m.NetworkTelemetry == "NATIVE_TCP_OWNER_PID" && m.WFPBlockTelemetry == "POLLING_5157_AUDIT_UNVERIFIED",
 		"Prozesssensor, native Netzwerk-Erfassung und WFP-Ereignisabfrage antworten. Audit-Policy wird dadurch nicht bestätigt.",
 		"Prozess-, Netzwerk- oder WFP-Ereignissensor nicht bereit. Erneut prüfen; bei anhaltendem Fehler den GeDefense-Dienst prüfen.")

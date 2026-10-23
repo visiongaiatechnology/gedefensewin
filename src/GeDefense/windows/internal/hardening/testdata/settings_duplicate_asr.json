@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "defender": {
+    "asrRules": [
+      { "id": "56a863a9-875e-4185-98a7-b882c64b5ce5", "action": "Enabled" },
+      { "id": "56A863A9-875E-4185-98A7-B882C64B5CE5", "action": "AuditMode" }
+    ]
+  }
+}

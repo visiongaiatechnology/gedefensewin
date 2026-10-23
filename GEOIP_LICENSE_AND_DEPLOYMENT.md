@@ -26,7 +26,7 @@ Für einen unabhängig qualifizierten Datenstand muss die kombinierte Datei aus 
 ## Attribution
 
 - Geolocation: **DB-IP Lite**, [DB-IP](https://db-ip.com), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-- ASN: **sapics/ip-location-db**, PDDL laut übernommener Linux-Integration; [Quelle](https://github.com/sapics/ip-location-db), [Lizenz](https://opendatacommons.org/licenses/pddl/1-0/).
-- Lokale Kartengeometrie: **jsVectorMap world-merc**, MIT, Copyright © 2020 Mustafa Omar; vollständiger Text in [LICENSES/jsVectorMap-LICENSE](LICENSES/jsVectorMap-LICENSE).
+- ASN: **iplocate/ip-address-databases**, öffentliche IP-to-Country-/IP-to-ASN-Datenbanken unter **CC BY-SA 4.0**; [Quelle](https://github.com/iplocate/ip-address-databases), [Lizenz](https://creativecommons.org/licenses/by-sa/4.0/). Die Attribution ist für Weitergabe und Bearbeitung der abgeleiteten CSV erforderlich.
+- Lokale Kartengeometrie: **jsVectorMap world-merc** (Version 1.7.0), MIT, Copyright © 2020 Mustafa Omar; [Quelle](https://github.com/themustafaomar/jsvectormap), [Kartendatei](https://cdn.jsdelivr.net/npm/jsvectormap@1.7.0/dist/maps/world-merc.js); vollständiger Text in [LICENSES/jsVectorMap-LICENSE](LICENSES/jsVectorMap-LICENSE).
 
 Die kombinierte CSV ist eine übernommene Zusammenführung dieser Daten. Der Sidecar wurde für die Windows-Integration korrigiert. Weitere Hinweise: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

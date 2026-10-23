@@ -123,6 +123,29 @@ func TestHealthRefreshRequiresAuthentication(t *testing.T) {
 	}
 }
 
+func TestHealthStatusUsesMonitorCacheWithoutBlockingAudit(t *testing.T) {
+	root := t.TempDir()
+	ledger, err := evidence.Open(filepath.Join(root, "evidence.jsonl"), filepath.Join(root, "evidence.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, m := healthyInputs()
+	engine := &measuredHardening{}
+	handler := New("test", "01234567890123456789012345678901", engine, fixedAudit{}, fixedXDR{}, &fixedMHX{mode: "guarded", status: m}, &fixedIntegrity{}, ledger)
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:17831/api/v1/health/status", nil)
+	req.RemoteAddr = "127.0.0.1:49152"
+	req.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
+	req.Header.Set("X-VGT-Request-ID", "22222222-3333-4444-5555-999999999999")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", response.Code, response.Body.String())
+	}
+	if engine.audited {
+		t.Fatal("startup health status must not block on a fresh PowerShell audit")
+	}
+}
+
 type measuredHardening struct {
 	fixedEngine
 	audited bool

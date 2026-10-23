@@ -1,2 +1,79 @@
-/* STATUS: DIAMANT VGT SUPREME */
-:root{color-scheme:dark;--bg:#050b14;--bg2:#07111f;--panel:rgba(9,24,43,.68);--panel-strong:rgba(7,19,35,.9);--line:rgba(102,205,255,.15);--line-strong:rgba(102,205,255,.3);--blue:#4cc9ff;--blue2:#168bff;--cyan:#64efff;--text:#edf8ff;--muted:#8eaabd;--green:#31d0aa;--amber:#f6c85f;--red:#ff5c7c;--shadow:0 24px 80px rgba(0,0,0,.32);--radius:18px;--side:254px;--mono:"Cascadia Mono","SFMono-Regular",Consolas,monospace;--sans:"Segoe UI Variable","Segoe UI",system-ui,sans-serif}
+/* STATUS: DIAMANT VGT SUPREME — GeDefense V5 / GLASS 2100 tokens */
+/* Calm security console material. No external assets, system fonts only. */
+:root{
+  color-scheme:dark;
+
+  /* Primitive environment */
+  --vgt-void:#05080d;
+  --vgt-abyss:#070b12;
+  --vgt-deep:#0a1018;
+  --vgt-slate:#0e1520;
+  --vgt-iron:#141d2a;
+  --vgt-mist:#93a1b0;
+  --vgt-chalk:#eef2f6;
+
+  /* Signature accent — calibrated ice signal, used sparingly for navigation,
+     focus and primary actions only. State colours stay semantic. */
+  --vgt-signal:#8fdce8;
+  --vgt-signal-strong:#c2f0f5;
+  --vgt-signal-ink:#04121a;
+  --vgt-signal-soft:rgba(143,220,232,.12);
+
+  /* Semantic state */
+  --vgt-ok:#6ad9a8;
+  --vgt-ok-soft:rgba(106,217,168,.1);
+  --vgt-warn:#e9c67c;
+  --vgt-warn-soft:rgba(233,198,124,.1);
+  --vgt-crit:#f08a9b;
+  --vgt-crit-soft:rgba(240,138,155,.1);
+  --vgt-info:#a8c8e8;
+  --vgt-info-soft:rgba(168,200,232,.1);
+
+  /* Material */
+  --vgt-hairline:rgba(200,220,235,.1);
+  --vgt-hairline-strong:rgba(200,220,235,.18);
+  --vgt-material-1:linear-gradient(180deg,rgba(23,33,46,.66),rgba(13,20,30,.74));
+  --vgt-material-2:linear-gradient(180deg,rgba(28,40,55,.82),rgba(16,24,35,.86));
+  --vgt-material-flat:#0d141e;
+  --vgt-chrome:rgba(7,11,18,.82);
+  --vgt-shadow-soft:0 18px 44px rgba(0,0,0,.24);
+  --vgt-shadow-float:0 30px 90px rgba(0,0,0,.46);
+  --vgt-inset-light:inset 0 1px 0 rgba(255,255,255,.045);
+
+  /* Geometry */
+  --vgt-radius-xl:22px;
+  --vgt-radius-lg:16px;
+  --vgt-radius-md:12px;
+  --vgt-radius-sm:9px;
+  --vgt-radius-xs:6px;
+
+  /* Type */
+  --vgt-font-display:"Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,sans-serif;
+  --vgt-font-ui:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  --vgt-font-data:"Cascadia Mono","Cascadia Code",Consolas,"SFMono-Regular",monospace;
+
+  /* Layout */
+  --vgt-side:272px;
+  --vgt-measure:78ch;
+
+  /* Backwards-compatible aliases used by existing views/map components. */
+  --bg:#05080d;
+  --bg2:#070b12;
+  --panel:rgba(16,24,35,.72);
+  --panel-strong:rgba(10,16,24,.92);
+  --line:rgba(200,220,235,.1);
+  --line-strong:rgba(200,220,235,.2);
+  --blue:#8fdce8;
+  --blue2:#79b9d6;
+  --cyan:#8fdce8;
+  --text:#eef2f6;
+  --muted:#93a1b0;
+  --green:#6ad9a8;
+  --amber:#e9c67c;
+  --red:#f08a9b;
+  --shadow:0 18px 44px rgba(0,0,0,.24);
+  --radius:16px;
+  --side:272px;
+  --mono:var(--vgt-font-data);
+  --sans:var(--vgt-font-ui);
+}

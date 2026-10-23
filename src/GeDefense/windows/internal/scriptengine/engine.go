@@ -75,7 +75,7 @@ func RunJSON[T any](engine *Engine, parent context.Context, operation string, ex
 	var stderr bytes.Buffer
 	command.Stdout = io.Discard
 	command.Stderr = &limitedWriter{target: &stderr, remaining: 64 << 10}
-	if err := command.Run(); err != nil {
+	if err := winexec.RunTracked(command); err != nil {
 		return result, fmt.Errorf("%s failed: %w: %s", operation, err, stderr.String())
 	}
 	file, err := os.Open(output)

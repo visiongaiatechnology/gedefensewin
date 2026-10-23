@@ -66,10 +66,11 @@ func (defenderWatcher) Run(ctx context.Context, output chan<- defenderEvent, fau
 		deliverFault(faults, err)
 		return
 	}
-	if err := command.Start(); err != nil {
+	if err := winexec.StartTracked(command); err != nil {
 		deliverFault(faults, err)
 		return
 	}
+	defer winexec.ReleaseTrackedProcess(command.Process.Pid)
 	go func() { _, _ = io.WriteString(stdin, defenderTraceScript); _ = stdin.Close() }()
 	go consumeErrors(ctx, stderr, faults)
 	scanner := bufio.NewScanner(stdout)

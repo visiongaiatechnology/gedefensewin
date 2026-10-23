@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "defender": {
+    "cloudBlockLevel": null,
+    "mapsReporting": "Advanced",
+    "asrRules": null
+  },
+  "firewall": null,
+  "components": null
+}

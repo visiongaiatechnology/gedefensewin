@@ -3,6 +3,7 @@ package threatintel
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/cleanup"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence/secretfs"
 )
 
 const (
@@ -34,6 +36,17 @@ type Manager struct {
 	client            *http.Client
 	syncMu            sync.Mutex
 	statusMu          sync.RWMutex
+	pollMu            sync.RWMutex
+	pollSetMu         sync.Mutex
+	pollEvery         time.Duration
+	pollSource        string
+	pollUpdatedUTC    time.Time
+	pollLoadError     string
+	policyMu          sync.RWMutex
+	overrides         map[string]FeedPolicyOverride
+	policySource      string
+	policyUpdatedUTC  time.Time
+	policyStoreError  string
 	protectedMu       sync.RWMutex
 	status            Status
 	snapshots         map[string]sourceSnapshot
@@ -42,6 +55,21 @@ type Manager struct {
 	protectedTrie     prefixTrie
 	protectedKey      []byte
 	index             atomic.Pointer[Index]
+
+	// Signed feed authority trust anchor and anti-rollback state (DP-FIND-002).
+	authorityMu         sync.RWMutex
+	authorityKeys       map[string]ed25519.PublicKey
+	authorityConfigured bool
+	authorityError      string
+	authorityState      feedAuthorityState
+
+	// Wall-clock trust anchor (DP-FIND-014).
+	clockMu        sync.RWMutex
+	clockHighWater time.Time
+	clockRollback  bool
+
+	// Service-local MAC key for the feed override store (DP-FIND-004).
+	feedPolicyKey []byte
 }
 
 func NewManager(root string) (*Manager, error) {
@@ -54,6 +82,10 @@ func NewManager(root string) (*Manager, error) {
 	protectedKey, err := loadOrCreateProtectedPolicyKey(root)
 	if err != nil {
 		return nil, fmt.Errorf("protected network policy key: %w", err)
+	}
+	feedPolicyKey, err := secretfs.LoadOrCreateRawKey(filepath.Join(root, "keys", "feed-policy.key"), 32)
+	if err != nil {
+		return nil, fmt.Errorf("feed policy key: %w", err)
 	}
 	protectedPolicy, protectedPrefixes, err := loadProtectedPolicy(root, protectedKey)
 	if err != nil {
@@ -82,12 +114,26 @@ func NewManager(root string) (*Manager, error) {
 			},
 		},
 		snapshots:         make(map[string]sourceSnapshot, len(catalog)),
+		overrides:         make(map[string]FeedPolicyOverride, len(catalog)),
+		policySource:      feedPolicySourceDefault,
 		protectedPolicy:   protectedPolicy,
 		protectedPrefixes: protectedPrefixes,
 		protectedTrie:     buildPrefixTrie(protectedPrefixes),
 		protectedKey:      protectedKey,
+		feedPolicyKey:     feedPolicyKey,
+		pollEvery:         DefaultPollInterval,
+		pollSource:        pollingSourceDefault,
 		status:            Status{State: "INITIALIZING", Feeds: make([]FeedState, 0, len(catalog)), ProtectedPrefixes: len(protectedPolicy.Prefixes), ProtectionGeneration: protectedPolicy.GenerationSHA256},
 	}
+	manager.loadFeedAuthority()
+	if highWater, clockErr := loadFeedClock(root); clockErr == nil && !highWater.IsZero() {
+		manager.clockHighWater = highWater
+		if time.Now().UTC().Add(feedClockTolerance).Before(highWater) {
+			manager.clockRollback = true
+		}
+	}
+	manager.loadPollingConfig()
+	manager.loadFeedPolicy()
 	manager.loadCached()
 	return manager, nil
 }
@@ -102,59 +148,136 @@ func (m *Manager) Sync(ctx context.Context) error {
 	defer m.syncMu.Unlock()
 
 	attempt := time.Now().UTC()
-	candidate := cloneSnapshots(m.snapshots)
-	states := make([]FeedState, 0, len(catalog))
-	fresh := 0
-	blockingReady := 0
+	if m.observeClock(attempt) {
+		_ = os.Remove(enforcementSnapshotPath(m.root))
+		err := errors.New("threat feed synchronization refused: wall-clock rollback detected; feed freshness cannot be established")
+		m.fail(attempt, err)
+		return err
+	}
+	candidate := make(map[string]sourceSnapshot, len(m.snapshots))
+	for key, snapshot := range m.snapshots {
+		if m.snapshotExpired(snapshot, attempt) {
+			continue
+		}
+		candidate[key] = snapshot
+	}
+	states := make([]FeedState, len(catalog))
+	previousStates := make(map[string]sourceSnapshot, len(catalog))
 	blockingTotal := 0
-	aggregate := 0
-	for _, source := range catalog {
-		if source.Action == ActionBlock {
+	for index, source := range catalog {
+		states[index] = m.newFeedState(source, attempt)
+		if previous, exists := candidate[source.Key]; exists {
+			previousStates[source.Key] = previous
+		}
+		if m.effectiveAction(source.Key) == ActionBlock {
 			blockingTotal++
 		}
+	}
+
+	// Feed downloads are independent network operations. Run them with a small
+	// bounded worker pool so one slow upstream does not serialize all nine feeds,
+	// while the authoritative catalog order and per-feed safety gates stay intact.
+	type fetchResult struct {
+		index    int
+		source   Source
+		snapshot sourceSnapshot
+		state    FeedState
+		err      error
+	}
+	results := make([]fetchResult, len(catalog))
+	var workers sync.WaitGroup
+	workers.Add(len(catalog))
+	sem := make(chan struct{}, 3)
+	for index, source := range catalog {
 		previous, hasPrevious := candidate[source.Key]
-		state := FeedState{Key: source.Key, Name: source.Name, Action: source.Action, LastAttemptUTC: attempt}
-		prefixes, attribution, err := m.fetchSource(ctx, source)
-		if err == nil && hasPrevious && suspiciousShrink(len(previous.Indicators), len(prefixes)) {
-			err = errors.New("threat feed shrinkage safety gate rejected generation")
+		go func(index int, source Source, previous sourceSnapshot, hasPrevious bool) {
+			defer workers.Done()
+			result := fetchResult{index: index, source: source, state: states[index]}
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				result.err = ctx.Err()
+				results[index] = result
+				return
+			}
+			prefixes, attribution, err := m.fetchSource(ctx, source)
+			if err == nil && hasPrevious && suspiciousShrink(len(previous.Indicators), len(prefixes)) {
+				err = errors.New("threat feed shrinkage safety gate rejected generation")
+			}
+			if err == nil {
+				indicators := make([]string, 0, len(prefixes))
+				for _, prefix := range prefixes {
+					indicators = append(indicators, prefix.String())
+				}
+				sort.Strings(indicators)
+				var previousReference *sourceSnapshot
+				if hasPrevious {
+					previousCopy := previous
+					previousReference = &previousCopy
+				}
+				authorityDocument, authorityErr := m.verifyFetchedAuthority(source, indicators, previousReference)
+				if authorityErr != nil {
+					result.err = authorityErr
+					results[index] = result
+					return
+				}
+				snapshot := sourceSnapshot{
+					SchemaVersion:    SchemaVersion,
+					Key:              source.Key,
+					GeneratedUTC:     attempt,
+					Action:           source.Action,
+					Attribution:      attribution,
+					GenerationSHA256: digestIndicators(source.Key, source.Action, indicators),
+					Indicators:       indicators,
+					Authority:        authorityDocument,
+				}
+				if writeErr := writeSourceSnapshot(m.root, snapshot); writeErr != nil {
+					err = writeErr
+				} else {
+					result.snapshot = snapshot
+				}
+			}
+			result.err = err
+			results[index] = result
+		}(index, source, previous, hasPrevious)
+	}
+	workers.Wait()
+	for index := range results {
+		if results[index].err == nil {
+			m.updateFeedAuthorityState(results[index].snapshot.Authority)
 		}
-		if err == nil {
-			indicators := make([]string, 0, len(prefixes))
-			for _, prefix := range prefixes {
-				indicators = append(indicators, prefix.String())
-			}
-			sort.Strings(indicators)
-			snapshot := sourceSnapshot{
-				SchemaVersion:    SchemaVersion,
-				Key:              source.Key,
-				GeneratedUTC:     attempt,
-				Action:           source.Action,
-				Attribution:      attribution,
-				GenerationSHA256: digestIndicators(source.Key, source.Action, indicators),
-				Indicators:       indicators,
-			}
-			if writeErr := writeSourceSnapshot(m.root, snapshot); writeErr != nil {
-				err = writeErr
-			} else {
-				candidate[source.Key] = snapshot
-				state.State = "CURRENT"
-				state.Indicators = len(indicators)
-				state.LastSuccessUTC = attempt
-				fresh++
-			}
+	}
+
+	fresh := 0
+	blockingReady := 0
+	aggregate := 0
+	for index, source := range catalog {
+		result := results[index]
+		state := result.state
+		effectiveAction := m.effectiveAction(source.Key)
+		if result.err == nil {
+			candidate[source.Key] = result.snapshot
+			state.State = "CURRENT"
+			state.Indicators = len(result.snapshot.Indicators)
+			state.LastSuccessUTC = attempt
+			applyFeedAuthorityState(&state, &result.snapshot)
+			fresh++
+		} else if previous, hasPrevious := previousStates[source.Key]; hasPrevious && !m.snapshotExpired(previous, attempt) {
+			state.State = "STALE"
+			state.Indicators = len(previous.Indicators)
+			state.LastSuccessUTC = previous.GeneratedUTC
+			state.Error = "last-known-good generation retained within the hard freshness TTL"
+			applyFeedAuthorityState(&state, &previous)
+		} else if previous, hasPrevious := m.snapshots[source.Key]; hasPrevious {
+			state.State = "EXPIRED"
+			state.Error = "last-known-good generation exceeded the hard freshness TTL"
+			applyFeedAuthorityState(&state, &previous)
+		} else {
+			state.State = "UNAVAILABLE"
+			state.Error = "no validated generation available"
 		}
-		if err != nil {
-			if hasPrevious {
-				state.State = "STALE"
-				state.Indicators = len(previous.Indicators)
-				state.LastSuccessUTC = previous.GeneratedUTC
-				state.Error = "last-known-good generation retained"
-			} else {
-				state.State = "UNAVAILABLE"
-				state.Error = "no validated generation available"
-			}
-		}
-		if source.Action == ActionBlock && state.Indicators > 0 && (state.State == "CURRENT" || state.State == "STALE") {
+		if effectiveAction == ActionBlock && state.Indicators > 0 && (state.State == "CURRENT" || state.State == "STALE") {
 			blockingReady++
 		}
 		aggregate += state.Indicators
@@ -162,10 +285,10 @@ func (m *Manager) Sync(ctx context.Context) error {
 			m.fail(attempt, errors.New("aggregate threat intelligence boundary exceeded"))
 			return errors.New("aggregate threat intelligence boundary exceeded")
 		}
-		states = append(states, state)
+		states[index] = state
 	}
 
-	index := buildIndex(candidate)
+	index := buildIndex(m.applyEffectiveActions(candidate))
 	protectedPolicy, protectedPrefixes := m.protectedSnapshot()
 	if err := index.compileEnforcement(protectedPrefixes); err != nil {
 		m.fail(attempt, err)
@@ -177,6 +300,9 @@ func (m *Manager) Sync(ctx context.Context) error {
 		return err
 	}
 	if index.blocking == 0 {
+		// Fail closed: no authenticated/fresh blocking generation exists, so the
+		// on-disk enforcement projection must not be reused by any consumer.
+		_ = os.Remove(enforcementSnapshotPath(m.root))
 		err := errors.New("no validated blocking threat intelligence is available")
 		m.fail(attempt, err)
 		return err
@@ -193,9 +319,10 @@ func (m *Manager) Sync(ctx context.Context) error {
 
 	m.snapshots = candidate
 	m.index.Store(index)
+	m.persistFeedClock(attempt)
 	state := "CURRENT"
 	errorText := ""
-	nextSync := attempt.Add(SyncInterval)
+	nextSync := attempt.Add(m.pollInterval())
 	if fresh != len(catalog) {
 		state = "DEGRADED"
 		errorText = fmt.Sprintf("%d of %d feeds refreshed; last-known-good data retained where available", fresh, len(catalog))
@@ -248,11 +375,94 @@ func (m *Manager) Status() Status {
 	if m == nil {
 		return Status{}
 	}
+	intervalSeconds, pollingSource, pollingUpdatedUTC, pollingLoadError := m.pollingFields()
+	minimum, maximum := pollIntervalRange()
 	m.statusMu.RLock()
-	defer m.statusMu.RUnlock()
 	status := m.status
 	status.Feeds = append([]FeedState(nil), m.status.Feeds...)
-	return status
+	m.statusMu.RUnlock()
+	status.PollingIntervalSeconds = intervalSeconds
+	status.PollingIntervalSource = pollingSource
+	status.PollingIntervalMinSeconds = minimum
+	status.PollingIntervalMaxSeconds = maximum
+	status.PollingIntervalDefaultSeconds = int(DefaultPollInterval / time.Second)
+	status.PollingUpdatedUTC = pollingUpdatedUTC
+	if pollingLoadError != "" && status.Error == "" {
+		status.Error = pollingLoadError
+	}
+	overrides, policySource, policyUpdatedUTC, policyStoreError := m.feedPolicyView()
+	status.Feeds = enrichFeedStates(status.Feeds, overrides)
+	status.FeedPolicySource = policySource
+	status.FeedPolicyUpdatedUTC = policyUpdatedUTC
+	status.FeedPolicyOverrides = len(overrides)
+	status.FeedPolicyError = policyStoreError
+	if len(status.Feeds) > 0 {
+		total, ready := 0, 0
+		for _, feed := range status.Feeds {
+			if feed.EffectiveAction != ActionBlock {
+				continue
+			}
+			total++
+			if feed.Indicators > 0 && (feed.State == "CURRENT" || feed.State == "STALE" || feed.State == "CACHED") {
+				ready++
+			}
+		}
+		status.BlockingFeedsTotal = total
+		status.BlockingFeedsReady = ready
+	}
+	return m.applyFreshnessAndAuthenticity(status)
+}
+
+// effectiveAction resolves a feed key against the override layer.
+func (m *Manager) effectiveAction(key string) Action {
+	m.policyMu.RLock()
+	defer m.policyMu.RUnlock()
+	return m.effectiveActionLocked(key)
+}
+
+// applyEffectiveActions clones the last-known-good snapshots and replaces each
+// authority with the effective action before the index is built.
+func (m *Manager) applyEffectiveActions(snapshots map[string]sourceSnapshot) map[string]sourceSnapshot {
+	overrides, _, _, _ := m.feedPolicyView()
+	return applyEffectiveActionsToSnapshots(snapshots, overrides)
+}
+
+// newFeedState projects one catalog source together with its effective action.
+func (m *Manager) newFeedState(source Source, attempt time.Time) FeedState {
+	state := FeedState{Key: source.Key, Name: source.Name, Action: source.Action, DefaultAction: source.Action, ConfiguredAction: source.Action, EffectiveAction: source.Action, ActionSource: feedPolicySourceDefault, LastAttemptUTC: attempt}
+	m.policyMu.RLock()
+	if override, exists := m.overrides[source.Key]; exists {
+		state.ConfiguredAction = override.Action
+		state.EffectiveAction = override.Action
+		state.ActionSource = feedPolicyEntrySource
+	}
+	m.policyMu.RUnlock()
+	return state
+}
+
+// enrichFeedStates attaches default/configured/effective authority to status
+// entries that were built before an override was applied.
+func enrichFeedStates(states []FeedState, overrides map[string]FeedPolicyOverride) []FeedState {
+	if len(states) == 0 {
+		return states
+	}
+	for index := range states {
+		source, exists := sourceByKey(states[index].Key)
+		if !exists {
+			continue
+		}
+		configured := source.Action
+		actionSource := feedPolicySourceDefault
+		if override, exists := overrides[states[index].Key]; exists {
+			configured = override.Action
+			actionSource = feedPolicyEntrySource
+		}
+		states[index].DefaultAction = source.Action
+		states[index].ConfiguredAction = configured
+		states[index].EffectiveAction = configured
+		states[index].ActionSource = actionSource
+	}
+	return states
 }
 
 func (m *Manager) SnapshotPath() string {
@@ -285,11 +495,12 @@ func (m *Manager) SetProtectedPrefixes(values []string) (ProtectedNetworkPolicy,
 	}
 	previousPolicy, previousPrefixes := m.protectedSnapshot()
 	updatedUTC := time.Now().UTC()
-	index := buildIndex(m.snapshots)
+	overrides, _, _, _ := m.feedPolicyView()
+	index := buildIndex(applyEffectiveActionsToSnapshots(m.snapshots, overrides))
 	if err := index.compileEnforcement(prefixes); err != nil {
 		return ProtectedNetworkPolicy{}, err
 	}
-	blockingReady := blockingReadyCount(m.snapshots)
+	_, blockingReady := effectiveBlockingCoverage(m.snapshots, overrides)
 	if index.indicators > 0 && (index.blocking == 0 || blockingReady == 0) {
 		return ProtectedNetworkPolicy{}, errors.New("protected network policy would remove all blocking enforcement indicators")
 	}
@@ -364,19 +575,6 @@ func (m *Manager) markProtectionPolicyStatus(policy ProtectedNetworkPolicy, poli
 	}
 }
 
-func blockingReadyCount(snapshots map[string]sourceSnapshot) int {
-	ready := 0
-	for _, source := range catalog {
-		if source.Action != ActionBlock {
-			continue
-		}
-		if snapshot, ok := snapshots[source.Key]; ok && len(snapshot.Indicators) > 0 {
-			ready++
-		}
-	}
-	return ready
-}
-
 func (m *Manager) fetchSource(ctx context.Context, source Source) (prefixes []netip.Prefix, attribution Attribution, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
 	if err != nil {
@@ -424,15 +622,41 @@ func (m *Manager) loadCached() {
 	blockingReady := 0
 	blockingTotal := 0
 	aggregate := 0
+	rollback := m.clockRollbackDetected()
 	for _, source := range catalog {
-		if source.Action == ActionBlock {
+		effectiveAction := m.effectiveAction(source.Key)
+		if effectiveAction == ActionBlock {
 			blockingTotal++
+		}
+		state := m.newFeedState(source, time.Time{})
+		if rollback {
+			state.State = "UNAVAILABLE"
+			state.Error = "wall-clock rollback detected; cached generations are not trusted"
+			states = append(states, state)
+			continue
 		}
 		snapshot, err := readSourceSnapshot(m.root, source)
 		if err != nil {
-			states = append(states, FeedState{Key: source.Key, Name: source.Name, Action: source.Action, State: "UNAVAILABLE"})
+			state.State = "UNAVAILABLE"
+			states = append(states, state)
 			continue
 		}
+		if m.snapshotExpired(snapshot, m.effectiveNowUTC()) {
+			state.State = "EXPIRED"
+			state.Error = "cached generation exceeded the hard freshness TTL"
+			state.Indicators = len(snapshot.Indicators)
+			state.LastSuccessUTC = snapshot.GeneratedUTC
+			applyFeedAuthorityState(&state, &snapshot)
+			states = append(states, state)
+			continue
+		}
+		if authorityErr := m.verifyCachedAuthority(&snapshot); authorityErr != nil {
+			state.State = "UNAVAILABLE"
+			state.Error = "cached generation rejected by signed feed authority: " + authorityErr.Error()
+			states = append(states, state)
+			continue
+		}
+		applyFeedAuthorityState(&state, &snapshot)
 		aggregate += len(snapshot.Indicators)
 		if aggregate > maximumAggregateIndicators {
 			m.snapshots = make(map[string]sourceSnapshot, len(catalog))
@@ -440,12 +664,16 @@ func (m *Manager) loadCached() {
 			return
 		}
 		m.snapshots[source.Key] = snapshot
-		if source.Action == ActionBlock {
+		if effectiveAction == ActionBlock {
 			blockingReady++
 		}
-		states = append(states, FeedState{Key: source.Key, Name: source.Name, Action: source.Action, State: "CACHED", Indicators: len(snapshot.Indicators), LastSuccessUTC: snapshot.GeneratedUTC})
+		state.State = "CACHED"
+		state.Indicators = len(snapshot.Indicators)
+		state.LastSuccessUTC = snapshot.GeneratedUTC
+		applyFeedAuthorityState(&state, &snapshot)
+		states = append(states, state)
 	}
-	index := buildIndex(m.snapshots)
+	index := buildIndex(m.applyEffectiveActions(m.snapshots))
 	protectedPolicy, protectedPrefixes := m.protectedSnapshot()
 	if err := index.compileEnforcement(protectedPrefixes); err != nil {
 		m.snapshots = make(map[string]sourceSnapshot, len(catalog))
@@ -458,12 +686,19 @@ func (m *Manager) loadCached() {
 		return
 	}
 	if index.indicators == 0 {
-		m.setStatus(Status{State: "INITIALIZING", BlockingFeedsTotal: blockingTotal, Feeds: states})
+		_ = os.Remove(enforcementSnapshotPath(m.root))
+		state := "INITIALIZING"
+		errorText := ""
+		if rollback {
+			state = "DEGRADED"
+			errorText = "wall-clock rollback detected; cached feed generations were withdrawn"
+		}
+		m.setStatus(Status{State: state, Error: errorText, BlockingFeedsTotal: blockingTotal, Feeds: states})
 		return
 	}
 	m.index.Store(index)
 	latest := latestSnapshotTime(m.snapshots)
-	nextSync := latest.Add(SyncInterval)
+	nextSync := latest.Add(m.pollInterval())
 	state := "CACHED"
 	errorText := ""
 	if blockingReady != blockingTotal || index.blocking == 0 {

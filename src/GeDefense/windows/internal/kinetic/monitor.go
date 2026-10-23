@@ -3,7 +3,9 @@
 package kinetic
 
 import (
+	"errors"
 	"net/netip"
+	"sort"
 	"sync"
 	"time"
 )
@@ -11,9 +13,6 @@ import (
 const (
 	maxSources          = 2048
 	maxSamplesPerSource = 32
-	burstWindow         = 10 * time.Second
-	burstThreshold      = 12
-	diversityThreshold  = 3
 )
 
 type sample struct {
@@ -25,12 +24,26 @@ type source struct {
 	next, count int
 	last        time.Time
 	reported    bool
+	hits        uint64
+	portless    uint64
+	lastSeen    time.Time
+	lastPort    uint16
+}
+
+// Source records real WFP observations independently of the stricter burst threshold.
+type Source struct {
+	IP             string    `json:"ip"`
+	Hits           uint64    `json:"hits"`
+	PortlessBlocks uint64    `json:"portlessBlocks"`
+	LastSeen       time.Time `json:"lastSeen"`
+	LastPort       uint16    `json:"lastPort"`
 }
 
 // Snapshot counts verified input events. A candidate is not an established attack.
 type Snapshot struct {
 	Mode            string `json:"mode"`
 	Input           string `json:"input"`
+	Config          Config `json:"config"`
 	BlocksObserved  uint64 `json:"blocksObserved"`
 	BurstCandidates uint64 `json:"burstCandidates"`
 	TrackedSources  int    `json:"trackedSources"`
@@ -40,13 +53,53 @@ type Snapshot struct {
 
 type Monitor struct {
 	mu                          sync.Mutex
+	cfg                         Config
 	sources                     map[netip.Addr]*source
 	order                       []netip.Addr
 	nextEvict                   int
 	blocks, candidates, dropped uint64
 }
 
-func NewMonitor() *Monitor { return &Monitor{sources: make(map[netip.Addr]*source)} }
+// NewMonitor creates an observer with the default (historically hard-coded)
+// thresholds. Explicit configuration goes through Configure.
+func NewMonitor() *Monitor {
+	return &Monitor{cfg: DefaultConfig(), sources: make(map[netip.Addr]*source)}
+}
+
+// Configure validates and applies an observation policy. Already retained
+// samples are discarded because they were measured against the previous
+// thresholds; mixing two policies would make the burst counters unauditable.
+// The previous configuration always remains in place when validation fails.
+func (m *Monitor) Configure(cfg Config) error {
+	if m == nil {
+		return errors.New("kinetic monitor unavailable")
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cfg == cfg {
+		return nil
+	}
+	m.cfg = cfg
+	for _, tracked := range m.sources {
+		tracked.samples = [maxSamplesPerSource]sample{}
+		tracked.next, tracked.count, tracked.reported = 0, 0, false
+		tracked.last = time.Time{}
+	}
+	return nil
+}
+
+// Config returns a copy of the active observation policy.
+func (m *Monitor) Config() Config {
+	if m == nil {
+		return DefaultConfig()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfg
+}
 
 // ObserveBlockedInbound ingests only WFP Security 5157 inbound BLOCK observations.
 // It must not be called with TCP-ESTABLISHED snapshots or synthesized traffic.
@@ -60,10 +113,10 @@ func (m *Monitor) ObserveBlockedInbound(ip string, port uint16, now time.Time) b
 	addr = addr.Unmap()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	window := m.cfg.BurstWindow()
+	minEvents := m.cfg.MinEvents
+	minPorts := m.cfg.MinDistinctPorts
 	m.blocks++
-	if port == 0 {
-		return false
-	}
 	s := m.sources[addr]
 	if s == nil {
 		if len(m.sources) >= maxSources {
@@ -80,11 +133,21 @@ func (m *Monitor) ObserveBlockedInbound(ip string, port uint16, now time.Time) b
 		s = &source{}
 		m.sources[addr] = s
 	}
+	if now.Before(s.lastSeen) {
+		m.dropped++
+		return false
+	}
+	s.hits++
+	s.lastSeen, s.lastPort = now, port
+	if port == 0 {
+		s.portless++
+		return false
+	}
 	if now.Before(s.last) {
 		m.dropped++
 		return false
 	}
-	if now.Sub(s.last) > burstWindow {
+	if now.Sub(s.last) > window {
 		s.count = 0
 		s.next = 0
 		s.reported = false
@@ -99,29 +162,56 @@ func (m *Monitor) ObserveBlockedInbound(ip string, port uint16, now time.Time) b
 	} else {
 		m.dropped++
 	}
-	seenPorts := make(map[uint16]struct{}, diversityThreshold)
+	seenPorts := make(map[uint16]struct{}, minPorts)
 	hits := 0
 	for j := 0; j < s.count; j++ {
 		event := s.samples[j]
-		if !event.at.After(now) && now.Sub(event.at) <= burstWindow {
+		if !event.at.After(now) && now.Sub(event.at) <= window {
 			hits++
 			seenPorts[event.localPort] = struct{}{}
 		}
 	}
-	if !s.reported && hits >= burstThreshold && len(seenPorts) >= diversityThreshold {
+	if !s.reported && hits >= minEvents && len(seenPorts) >= minPorts {
 		s.reported = true
 		m.candidates++
 		return true
 	}
 	return false
 }
+
+// SourceSnapshot copies bounded state under the lock and sorts outside the hot path.
+func (m *Monitor) SourceSnapshot(limit int) []Source {
+	if m == nil {
+		return []Source{}
+	}
+	if limit < 1 || limit > 500 {
+		limit = 250
+	}
+	m.mu.Lock()
+	rows := make([]Source, 0, len(m.sources))
+	for ip, item := range m.sources {
+		rows = append(rows, Source{IP: ip.String(), Hits: item.hits, PortlessBlocks: item.portless, LastSeen: item.lastSeen, LastPort: item.lastPort})
+	}
+	m.mu.Unlock()
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].LastSeen.Equal(rows[j].LastSeen) {
+			return rows[i].IP < rows[j].IP
+		}
+		return rows[i].LastSeen.After(rows[j].LastSeen)
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
+}
+
 func (m *Monitor) Snapshot() Snapshot {
 	if m == nil {
-		return Snapshot{Mode: "OBSERVE_ONLY", Input: "WFP_SECURITY_5157_BLOCKED_INBOUND_ONLY"}
+		return Snapshot{Mode: "OBSERVE_ONLY", Input: "WFP_SECURITY_5157_BLOCKED_INBOUND_ONLY", Config: DefaultConfig()}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return Snapshot{Mode: "OBSERVE_ONLY", Input: "WFP_SECURITY_5157_BLOCKED_INBOUND_ONLY", BlocksObserved: m.blocks, BurstCandidates: m.candidates, TrackedSources: len(m.sources), Capacity: maxSources, DroppedSamples: m.dropped}
+	return Snapshot{Mode: "OBSERVE_ONLY", Input: "WFP_SECURITY_5157_BLOCKED_INBOUND_ONLY", Config: m.cfg, BlocksObserved: m.blocks, BurstCandidates: m.candidates, TrackedSources: len(m.sources), Capacity: maxSources, DroppedSamples: m.dropped}
 }
 
 // Readiness is a deliberately conservative representation of sensor coverage.

@@ -105,6 +105,7 @@ type KineticIncident struct {
 	Classification   string    `json:"classification"`
 }
 type Status struct {
+	KineticSources             []kinetic.Source        `json:"kineticSources"`
 	KineticIncidents           []KineticIncident       `json:"kineticIncidents"`
 	Traffic                    traffic.Sample          `json:"traffic"`
 	KineticArmed               bool                    `json:"kineticArmed"`
@@ -135,6 +136,14 @@ type Status struct {
 	WFPBlockedEvents           uint64                  `json:"wfpBlockedEvents"`
 	ThreatNetworkHits          uint64                  `json:"threatNetworkHits"`
 	AttackStories              uint64                  `json:"attackStories"`
+
+	// V5 management projections. All values are derived from persisted,
+	// verified runtime state; none of them are invented UI placeholders.
+	KineticSettings    KineticSettingsSnapshot   `json:"kineticSettings"`
+	PolicySettings     PolicySettings            `json:"policySettings"`
+	ThreatIntelPolling threatintel.PollingConfig `json:"threatIntelPolling"`
+	DefenderTelemetry  *DefenderTelemetry        `json:"defenderTelemetry,omitempty"`
+	NotificationCount  int                       `json:"notificationCount"`
 }
 
 type NetworkFinding struct {

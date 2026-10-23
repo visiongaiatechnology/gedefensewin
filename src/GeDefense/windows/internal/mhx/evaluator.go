@@ -4,6 +4,7 @@ package mhx
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -30,14 +31,30 @@ func (Evaluator) Analyze(event ProcessEvent) (result Analysis) {
 	payload, encoding, encoded, decodeErr := DecodePowerShellCommand(event.CommandLine)
 	if !encoded {
 		if len(rawSignals) > 0 {
-			result.InitialSeverity = SeverityHigh
-			result.EffectiveSeverity = SeverityHigh
-			result.Disposition = DispositionBlock
-			result.Detection = "Suspicious living-off-the-land process behavior"
-			result.Classification = "SUSPICIOUS"
-			result.ConfidenceBasis = min(9900, 8200+len(rawSignals)*300)
-			if containsCritical(rawSignals) {
-				result.EffectiveSeverity = SeverityCritical
+			strong := hasStrongBehaviorSignal(rawSignals)
+			independent := len(signalCategories(rawSignals))
+			if strong || independent >= 2 {
+				result.InitialSeverity = SeverityHigh
+				result.EffectiveSeverity = SeverityHigh
+				result.Disposition = DispositionBlock
+				result.Detection = "Suspicious living-off-the-land process behavior"
+				result.Classification = "SUSPICIOUS"
+				result.ConfidenceBasis = min(9900, 8200+len(rawSignals)*300)
+				if containsCritical(rawSignals) {
+					result.EffectiveSeverity = SeverityCritical
+				}
+			} else {
+				// A single weak contextual signal is common in legitimate admin
+				// and installer traffic (for example a Microsoft-signed
+				// PowerShell process with a transient invalid signature read, or
+				// a script launched with -ExecutionPolicy Bypass). Keep it for
+				// review but never claim a block or raise a block toast.
+				result.InitialSeverity = SeverityMedium
+				result.EffectiveSeverity = SeverityMedium
+				result.Disposition = DispositionAudit
+				result.Detection = "Review-only living-off-the-land behavior"
+				result.Classification = "REVIEW ONLY"
+				result.ConfidenceBasis = 5200
 			}
 		}
 		return result
@@ -84,7 +101,7 @@ func rawBehaviorSignals(event ProcessEvent) []string {
 		if path != "" && (strings.Contains(path, `\temp\`) || strings.Contains(path, `\appdata\`)) {
 			signals = append(signals, "provenance.user-writable-lolbin")
 		}
-		if event.SignerStatus != "" && !strings.EqualFold(event.SignerStatus, "Valid") {
+		if event.SignerStatus != "" && !strings.EqualFold(event.SignerStatus, "Valid") && !isSystemLolbinPath(event.ImagePath) && event.ParentPID != 0 {
 			signals = append(signals, "provenance.invalid-lolbin-signature")
 		}
 	}
@@ -113,6 +130,34 @@ func rawBehaviorSignals(event ProcessEvent) []string {
 		}
 	}
 	return signals
+}
+
+func isSystemLolbinPath(value string) bool {
+	path := strings.ToLower(filepath.Clean(strings.TrimSpace(value)))
+	if path == "" || path == "." {
+		return false
+	}
+	windows := strings.ToLower(os.Getenv("SystemRoot"))
+	if windows == "" {
+		windows = `c:\windows`
+	}
+	return strings.HasPrefix(path, filepath.Join(windows, "system32")+string(os.PathSeparator)) ||
+		strings.HasPrefix(path, filepath.Join(windows, "syswow64")+string(os.PathSeparator))
+}
+
+// hasStrongBehaviorSignal separates independent, actionable evidence from weak
+// contextual annotations. A single execution-policy bypass or a transient
+// signature-read failure is not enough to claim a block.
+func hasStrongBehaviorSignal(signals []string) bool {
+	for _, signal := range signals {
+		switch signal {
+		case "provenance.invalid-lolbin-signature", "evasion.execution-policy-bypass", "evasion.hidden-window":
+			continue
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 func appendUnique(values []string, value string) []string {

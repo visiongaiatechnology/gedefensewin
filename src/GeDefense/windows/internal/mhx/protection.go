@@ -53,6 +53,25 @@ type AppControlResult struct {
 	KernelEnforcement bool   `json:"KernelEnforcement"`
 }
 
+// ApplicationDeny is a real Windows Firewall program rule that blocks both
+// directions for one operator-selected executable. It is independent of the
+// Authenticode allow list: a deny rule is a strict network kill switch for that
+// binary and takes precedence over allow rules in Windows Firewall.
+type ApplicationDeny struct {
+	Path     string `json:"path"`
+	SHA256   string `json:"sha256"`
+	AddedUTC string `json:"addedUtc"`
+	Rule     string `json:"rule"`
+}
+
+type ApplicationDenyResult struct {
+	TimestampUTC string            `json:"TimestampUtc"`
+	Entries      []ApplicationDeny `json:"Entries"`
+	Count        int               `json:"Count"`
+	RuleGroup    string            `json:"RuleGroup"`
+	Enforced     bool              `json:"Enforced"`
+}
+
 type protectionController interface {
 	ApplyThreatIntelligence(context.Context, string, string, int) (FirewallResult, error)
 	Applications(context.Context, string, string) (ApplicationAllowResult, error)
@@ -64,10 +83,11 @@ type protectionManager struct {
 	runner     *scriptengine.Engine
 	firewall   *scriptengine.Engine
 	allows     *scriptengine.Engine
+	denies     *scriptengine.Engine
 	appControl *scriptengine.Engine
 }
 
-func newProtectionManager(script, firewallScript, allowScript, appControlScript, operations string) (*protectionManager, error) {
+func newProtectionManager(script, firewallScript, allowScript, denyScript, appControlScript, operations string) (*protectionManager, error) {
 	runner, err := scriptengine.New(script, operations, 3*time.Minute)
 	if err != nil {
 		return nil, err
@@ -80,11 +100,15 @@ func newProtectionManager(script, firewallScript, allowScript, appControlScript,
 	if err != nil {
 		return nil, err
 	}
+	denies, err := scriptengine.New(denyScript, operations, 3*time.Minute)
+	if err != nil {
+		return nil, err
+	}
 	appControl, err := scriptengine.New(appControlScript, operations, 10*time.Minute)
 	if err != nil {
 		return nil, err
 	}
-	return &protectionManager{runner: runner, firewall: firewall, allows: allows, appControl: appControl}, nil
+	return &protectionManager{runner: runner, firewall: firewall, allows: allows, denies: denies, appControl: appControl}, nil
 }
 
 func (m *protectionManager) ApplyThreatIntelligence(ctx context.Context, path, generation string, indicators int) (FirewallResult, error) {
@@ -97,6 +121,14 @@ func (m *protectionManager) Applications(ctx context.Context, action, path strin
 		arguments = append(arguments, "-ApplicationPath", path)
 	}
 	return scriptengine.RunJSON[ApplicationAllowResult](m.allows, ctx, "mhx-app-allow", arguments...)
+}
+
+func (m *protectionManager) ApplicationDenies(ctx context.Context, action, path string) (ApplicationDenyResult, error) {
+	arguments := []string{"-Action", action}
+	if path != "" {
+		arguments = append(arguments, "-ApplicationPath", path)
+	}
+	return scriptengine.RunJSON[ApplicationDenyResult](m.denies, ctx, "mhx-app-deny", arguments...)
 }
 
 func (m *protectionManager) ApplyAppControl(ctx context.Context, action string) (AppControlResult, error) {

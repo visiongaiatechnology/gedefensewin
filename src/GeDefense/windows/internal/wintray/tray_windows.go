@@ -41,6 +41,14 @@ const (
 	nidMessage = 0x00000001
 	nidIcon    = 0x00000002
 	nidTip     = 0x00000004
+	nidInfo    = 0x00000010
+
+	niiUser      = 0x00000004
+	niiLargeIcon = 0x00000020
+
+	statusTimer        = 1
+	notificationTimer  = 2
+	notificationPeriod = 5000
 
 	nimAdd    = 0x00000000
 	nimModify = 0x00000001
@@ -52,14 +60,24 @@ const (
 	menuQuit    = 1004
 )
 
+// Notification is a genuine blocking event supplied by the tray's local
+// control-plane poller. The tray never manufactures events or shows a toast for
+// audits, correlations or feed refreshes.
+type Notification struct {
+	ID     string
+	Title  string
+	Detail string
+}
+
 type Config struct {
-	Title       string
-	Version     string
-	IconPath    string
-	Open        func()
-	Status      func() (bool, string)
-	OpenEvent   uintptr
-	OpenAtStart bool
+	Title         string
+	Version       string
+	IconPath      string
+	Open          func()
+	Status        func() (bool, string)
+	Notifications func() []Notification
+	OpenEvent     uintptr
+	OpenAtStart   bool
 }
 
 type point struct{ X, Y int32 }
@@ -150,6 +168,9 @@ type trayState struct {
 	iconAdded      bool
 	lastHealthy    bool
 	lastDetail     string
+
+	notificationPrimed bool
+	lastNotificationID string
 }
 
 func Run(cfg Config) (err error) {
@@ -224,15 +245,28 @@ func Run(cfg Config) (err error) {
 	}
 	defer func() { err = errors.Join(err, state.deleteIcon()) }()
 	state.refreshStatus()
-	timer, _, timerErr := procSetTimer.Call(hwnd, 1, 60000, 0)
+	timer, _, timerErr := procSetTimer.Call(hwnd, statusTimer, 60000, 0)
 	if timer == 0 {
-		return syscallError("SetTimer", timerErr)
+		return syscallError("SetTimer(status)", timerErr)
+	}
+	var notificationTimerHandle uintptr
+	if cfg.Notifications != nil {
+		notificationTimerHandle, _, timerErr = procSetTimer.Call(hwnd, notificationTimer, notificationPeriod, 0)
+		if notificationTimerHandle == 0 {
+			// Native toasts are a notification enhancement, not a tray-liveness
+			// requirement; keep the tray alive but report the failed timer.
+			winapi.ReportError("SetTimer(notifications)", syscallError("SetTimer(notifications)", timerErr))
+		}
 	}
 	defer func() {
 		// DestroyWindow already destroys its timers; only kill while the HWND is live.
 		if valid, _, _ := user32.NewProc("IsWindow").Call(hwnd); valid != 0 {
 			r, _, e := procKillTimer.Call(hwnd, timer)
-			err = errors.Join(err, winapi.CheckBOOL("KillTimer", r, e))
+			err = errors.Join(err, winapi.CheckBOOL("KillTimer(status)", r, e))
+			if notificationTimerHandle != 0 {
+				r, _, e = procKillTimer.Call(hwnd, notificationTimerHandle)
+				err = errors.Join(err, winapi.CheckBOOL("KillTimer(notifications)", r, e))
+			}
 		}
 	}()
 
@@ -319,7 +353,12 @@ func windowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		state.cfg.Open()
 		return 0
 	case wmTimer:
-		state.refreshStatus()
+		switch uint32(wParam) {
+		case statusTimer:
+			state.refreshStatus()
+		case notificationTimer:
+			state.refreshNotifications()
+		}
 		return 0
 	case wmCommand:
 		switch uint16(wParam & 0xFFFF) {
@@ -384,6 +423,86 @@ func (s *trayState) refreshStatus() {
 	result, _, callErr := procModifyMenuW.Call(s.menu, menuStatus, mfByCommand|mfString|mfDisabled|mfGrayed, menuStatus, uintptr(unsafe.Pointer(ptr)))
 	winapi.ReportError("tray status menu", winapi.CheckBOOL("ModifyMenuW", result, callErr))
 	winapi.ReportError("tray status tooltip", s.modifyIcon("VGT GeDefense · "+detail))
+}
+
+// refreshNotifications polls the tray's local, already-block-filtered cache. It
+// only surfaces the newest unseen event so a burst of blocks cannot turn into a
+// notification storm.
+func (s *trayState) refreshNotifications() {
+	if s.cfg.Notifications == nil || !s.iconAdded {
+		return
+	}
+	entries := s.cfg.Notifications()
+	if len(entries) == 0 {
+		return
+	}
+	selected, show, nextID := nextNativeNotification(entries, s.notificationPrimed, s.lastNotificationID)
+	if !show {
+		s.notificationPrimed = true
+		s.lastNotificationID = nextID
+		return
+	}
+	s.notificationPrimed = true
+	s.lastNotificationID = nextID
+	title := selected.Title
+	if title == "" {
+		title = "GeDefense hat eine Bedrohung blockiert"
+	}
+	detail := selected.Detail
+	if detail == "" {
+		detail = "Eine tatsächliche Blockaktion wurde von der lokalen Control Plane gemeldet."
+	}
+	if err := s.showNotification(title, detail); err != nil {
+		winapi.ReportError("tray native notification", err)
+	}
+}
+
+// nextNativeNotification is pure and suppresses replay of existing events after
+// tray startup. A burst between polls still yields exactly one toast.
+func nextNativeNotification(entries []Notification, primed bool, lastID string) (Notification, bool, string) {
+	if len(entries) == 0 {
+		return Notification{}, false, lastID
+	}
+	latest := entries[0]
+	if latest.ID == "" {
+		return Notification{}, false, lastID
+	}
+	if !primed {
+		return Notification{}, false, latest.ID
+	}
+	if latest.ID == lastID {
+		return Notification{}, false, lastID
+	}
+	return latest, true, latest.ID
+}
+
+func (s *trayState) showNotification(title, detail string) error {
+	if !s.iconAdded {
+		return errors.New("tray icon is not active")
+	}
+	data := s.iconData("")
+	data.Flags |= nidInfo
+	data.InfoFlags = niiUser | niiLargeIcon
+	data.BalloonIcon = s.icon
+	data.Timeout = 10000
+	copyUTF16(data.InfoTitle[:], truncateText(title, 63))
+	copyUTF16(data.Info[:], truncateText(detail, 255))
+	result, _, callErr := procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&data)))
+	if result == 0 {
+		return syscallError("Shell_NotifyIconW(NIM_MODIFY/NIF_INFO)", callErr)
+	}
+	return nil
+}
+
+func truncateText(value string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes])
 }
 
 func (s *trayState) showMenu() {

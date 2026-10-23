@@ -33,6 +33,7 @@ func main() {
 	uninstall := flag.Bool("uninstall", false, "remove GeDefense")
 	silent := flag.Bool("silent", false, "silent execution without GUI dialogs")
 	showVersion := flag.Bool("version", false, "show version")
+	preview := flag.Bool("ui-preview", false, "render the installer surface without executing")
 	flag.Parse()
 	if *showVersion {
 		if !*silent {
@@ -48,7 +49,7 @@ func main() {
 		}
 		return
 	}
-	if err := runSetupWizard(*uninstall, isElevated()); err != nil {
+	if err := runSetupWizard(*uninstall, isElevated(), *preview); err != nil {
 		os.Exit(1)
 	}
 }
@@ -65,14 +66,7 @@ func execute(uninstall, elevated bool, progress ProgressCallback) (err error) {
 	}
 
 	report(5, "Vorbereitung...", "Initialisiere Installer-Cache...")
-	stagingParent, err := installerCache(elevated)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(stagingParent, 0o700); err != nil {
-		return err
-	}
-	staging, err := os.MkdirTemp(stagingParent, "setup-")
+	staging, err := createInstallerStaging(elevated)
 	if err != nil {
 		return err
 	}
@@ -126,7 +120,34 @@ func execute(uninstall, elevated bool, progress ProgressCallback) (err error) {
 	}
 
 	report(100, "Vorgang abgeschlossen", "Alle Komponenten wurden erfolgreich konfiguriert.")
+	if !uninstall {
+		startInstalledTray()
+	}
 	return nil
+}
+
+// startInstalledTray is deliberately detached from the installer's stdio. The
+// tray is a long-running process; inheriting the setup pipe would keep the
+// installer alive after it has already reported success.
+func startInstalledTray() {
+	programFiles := os.Getenv("ProgramFiles")
+	if !filepath.IsAbs(programFiles) {
+		return
+	}
+	tray := filepath.Join(programFiles, "VGT", "GeDefense", "bin", "GeDefenseTray.exe")
+	info, err := os.Lstat(tray)
+	if err != nil || !info.Mode().IsRegular() {
+		return
+	}
+	command := exec.Command(tray, "--tray")
+	command.Stdin = nil
+	command.Stdout = nil
+	command.Stderr = nil
+	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x00000008}
+	if err := command.Start(); err != nil {
+		return
+	}
+	_ = command.Process.Release()
 }
 
 func installerCache(elevated bool) (string, error) {
@@ -142,6 +163,26 @@ func installerCache(elevated bool) (string, error) {
 		return "", errors.New("Benutzer-Cache ist nicht verfügbar")
 	}
 	return filepath.Join(cacheRoot, "VGT", "InstallerCache"), nil
+}
+
+// createInstallerStaging returns a writable directory for the embedded payload.
+// The preferred cache location can be denied by hardened/AV profiles for an
+// unsigned (self-signed) installer; in that case a per-user temp directory is a
+// safe fallback because the extracted payload is still signature-verified by
+// the elevation bootstrap before any installation or service change happens.
+func createInstallerStaging(elevated bool) (string, error) {
+	if parent, err := installerCache(elevated); err == nil {
+		if mkdirErr := os.MkdirAll(parent, 0o700); mkdirErr == nil {
+			if staging, tempErr := os.MkdirTemp(parent, "setup-"); tempErr == nil {
+				return staging, nil
+			}
+		}
+	}
+	staging, err := os.MkdirTemp("", "vgt-setup-")
+	if err != nil {
+		return "", fmt.Errorf("kein beschreibbares Installations-Stagingverzeichnis: %w", err)
+	}
+	return staging, nil
 }
 
 func extractArchive(raw []byte, destination string) error {

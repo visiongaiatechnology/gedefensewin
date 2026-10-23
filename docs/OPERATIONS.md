@@ -27,7 +27,21 @@ Sovereign, Isolation, USB-Sperre und Controlled Folder Access können legitime A
 
 ## Diagnose
 
-Statusdaten werden über das Security Center gelesen. Schutzwürdige Dateien unter ProgramData besitzen absichtlich keine allgemeinen Leserechte. ACLs sollen nicht zur bequemeren Diagnose abgeschwächt werden; Diagnosen erfolgen über die authentifizierte API oder einen explizit erhöhten, administrativen Prozess.
+Statusdaten werden über das Security Center gelesen. Schutzwürdige Dateien unter ProgramData besitzen absichtlich keine allgemeinen Leserechte. ACLs sollen nicht zur bequemeren Diagnose abgeschwächt werden; Diagnosen erfolgen über die authentifizierte API oder einen explizit erhöhten, administrativen Prozess. Center und Tray lesen den Dashboard-Token nicht mehr; sie erhalten kurzlebige, per Windows-Prozesstoken verifizierte Operator-Sessions vom Dienst.
+
+## Externer Evidenz-Witness (optional)
+
+Das Evidenz-Ledger kann einen externen Witness-Tip auf einem vom Host getrennten Speicherort (z. B. verschreibbares Netzlaufwerk, Wechselmedium) führen:
+
+```powershell
+# Maschinenweit für den Dienst setzen (Beispielpfad außerhalb von %ProgramData%\VGT\GeDefense):
+[Environment]::SetEnvironmentVariable('VGT_EVIDENCE_WITNESS', '\\witness-host\vgt\gedefense-witness.json', 'Machine')
+```
+
+- Der Pfad muss absolut und außerhalb des Datenverzeichnisses liegen; relative Pfade und Pfade im dataRoot werden abgelehnt.
+- Der Witness enthält nur Sequenz, letzten MAC, Signatur und Public-Key-Fingerprint — keine Secrets.
+- Beim Start wird ein Witness-Tip vor dem lokalen Ledger als Truncation/Rollback erkannt und **fail-closed** abgewiesen; ein fehlendes/nicht erreichbares Medium führt zu einem dokumentierten `DEGRADED`-Status (Verfügbarkeit), nicht zu stillem Ignorieren.
+- Nach einem autorisierten Reset des dataRoot mit neuem Evidenz-Key muss der alte Witness entfernt werden, sonst verweigert der Start den „different evidence key“-Zustand.
 
 ## Deinstallation
 

@@ -1,8 +1,10 @@
 # STATUS: DIAMANT VGT SUPREME
-# Build output
+# Build output (generated; never part of the clean source tree)
 /release/
 /payload/
 /work/
+/sbom/
+/SOURCE-MANIFEST.sha256
 /output/
 /dist/
 /src/GeDefense/windows/work/
@@ -20,6 +22,20 @@
 *.syso
 *.pdb
 *.log
+
+# Handoff / AI-agent artifacts (never published)
+/Next.md
+/MERGE_REPORT.json
+/START_HERE_FULL_MERGED_SOURCE.md
+/GITHUB-UPLOAD.md
+/FULL_SOURCE_SHA256.txt
+/CHANGELOG.md
+/RELEASE-NOTES.md
+/docs/VERIFICATION-*.md
+/docs/AUDIT-REMEDIATION-*.md
+/docs/SUPPLY-CHAIN-*.md
+/docs/TRUST-*.md
+/docs/patch-history/
 
 # Signing material and local certificates
 /certificates/
@@ -39,6 +55,12 @@ windows-policy-baseline.json
 *.jsonl
 *.dmp
 
+# Local environment and secret inputs
+.env
+.env.*
+secrets/
+*.secret
+
 # Editors and operating systems
 .vs/
 .vscode/
@@ -49,22 +71,6 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-
-# Local handoff, archive provenance and optional dataset
-/Next.md
-/FULL_SOURCE_SHA256.txt
-/MERGE_REPORT.json
+# Optional licensed dataset
 /data/geoip.csv*
 node_modules/
-
-[Nn]ext.md
-[Nn]ext.*
-audit_matrix.json
-code_cartography.md
-*AUDIT*.md
-*ATTACK*.md
-GITHUB-UPLOAD*.md
-START_HERE*.md
-*.orig
-*.bak
-*.tmp

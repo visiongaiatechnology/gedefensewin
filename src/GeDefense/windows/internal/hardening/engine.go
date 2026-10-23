@@ -57,6 +57,11 @@ type Result struct {
 	USBStorageBlocked         bool   `json:"UsbStorageBlocked"`
 	RemoteDesktopDisabled     bool   `json:"RemoteDesktopDisabled"`
 	WindowsUpdate             bool   `json:"WindowsUpdate"`
+	// DefenderTelemetry carries the detailed, explicitly-nullable Defender and
+	// firewall snapshot. It is nil for legacy payloads that do not emit it.
+	DefenderTelemetry *DefenderTelemetry `json:"DefenderTelemetry"`
+	// ApplyReport is present only for ApplyConfig operations.
+	ApplyReport *SettingsApplyReport `json:"ApplyReport,omitempty"`
 }
 
 type ComponentStatus struct {
@@ -97,7 +102,7 @@ func New(script, operationRoot string, ledger *evidence.Ledger) (*Engine, error)
 }
 
 func (e *Engine) Audit(ctx context.Context) (Result, error) {
-	return e.execute(ctx, "Audit", "EnterpriseBalanced", "")
+	return e.execute(ctx, "Audit", "EnterpriseBalanced", "", "", "Audit:EnterpriseBalanced")
 }
 
 func (e *Engine) Posture(ctx context.Context) (Result, error) {
@@ -137,11 +142,11 @@ func (e *Engine) Enforce(ctx context.Context, profile string) (Result, error) {
 	if profile != "EnterpriseBalanced" && profile != "Isolation" {
 		return Result{}, errors.New("profile rejected")
 	}
-	return e.execute(ctx, "Enforce", profile, "")
+	return e.execute(ctx, "Enforce", profile, "", "", "Enforce:"+profile)
 }
 
 func (e *Engine) Rollback(ctx context.Context) (Result, error) {
-	return e.execute(ctx, "Rollback", "EnterpriseBalanced", "")
+	return e.execute(ctx, "Rollback", "EnterpriseBalanced", "", "", "Rollback:EnterpriseBalanced")
 }
 
 func (e *Engine) Components(ctx context.Context) ([]ComponentStatus, error) {
@@ -153,18 +158,26 @@ func (e *Engine) Components(ctx context.Context) ([]ComponentStatus, error) {
 }
 
 func (e *Engine) EnforceComponent(ctx context.Context, component string) ([]ComponentStatus, error) {
-	allowed := map[string]struct{}{"DefenderCloud": {}, "ASR": {}, "ControlledFolderAccess": {}, "Firewall": {}, "CredentialGuard": {}, "MemoryIntegrity": {}, "LSASS": {}, "SMB": {}, "PowerShellLogging": {}, "UAC": {}, "USBStorage": {}, "RemoteDesktop": {}}
-	if _, exists := allowed[component]; !exists {
+	if !isSupportedComponent(component) {
 		return nil, errors.New("hardening component rejected")
 	}
-	result, err := e.execute(ctx, "Component", "EnterpriseBalanced", component)
+	result, err := e.execute(ctx, "Component", "EnterpriseBalanced", component, "", "Component:"+component)
 	if err != nil {
 		return nil, err
 	}
 	return componentsFromResult(result), nil
 }
 
-func (e *Engine) execute(parent context.Context, mode, profile, component string) (result Result, err error) {
+func isSupportedComponent(component string) bool {
+	for _, definition := range componentDefinitions {
+		if definition.ID == component {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) execute(parent context.Context, mode, profile, component, configPath, ledgerAction string) (result Result, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
@@ -174,13 +187,16 @@ func (e *Engine) execute(parent context.Context, mode, profile, component string
 	powerShell, pathErr := winexec.PowerShell()
 	if pathErr != nil {
 		if e.ledger != nil {
-			_ = e.ledger.Append("hardening.operation", mode+":"+profile, "failed")
+			_ = e.ledger.Append("hardening.operation", ledgerAction, "failed")
 		}
 		return Result{}, pathErr
 	}
 	arguments := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "AllSigned", "-File", e.script, "-Mode", mode, "-Profile", profile, "-OutputPath", output}
 	if component != "" {
 		arguments = append(arguments, "-Component", component)
+	}
+	if configPath != "" {
+		arguments = append(arguments, "-ConfigPath", configPath)
 	}
 	command := exec.CommandContext(ctx, powerShell, arguments...)
 	command.WaitDelay = 3 * time.Second
@@ -193,45 +209,58 @@ func (e *Engine) execute(parent context.Context, mode, profile, component string
 	var stderr bytes.Buffer
 	command.Stdout = io.Discard
 	command.Stderr = &stderr
-	err = command.Run()
+	err = winexec.RunTracked(command)
 	if err != nil {
 		if e.ledger != nil {
-			_ = e.ledger.Append("hardening.operation", mode+":"+profile, "failed")
+			_ = e.ledger.Append("hardening.operation", ledgerAction, "failed")
 		}
 		return Result{}, fmt.Errorf("hardening operation failed: %w", err)
 	}
-	raw, readErr := os.ReadFile(output)
+	result, readErr := readBoundedResult(output)
 	if readErr != nil {
+		if e.ledger != nil {
+			_ = e.ledger.Append("hardening.operation", ledgerAction, "failed")
+		}
 		return Result{}, readErr
-	}
-	if err := json.Unmarshal(bytes.TrimPrefix(raw, []byte{0xef, 0xbb, 0xbf}), &result); err != nil {
-		return Result{}, errors.New("hardening result decoding failed")
 	}
 	e.cacheMu.Lock()
 	e.cached = result
 	e.cachedAt = time.Now()
 	e.cacheMu.Unlock()
 	if e.ledger != nil {
-		if err := e.ledger.Append("hardening.operation", mode+":"+profile, "verified"); err != nil {
+		if err := e.ledger.Append("hardening.operation", ledgerAction, "verified"); err != nil {
 			return Result{}, err
 		}
 	}
 	return result, nil
 }
 
-func componentsFromResult(result Result) []ComponentStatus {
-	return []ComponentStatus{
-		{ID: "DefenderCloud", Name: "Defender Cloud & Network", Category: "DEFENDER", Active: result.CloudProtection && result.NetworkProtection && result.RealTimeProtection, Description: "Cloudbasierter Blockschutz, PUA, sichere Samples und Netzwerkinspektion."},
-		{ID: "ASR", Name: "Attack Surface Reduction", Category: "DEFENDER", Active: result.ASRRules >= 11 && result.ASRBlockRules >= 11, Description: "Elf priorisierte ASR-Regeln im Blockmodus."},
-		{ID: "ControlledFolderAccess", Name: "Controlled Folder Access", Category: "RANSOMWARE", Active: result.ControlledFolderAccess, Description: "Schreibzugriffe auf geschützte Ordner werden durch Defender kontrolliert."},
-		{ID: "Firewall", Name: "Windows Firewall", Category: "NETZWERK", Active: result.Firewall, Description: "Alle Profile aktiv; eingehende Verbindungen standardmäßig blockiert."},
-		{ID: "CredentialGuard", Name: "Credential Guard", Category: "ISOLATION", Active: result.CredentialGuard, RebootRequired: !result.CredentialGuard, Description: "Anmeldegeheimnisse werden in VBS-isolierter Umgebung geschützt."},
-		{ID: "MemoryIntegrity", Name: "Memory Integrity / HVCI", Category: "KERNEL", Active: result.MemoryIntegrity && result.VulnerableDriverBlocklist, RebootRequired: !result.MemoryIntegrity, Description: "Hypervisor-gestützte Codeintegrität und Microsoft-Treiberblockliste."},
-		{ID: "LSASS", Name: "LSASS Protected Process", Category: "IDENTITÄT", Active: result.LSAProtection, RebootRequired: !result.LSAProtection, Description: "LSASS läuft als geschützter Prozess; WDigest-Credentials bleiben deaktiviert."},
-		{ID: "SMB", Name: "SMB-Härtung", Category: "NETZWERK", Active: result.SMBHardening, RebootRequired: !result.SMBHardening, Description: "SMB1 deaktiviert und Signierung für Client und Server erzwungen."},
-		{ID: "PowerShellLogging", Name: "PowerShell & Process Audit", Category: "TELEMETRIE", Active: result.PowerShellLogging, Description: "ScriptBlock-, Modul- und Prozessbefehlszeilen-Protokollierung."},
-		{ID: "UAC", Name: "UAC Secure Desktop", Category: "IDENTITÄT", Active: result.UACSecureDesktop, Description: "Admin-Zustimmung und Secure Desktop sind erzwungen."},
-		{ID: "USBStorage", Name: "USB-Massenspeicher sperren", Category: "ISOLATION", Active: result.USBStorageBlocked, RebootRequired: false, Description: "USBSTOR wird vollständig deaktiviert."},
-		{ID: "RemoteDesktop", Name: "Remote Desktop deaktivieren", Category: "NETZWERK", Active: result.RemoteDesktopDisabled, Description: "Eingehende RDP-Sitzungen werden blockiert."},
+// maxHardeningResultBytes bounds the decoded PowerShell result file so a
+// compromised or misconfigured engine cannot force unbounded memory growth.
+const maxHardeningResultBytes = 1 << 20
+
+func readBoundedResult(path string) (result Result, err error) {
+	file, openErr := os.Open(path)
+	if openErr != nil {
+		return Result{}, openErr
 	}
+	defer cleanup.CloseInto(&err, file)
+	info, statErr := file.Stat()
+	if statErr != nil {
+		return Result{}, statErr
+	}
+	if info.Size() <= 0 || info.Size() > maxHardeningResultBytes {
+		return Result{}, errors.New("hardening result size rejected")
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(file, maxHardeningResultBytes+1))
+	if readErr != nil {
+		return Result{}, readErr
+	}
+	if len(raw) == 0 || len(raw) > maxHardeningResultBytes {
+		return Result{}, errors.New("hardening result size rejected")
+	}
+	if err := json.Unmarshal(bytes.TrimPrefix(raw, []byte{0xef, 0xbb, 0xbf}), &result); err != nil {
+		return Result{}, errors.New("hardening result decoding failed")
+	}
+	return result, nil
 }

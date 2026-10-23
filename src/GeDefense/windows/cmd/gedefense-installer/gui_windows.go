@@ -5,7 +5,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	_ "embed"
 	"fmt"
+	"image/png"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,6 +23,12 @@ import (
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/product"
 )
+
+// The 52 px mark is pre-composited on the installer tile colour, so it can be
+// blitted with SRCCOPY and needs no runtime image decoder or material file.
+//
+//go:embed assets/gedefense-mark.png
+var installerLogoPNG []byte
 
 const (
 	wmDestroy        = 0x0002
@@ -72,22 +81,25 @@ const (
 
 	idErrorBox = 202
 
-	defaultWidth  = 620
-	defaultHeight = 420
-	minWidth      = 540
-	minHeight     = 380
+	defaultWidth  = 780
+	defaultHeight = 540
+	minWidth      = 700
+	minHeight     = 480
 
 	dwmwaUseImmersiveDarkMode   = 20
 	dwmwaWindowCornerPreference = 33
 	dwmwaBorderColor            = 34
+	dwmwaCaptionColor           = 35
+	dwmwaTextColor              = 36
 	dwmwaSystemBackdropType     = 38
 
 	dwmwcpRound           = 2
 	dwmsbtMainWindow      = 2 // Mica
 	dwmsbtTransientWindow = 3 // Acrylic Glass
 
-	idcArrow = 32512
-	idcHand  = 32649
+	idcArrow  = 32512
+	idcShield = 32518
+	idcHand   = 32649
 )
 
 var (
@@ -143,6 +155,7 @@ var (
 	procMoveToEx               = gdi32.NewProc("MoveToEx")
 	procLineTo                 = gdi32.NewProc("LineTo")
 	procPolygon                = gdi32.NewProc("Polygon")
+	procStretchDIBits          = gdi32.NewProc("StretchDIBits")
 
 	procInitCommonControlsEx  = comctl32.NewProc("InitCommonControlsEx")
 	procShellExecuteW         = shell32.NewProc("ShellExecuteW")
@@ -202,16 +215,96 @@ type initCommonControlsEx struct {
 	ICC  uint32
 }
 
+type bitmapInfoHeader struct {
+	Size          uint32
+	Width         int32
+	Height        int32
+	Planes        uint16
+	BitCount      uint16
+	Compression   uint32
+	SizeImage     uint32
+	XPelsPerMeter int32
+	YPelsPerMeter int32
+	ClrUsed       uint32
+	ClrImportant  uint32
+}
+
+type rgbQuad struct {
+	Blue, Green, Red, Reserved byte
+}
+
+type bitmapInfo struct {
+	Header bitmapInfoHeader
+	Colors [1]rgbQuad
+}
+
+func (w *setupWizard) drawInstallerLogo(hdc uintptr, left, top int32) bool {
+	if len(w.logoPixels) == 0 || w.logoW <= 0 || w.logoH <= 0 {
+		return false
+	}
+	info := bitmapInfo{Header: bitmapInfoHeader{
+		Size:        40,
+		Width:       w.logoW,
+		Height:      -w.logoH,
+		Planes:      1,
+		BitCount:    32,
+		Compression: 0,
+	}}
+	_, _, _ = procStretchDIBits.Call(
+		hdc,
+		uintptr(left), uintptr(top), uintptr(w.logoW), uintptr(w.logoH),
+		0, 0, uintptr(w.logoW), uintptr(w.logoH),
+		uintptr(unsafe.Pointer(&w.logoPixels[0])),
+		uintptr(unsafe.Pointer(&info)),
+		0,
+		uintptr(srcCopy),
+	)
+	return true
+}
+
+func decodeInstallerLogo() (pixels []byte, width, height int32) {
+	image, err := png.Decode(bytes.NewReader(installerLogoPNG))
+	if err != nil || image == nil {
+		return nil, 0, 0
+	}
+	bounds := image.Bounds()
+	width = int32(bounds.Dx())
+	height = int32(bounds.Dy())
+	if width <= 0 || height <= 0 || width > 256 || height > 256 {
+		return nil, 0, 0
+	}
+	pixels = make([]byte, int(width*height*4))
+	for y := int32(0); y < height; y++ {
+		for x := int32(0); x < width; x++ {
+			r, g, b, _ := image.At(bounds.Min.X+int(x), bounds.Min.Y+int(y)).RGBA()
+			offset := int((y*width + x) * 4)
+			pixels[offset] = byte(b >> 8)
+			pixels[offset+1] = byte(g >> 8)
+			pixels[offset+2] = byte(r >> 8)
+			pixels[offset+3] = 0xFF
+		}
+	}
+	return pixels, width, height
+}
+
 type setupWizard struct {
 	hwnd         uintptr
 	hwndErrorBox uintptr
 
-	fontTitle   uintptr
-	fontBadge   uintptr
-	fontHeader  uintptr
-	fontRegular uintptr
-	fontSmall   uintptr
-	fontMono    uintptr
+	fontBrand    uintptr
+	fontTitle    uintptr
+	fontBadge    uintptr
+	fontHeader   uintptr
+	fontHeadline uintptr
+	fontMetric   uintptr
+	fontStep     uintptr
+	fontRegular  uintptr
+	fontSmall    uintptr
+	fontMono     uintptr
+
+	logoPixels []byte
+	logoW      int32
+	logoH      int32
 
 	// Pens
 	penTopRim    uintptr
@@ -237,6 +330,10 @@ type setupWizard struct {
 	brushBtnDis   uintptr
 	brushErrorBg  uintptr
 	brushShieldBg uintptr
+	brushGlow     uintptr
+	brushHeader   uintptr
+	brushStepIdle uintptr
+	brushStepDone uintptr
 
 	cursorArrow uintptr
 	cursorHand  uintptr
@@ -249,6 +346,7 @@ type setupWizard struct {
 	success    bool
 	errMessage string
 	uninstall  bool
+	preview    bool
 	currentW   int32
 	currentH   int32
 	btnHover   bool
@@ -281,8 +379,16 @@ func applyDwmGlassAttributes(hwnd uintptr) {
 		cornerPref := int32(dwmwcpRound)
 		_, _, _ = procDwmSetWindowAttribute.Call(hwnd, dwmwaWindowCornerPreference, uintptr(unsafe.Pointer(&cornerPref)), 4)
 
-		borderColor := uint32(0x00D8B400) // subtle cyan border RGB(0, 180, 216)
+		borderColor := uint32(0x005A3A0F) // deep marine border RGB(15, 58, 90)
 		_, _, _ = procDwmSetWindowAttribute.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+
+		// Windows 11 caption attributes. They keep the native title bar inside
+		// the same navy material system rather than leaving a light strip above
+		// the dark client area.
+		captionColor := uint32(0x001B0F04) // RGB(4, 15, 27)
+		_, _, _ = procDwmSetWindowAttribute.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&captionColor)), 4)
+		captionText := uint32(0x00FFF8F1) // RGB(241, 248, 255)
+		_, _, _ = procDwmSetWindowAttribute.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&captionText)), 4)
 
 		backdrop := int32(dwmsbtTransientWindow) // Acrylic Glass
 		_, _, _ = procDwmSetWindowAttribute.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
@@ -429,7 +535,7 @@ func setupWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return brush
 
 	case wmClose:
-		if w != nil && !w.isDone() {
+		if w != nil && !w.isDone() && !w.preview {
 			return 0
 		}
 		_, _, _ = procDestroyWindow.Call(hwnd)
@@ -450,10 +556,10 @@ func (w *setupWizard) getButtonRect() rect {
 	curH := w.currentH
 	w.mu.Unlock()
 
-	btnW := int32(130)
-	btnH := int32(36)
-	btnX := curW - btnW - 24
-	btnY := curH - btnH - 12
+	btnW := int32(168)
+	btnH := int32(40)
+	btnX := curW - btnW - 30
+	btnY := curH - 62
 	return rect{Left: btnX, Top: btnY, Right: btnX + btnW, Bottom: btnY + btnH}
 }
 
@@ -549,7 +655,7 @@ func (w *setupWizard) paint() {
 	memBmp, _, _ := procCreateCompatibleBitmap.Call(hdc, uintptr(width), uintptr(height))
 	oldBmp, _, _ := procSelectObject.Call(memDC, memBmp)
 
-	w.drawScene(memDC, width, height)
+	w.drawSceneV5(memDC, width, height)
 
 	_, _, _ = procBitBlt.Call(hdc, 0, 0, uintptr(width), uintptr(height), memDC, 0, 0, srcCopy)
 
@@ -558,7 +664,11 @@ func (w *setupWizard) paint() {
 	_, _, _ = procDeleteDC.Call(memDC)
 }
 
-func (w *setupWizard) drawScene(hdc uintptr, width, height int32) {
+// drawSceneV5 renders the installer as a calm, high-trust VGT surface. It is
+// deliberately painted with a small GDI vocabulary: deep navy planes, one ice
+// signal, readable type and an explicit progress/step rail. No gradients or
+// animation are required for hierarchy.
+func (w *setupWizard) drawSceneV5(hdc uintptr, width, height int32) {
 	w.mu.Lock()
 	pct := w.percent
 	status := w.statusText
@@ -568,253 +678,276 @@ func (w *setupWizard) drawScene(hdc uintptr, width, height int32) {
 	isUninstall := w.uninstall
 	hover := w.btnHover
 	pressed := w.btnPressed
+	errMessage := w.errMessage
 	w.mu.Unlock()
 
 	hasError := done && !success
-
-	// 1. Dark Obsidian Glass Canvas Background
-	_, _, _ = procSelectObject.Call(hdc, w.brushWindowBg)
-	_, _, _ = procSelectObject.Call(hdc, w.penDivider)
-	_, _, _ = procRectangle.Call(hdc, 0, 0, uintptr(width), uintptr(height))
-
-	// 2. Neon Cyan Glow Rim on Top Edge (2px)
-	_, _, _ = procSelectObject.Call(hdc, w.penTopRim)
-	_, _, _ = procMoveToEx.Call(hdc, 0, 0, 0)
-	_, _, _ = procLineTo.Call(hdc, uintptr(width), 0)
-	_, _, _ = procMoveToEx.Call(hdc, 0, 1, 0)
-	_, _, _ = procLineTo.Call(hdc, uintptr(width), 1)
-
-	// 3. Cyber Shield Emblem (left: 24, top: 18)
-	shieldPts := []point{
-		{X: 24, Y: 18},
-		{X: 52, Y: 18},
-		{X: 52, Y: 36},
-		{X: 38, Y: 52},
-		{X: 24, Y: 36},
+	// The installer's client area is intentionally composed around a clear
+	// header, one primary status plane and a persistent footer.
+	headerH := int32(104)
+	footerH := int32(84)
+	cardX, cardY := int32(28), int32(118)
+	cardW := width - 56
+	cardBottom := height - footerH - 12
+	if cardBottom < cardY+210 {
+		cardBottom = cardY + 210
 	}
-	_, _, _ = procSelectObject.Call(hdc, w.brushShieldBg)
-	_, _, _ = procSelectObject.Call(hdc, w.penShield)
-	_, _, _ = procPolygon.Call(hdc, uintptr(unsafe.Pointer(&shieldPts[0])), uintptr(len(shieldPts)))
 
-	// Inner Core Accent
-	_, _, _ = procSelectObject.Call(hdc, w.penTopRim)
-	_, _, _ = procMoveToEx.Call(hdc, 38, 25, 0)
-	_, _, _ = procLineTo.Call(hdc, 38, 42)
+	// Environment: a quiet pigment field with one controlled light zone.
+	selectObj := func(obj uintptr) {
+		_, _, _ = procSelectObject.Call(hdc, obj)
+	}
+	fillRect := func(left, top, right, bottom int32, brush, pen uintptr) {
+		selectObj(brush)
+		selectObj(pen)
+		_, _, _ = procRectangle.Call(hdc, uintptr(left), uintptr(top), uintptr(right), uintptr(bottom))
+	}
+	fillRound := func(left, top, right, bottom, radius int32, brush, pen uintptr) {
+		selectObj(brush)
+		selectObj(pen)
+		_, _, _ = procRoundRect.Call(hdc, uintptr(left), uintptr(top), uintptr(right), uintptr(bottom), uintptr(radius), uintptr(radius))
+	}
+	line := func(x1, y1, x2, y2 int32, pen uintptr) {
+		selectObj(pen)
+		_, _, _ = procMoveToEx.Call(hdc, uintptr(x1), uintptr(y1), 0)
+		_, _, _ = procLineTo.Call(hdc, uintptr(x2), uintptr(y2))
+	}
+	text := func(value string, font, color uintptr, left, top, right, bottom int32, flags uintptr) {
+		if value == "" {
+			return
+		}
+		ptr, err := syscall.UTF16PtrFromString(value)
+		if err != nil {
+			return
+		}
+		selectObj(font)
+		_, _, _ = procSetTextColor.Call(hdc, color)
+		rc := rect{Left: left, Top: top, Right: right, Bottom: bottom}
+		_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(ptr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&rc)), flags)
+	}
+	textLeft := func(value string, font, color uintptr, left, top, right, bottom int32) {
+		text(value, font, color, left, top, right, bottom, dtLeft|dtVCenter|dtSingleLine|dtNoPrefix)
+	}
+	textWrapped := func(value string, font, color uintptr, left, top, right, bottom int32) {
+		text(value, font, color, left, top, right, bottom, dtLeft|dtWordBreak|dtNoPrefix)
+	}
+	textRight := func(value string, font, color uintptr, left, top, right, bottom int32) {
+		text(value, font, color, left, top, right, bottom, dtRight|dtVCenter|dtSingleLine|dtNoPrefix)
+	}
 
-	// 4. Header Titles & Version Badge
-	_, _, _ = procSetBkMode.Call(hdc, 1)
+	_, _, _ = procSetBkMode.Call(hdc, 1) // TRANSPARENT
+	fillRect(0, 0, width, height, w.brushWindowBg, w.penDivider)
+	// A restrained cool-light wash behind the wordmark. It has no semantic
+	// role other than establishing the physical light source.
+	fillRound(0, 0, width, 190, 32, w.brushGlow, w.penDivider)
+	fillRect(0, 0, width, headerH, w.brushHeader, w.penDivider)
+	line(0, headerH, width, headerH, w.penDivider)
 
-	// App Name
-	titleText := "VGT GE·DEFENSE"
+	// Brand mark: the real GeDefense emblem, embedded and flattened onto the
+	// header fill so it stays crisp without an external asset or alpha runtime.
+	if !w.drawInstallerLogo(hdc, 28, 20) {
+		fillRound(30, 25, 82, 77, 13, w.brushShieldBg, w.penCardRim)
+		shield := []point{{X: 56, Y: 33}, {X: 68, Y: 39}, {X: 68, Y: 52}, {X: 56, Y: 66}, {X: 44, Y: 52}, {X: 44, Y: 39}}
+		selectObj(w.brushHeader)
+		selectObj(w.penShield)
+		_, _, _ = procPolygon.Call(hdc, uintptr(unsafe.Pointer(&shield[0])), uintptr(len(shield)))
+		selectObj(w.penShield)
+		_, _, _ = procMoveToEx.Call(hdc, 51, 49, 0)
+		_, _, _ = procLineTo.Call(hdc, 55, 54)
+		_, _, _ = procLineTo.Call(hdc, 63, 44)
+	}
+
 	if isUninstall {
-		titleText = "VGT GE·DEFENSE DEINSTALLATION"
-	}
-	titlePtr, _ := syscall.UTF16PtrFromString(titleText)
-	titleRc := rect{Left: 64, Top: 16, Right: 300, Bottom: 42}
-	_, _, _ = procSetTextColor.Call(hdc, rgb(255, 255, 255))
-	_, _, _ = procSelectObject.Call(hdc, w.fontTitle)
-	_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(titlePtr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&titleRc)), dtLeft|dtVCenter|dtSingleLine|dtNoPrefix)
-
-	// Version Glass Badge (pill)
-	badgeX := int32(236)
-	if isUninstall {
-		badgeX = int32(410)
-	}
-	badgeW := int32(110)
-	_, _, _ = procSelectObject.Call(hdc, w.brushBadgeBg)
-	_, _, _ = procSelectObject.Call(hdc, w.penBadgeRim)
-	_, _, _ = procRoundRect.Call(hdc, uintptr(badgeX), 18, uintptr(badgeX+badgeW), 40, 10, 10)
-
-	badgeText := "v" + product.Version
-	badgePtr, _ := syscall.UTF16PtrFromString(badgeText)
-	badgeRc := rect{Left: badgeX, Top: 18, Right: badgeX + badgeW, Bottom: 40}
-	_, _, _ = procSetTextColor.Call(hdc, rgb(56, 189, 248)) // Electric Cyan
-	_, _, _ = procSelectObject.Call(hdc, w.fontBadge)
-	_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(badgePtr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&badgeRc)), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
-
-	// Subtitle
-	subText := "SOVEREIGN ENDPOINT PROTECTION — DIAMANT VGT SUPREME"
-	if isUninstall {
-		subText = "Entfernen der Sovereign Security Komponenten"
-	}
-	subPtr, _ := syscall.UTF16PtrFromString(subText)
-	subRc := rect{Left: 64, Top: 44, Right: width - 24, Bottom: 64}
-	_, _, _ = procSetTextColor.Call(hdc, rgb(148, 163, 184)) // Steel Slate
-	_, _, _ = procSelectObject.Call(hdc, w.fontSmall)
-	_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(subPtr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&subRc)), dtLeft|dtVCenter|dtSingleLine|dtNoPrefix)
-
-	// 5. Divider Line Top (Y = 72)
-	_, _, _ = procSelectObject.Call(hdc, w.penDivider)
-	_, _, _ = procMoveToEx.Call(hdc, 0, 72, 0)
-	_, _, _ = procLineTo.Call(hdc, uintptr(width), 72)
-
-	cardMargin := int32(24)
-	cardTop := int32(88)
-	cardBottom := height - 66
-	cardW := width - (cardMargin * 2)
-
-	if hasError {
-		// Glass Error Card Header
-		errHeadText := "INSTALLATION FEHLGESCHLAGEN"
-		errHeadPtr, _ := syscall.UTF16PtrFromString(errHeadText)
-		errHeadRc := rect{Left: cardMargin + 16, Top: cardTop + 10, Right: width - cardMargin - 16, Bottom: cardTop + 34}
-		_, _, _ = procSetTextColor.Call(hdc, rgb(248, 113, 113)) // Red
-		_, _, _ = procSelectObject.Call(hdc, w.fontHeader)
-		_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(errHeadPtr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&errHeadRc)), dtLeft|dtVCenter|dtSingleLine|dtNoPrefix)
+		textLeft("GeDefense", w.fontBrand, rgb(241, 248, 255), 96, 20, width-170, 48)
+		textLeft("TITAN · SOVEREIGN INTEGRITY · DEINSTALLATION", w.fontSmall, rgb(137, 177, 201), 97, 48, width-170, 66)
 	} else {
-		// 6. The Central Frosted Glass Card
-		_, _, _ = procSelectObject.Call(hdc, w.brushCardBg)
-		_, _, _ = procSelectObject.Call(hdc, w.penCardRim)
-		_, _, _ = procRoundRect.Call(hdc, uintptr(cardMargin), uintptr(cardTop), uintptr(cardMargin+cardW), uintptr(cardBottom), 14, 14)
+		textLeft("GeDefense", w.fontBrand, rgb(241, 248, 255), 96, 20, width-170, 48)
+		textLeft("TITAN · SOVEREIGN ENDPOINT INTEGRITY · SETUP", w.fontSmall, rgb(137, 177, 201), 97, 48, width-170, 66)
+	}
+	textLeft("Lokale Installation · keine Cloud-Abhängigkeit", w.fontSmall, rgb(104, 143, 166), 97, 67, width-170, 84)
 
-		// Inner Status Headline
-		dispStatus := status
-		if dispStatus == "" {
-			dispStatus = "Vorbereitung..."
-		}
-		if done && success {
-			if isUninstall {
-				dispStatus = "Deinstallation erfolgreich abgeschlossen"
-			} else {
-				dispStatus = "Installation erfolgreich abgeschlossen!"
-			}
-		}
-		stPtr, _ := syscall.UTF16PtrFromString(dispStatus)
-		stRc := rect{Left: cardMargin + 20, Top: cardTop + 18, Right: cardMargin + cardW - 20, Bottom: cardTop + 44}
-		_, _, _ = procSetTextColor.Call(hdc, rgb(248, 250, 252)) // Crisp White
-		_, _, _ = procSelectObject.Call(hdc, w.fontHeader)
-		_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(stPtr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&stRc)), dtLeft|dtVCenter|dtSingleLine|dtNoPrefix)
+	badgeW := int32(104)
+	badgeX := width - badgeW - 30
+	fillRound(badgeX, 27, badgeX+badgeW, 53, 13, w.brushBadgeBg, w.penBadgeRim)
+	text("TITAN "+product.Version, w.fontBadge, rgb(242, 205, 157), badgeX, 27, badgeX+badgeW, 53, dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
+	textRight("SIGNIERT · LOKAL", w.fontSmall, rgb(104, 143, 166), badgeX-40, 59, width-30, 77)
 
-		// Inner Detail Ticker
-		dispDetail := detail
-		if dispDetail == "" {
-			dispDetail = "Sovereign Systemumgebung wird initialisiert..."
-		}
-		if done && success {
-			if isUninstall {
-				dispDetail = "GeDefense wurde sicher vom Host entfernt."
-			} else {
-				dispDetail = "Das Security Center ist einsatzbereit und im Startmenü registriert."
-			}
-		}
-		dtPtr, _ := syscall.UTF16PtrFromString(dispDetail)
-		dtRc := rect{Left: cardMargin + 20, Top: cardTop + 46, Right: cardMargin + cardW - 20, Bottom: cardTop + 84}
-		_, _, _ = procSetTextColor.Call(hdc, rgb(148, 163, 184)) // Soft Cyan-Grey
-		_, _, _ = procSelectObject.Call(hdc, w.fontRegular)
-		_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(dtPtr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&dtRc)), dtLeft|dtWordBreak|dtNoPrefix)
-
-		// Glass Progress Bar Capsule
-		progX := cardMargin + 20
-		progY := cardTop + 96
-		progW := cardW - 40
-		progH := int32(16)
-
-		// Outer Dark Track
-		_, _, _ = procSelectObject.Call(hdc, w.brushTrackBg)
-		_, _, _ = procSelectObject.Call(hdc, w.penTrackRim)
-		_, _, _ = procRoundRect.Call(hdc, uintptr(progX), uintptr(progY), uintptr(progX+progW), uintptr(progY+progH), 8, 8)
-
-		// Inner Glowing Fill
-		if pct > 0 {
-			fillW := int32(float64(progW) * float64(pct) / 100.0)
-			if fillW < 10 {
-				fillW = 10
-			}
-			if fillW > progW {
-				fillW = progW
-			}
-
-			fillBrush := w.brushProgFill
-			if done && success {
-				fillBrush = w.brushProgDone // Emerald Green
-			}
-
-			_, _, _ = procSelectObject.Call(hdc, fillBrush)
-			_, _, _ = procSelectObject.Call(hdc, w.penTopRim)
-			if done && success {
-				_, _, _ = procSelectObject.Call(hdc, w.penCardRim)
-			}
-			_, _, _ = procRoundRect.Call(hdc, uintptr(progX), uintptr(progY), uintptr(progX+fillW), uintptr(progY+progH), 8, 8)
-		}
-
-		// Progress Meta Row
-		metaY := progY + 24
-		bulletText := "● Phase: In Bearbeitung..."
-		bulletColor := rgb(56, 189, 248)
-		if done && success {
-			bulletText = "✔ Status: Guarded aktiv (Sovereign Endpoint)"
-			bulletColor = rgb(52, 211, 153)
-		}
-
-		bPtr, _ := syscall.UTF16PtrFromString(bulletText)
-		bRc := rect{Left: progX, Top: metaY, Right: progX + (progW / 2), Bottom: metaY + 20}
-		_, _, _ = procSetTextColor.Call(hdc, bulletColor)
-		_, _, _ = procSelectObject.Call(hdc, w.fontSmall)
-		_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(bPtr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&bRc)), dtLeft|dtVCenter|dtSingleLine|dtNoPrefix)
-
-		pctText := fmt.Sprintf("%d%%", pct)
-		pctPtr, _ := syscall.UTF16PtrFromString(pctText)
-		pctRc := rect{Left: progX + (progW / 2), Top: metaY - 2, Right: progX + progW, Bottom: metaY + 20}
-		_, _, _ = procSetTextColor.Call(hdc, rgb(0, 229, 255)) // Neon Cyan
-		_, _, _ = procSelectObject.Call(hdc, w.fontHeader)
-		_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(pctPtr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&pctRc)), dtRight|dtVCenter|dtSingleLine|dtNoPrefix)
+	// Primary plane.
+	fillRound(cardX, cardY, cardX+cardW, cardBottom, 18, w.brushCardBg, w.penCardRim)
+	leftX := cardX + 28
+	leftRight := cardX + cardW - 248
+	if leftRight < leftX+300 {
+		leftRight = cardX + cardW - 28
+	}
+	sidecarW := int32(194)
+	sidecarX := cardX + cardW - sidecarW - 24
+	showSidecar := leftRight < sidecarX-20
+	if showSidecar {
+		line(sidecarX-24, cardY+22, sidecarX-24, cardBottom-22, w.penDivider)
 	}
 
-	// 7. Divider Line Bottom (Y = height - 58)
-	_, _, _ = procSelectObject.Call(hdc, w.penDivider)
-	_, _, _ = procMoveToEx.Call(hdc, 0, uintptr(height-58), 0)
-	_, _, _ = procLineTo.Call(hdc, uintptr(width), uintptr(height-58))
+	eyebrow := "INSTALLATION"
+	if isUninstall {
+		eyebrow = "DEINSTALLATION"
+	}
+	textLeft(eyebrow, w.fontStep, rgb(76, 201, 255), leftX, cardY+22, leftRight, cardY+38)
 
-	// 8. Brand Footer
-	brandText := "VisionGaia Technology © 2026 | DIAMANT VGT SUPREME"
-	brandPtr, _ := syscall.UTF16PtrFromString(brandText)
-	brandRc := rect{Left: 24, Top: height - 44, Right: width - 150, Bottom: height - 16}
-	_, _, _ = procSetTextColor.Call(hdc, rgb(100, 116, 139))
-	_, _, _ = procSelectObject.Call(hdc, w.fontSmall)
-	_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(brandPtr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&brandRc)), dtLeft|dtVCenter|dtSingleLine|dtNoPrefix)
-
-	// 9. Modern Glass Action Button (Pill)
-	btnRc := w.getButtonRect()
-	var btnBg uintptr
-	var btnRim uintptr
-	var btnTextColor uintptr
-	btnLabel := "Bitte warten..."
-
-	if !done {
-		btnBg = w.brushBtnDis
-		btnRim = w.penBtnDisRim
-		btnTextColor = rgb(100, 116, 139)
-	} else {
-		if pressed {
-			btnBg = w.brushBtnPress
-		} else if hover {
-			btnBg = w.brushBtnHover
+	headline := status
+	if headline == "" {
+		headline = "Installation wird vorbereitet."
+	}
+	body := detail
+	if done && success {
+		if isUninstall {
+			headline = "GeDefense Titan wurde entfernt."
+			body = "Die Titan-Komponenten wurden vom Host entfernt."
 		} else {
-			btnBg = w.brushBtnNorm
+			headline = "GeDefense Titan ist bereit."
+			body = "Dienst, Sensorik, Quarantäne und Evidenzkette sind verifiziert."
 		}
-		btnRim = w.penBtnRim
-		btnTextColor = rgb(255, 255, 255)
+	} else if hasError {
+		headline = "Installation nicht abgeschlossen."
+		body = "Die Transaktion wurde sicher abgebrochen. Details stehen unten."
+	} else if body == "" {
+		body = "Signatur, Payload und Systemvoraussetzungen werden lokal geprüft."
+	}
+	headlineColor := rgb(241, 248, 255)
+	if hasError {
+		headlineColor = rgb(255, 155, 174)
+	}
+	textWrapped(headline, w.fontHeadline, headlineColor, leftX, cardY+44, leftRight, cardY+84)
+	textWrapped(body, w.fontRegular, rgb(151, 183, 203), leftX, cardY+88, leftRight, cardY+124)
 
+	// The progress rail is a measurement, not a decorative shimmer.
+	barY := cardY + 149
+	barW := leftRight - leftX - 54
+	if barW < 120 {
+		barW = 120
+	}
+	fillRound(leftX, barY, leftX+barW, barY+6, 3, w.brushTrackBg, w.penTrackRim)
+	fillW := int32(float64(barW) * float64(pct) / 100.0)
+	if fillW < 4 && pct > 0 {
+		fillW = 4
+	}
+	if fillW > barW {
+		fillW = barW
+	}
+	if fillW > 0 {
+		fillColor := w.brushProgFill
+		if done && success {
+			fillColor = w.brushProgDone
+		}
+		fillRound(leftX, barY, leftX+fillW, barY+6, 3, fillColor, w.penTrackRim)
+	}
+	textRight(fmt.Sprintf("%d%%", pct), w.fontMetric, rgb(186, 235, 255), leftRight-48, barY-15, leftRight, barY+10)
+	textLeft("SIGNIERTE TRANSAKTION", w.fontSmall, rgb(93, 137, 160), leftX, barY+12, leftRight-58, barY+28)
+
+	// Four explicit phases make the wait explainable without a fake log.
+	stepActive := 1
+	switch {
+	case pct >= 82:
+		stepActive = 4
+	case pct >= 52:
+		stepActive = 3
+	case pct >= 22:
+		stepActive = 2
+	}
+	if done && success {
+		stepActive = 4
+	}
+	steps := []string{"Vorbereitung", "Schutzmodule", "Systemdienst", "Bereitschaft"}
+	if isUninstall {
+		steps = []string{"Prüfung", "Entfernung", "Bereinigung", "Abschluss"}
+	}
+	if !hasError {
+		railY := cardBottom - 47
+		railLeft := leftX + 16
+		railRight := leftRight - 16
+		stepGap := (railRight - railLeft) / int32(len(steps)-1)
+		line(railLeft, railY, railRight, railY, w.penDivider)
+		for index, label := range steps {
+			centerX := railLeft + int32(index)*stepGap
+			state := "idle"
+			if done && success || index+1 < stepActive {
+				state = "done"
+			} else if index+1 == stepActive {
+				state = "active"
+			}
+			dotBrush := w.brushStepIdle
+			dotPen := w.penTrackRim
+			labelColor := rgb(105, 139, 159)
+			if state == "done" {
+				dotBrush = w.brushStepDone
+				dotPen = w.penTopRim
+				labelColor = rgb(87, 218, 183)
+			} else if state == "active" {
+				dotBrush = w.brushProgFill
+				dotPen = w.penTopRim
+				labelColor = rgb(186, 235, 255)
+			}
+			fillRound(centerX-4, railY-4, centerX+4, railY+4, 4, dotBrush, dotPen)
+			text(label, w.fontStep, labelColor, centerX-62, railY+9, centerX+62, railY+24, dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
+		}
+	}
+
+	// A quiet trust sidecar. These are product properties, not invented live
+	// telemetry, so the installer never claims a state it cannot observe.
+	if showSidecar && !hasError {
+		textLeft("INSTALLATIONSRAHMEN", w.fontStep, rgb(105, 151, 174), sidecarX, cardY+22, sidecarX+sidecarW, cardY+38)
+		facts := [][2]string{
+			{"VERSION", "v" + product.Version},
+			{"ZIEL", "Windows x64"},
+			{"MODUS", "Lokal / Offline"},
+			{"DIENST", "GeDefense Titan"},
+		}
+		for index, fact := range facts {
+			rowY := cardY + 54 + int32(index)*40
+			line(sidecarX, rowY+29, sidecarX+sidecarW, rowY+29, w.penDivider)
+			textLeft(fact[0], w.fontStep, rgb(91, 133, 154), sidecarX, rowY, sidecarX+sidecarW, rowY+12)
+			textLeft(fact[1], w.fontRegular, rgb(212, 235, 247), sidecarX, rowY+12, sidecarX+sidecarW, rowY+29)
+		}
+		line(sidecarX, cardBottom-36, sidecarX+sidecarW, cardBottom-36, w.penDivider)
+		textLeft("VGT RELEASE-KANAL", w.fontStep, rgb(91, 133, 154), sidecarX, cardBottom-28, sidecarX+sidecarW, cardBottom-14)
+	}
+
+	// Footer stays visually fixed while the main plane changes state.
+	footerTop := height - footerH
+	line(0, footerTop, width, height, w.penDivider)
+	textLeft("VisionGaia Technology", w.fontStep, rgb(185, 215, 232), 30, footerTop+19, width/2, footerTop+35)
+	textLeft("GeDefense Titan · SOVEREIGN INTEGRITY", w.fontSmall, rgb(151, 126, 96), 30, footerTop+35, width/2, footerTop+52)
+	text("SIGNIERT · OFFLINE", w.fontSmall, rgb(85, 125, 147), width/2, footerTop+26, width-218, footerTop+44, dtRight|dtVCenter|dtSingleLine|dtNoPrefix)
+
+	btnRc := w.getButtonRect()
+	btnHovered := hover && done
+	btnBg := w.brushBtnDis
+	btnPen := w.penBtnDisRim
+	btnTextColor := rgb(104, 136, 151)
+	btnLabel := "Installation läuft"
+	if done {
+		btnBg = w.brushBtnNorm
+		btnPen = w.penBtnRim
+		btnTextColor = rgb(3, 18, 28)
 		if success {
 			if isUninstall {
 				btnLabel = "Schließen"
 			} else {
-				btnLabel = "Fertigstellen"
+				btnLabel = "GeDefense öffnen"
 			}
 		} else {
 			btnLabel = "Schließen"
 		}
+		if pressed {
+			btnBg = w.brushBtnPress
+		} else if btnHovered {
+			btnBg = w.brushBtnHover
+		}
 	}
+	fillRound(btnRc.Left, btnRc.Top, btnRc.Right, btnRc.Bottom, 9, btnBg, btnPen)
+	text(btnLabel, w.fontHeader, btnTextColor, btnRc.Left, btnRc.Top, btnRc.Right, btnRc.Bottom, dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
 
-	_, _, _ = procSelectObject.Call(hdc, btnBg)
-	_, _, _ = procSelectObject.Call(hdc, btnRim)
-	_, _, _ = procRoundRect.Call(hdc, uintptr(btnRc.Left), uintptr(btnRc.Top), uintptr(btnRc.Right), uintptr(btnRc.Bottom), 10, 10)
-
-	btnPtr, _ := syscall.UTF16PtrFromString(btnLabel)
-	textRc := btnRc
-	_, _, _ = procSetTextColor.Call(hdc, btnTextColor)
-	_, _, _ = procSelectObject.Call(hdc, w.fontHeader)
-	_, _, _ = procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(btnPtr)), uintptr(^uint(0)), uintptr(unsafe.Pointer(&textRc)), dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
+	if hasError {
+		textWrapped(errMessage, w.fontSmall, rgb(255, 178, 190), leftX, cardY+126, leftRight, cardY+160)
+	}
 }
 
 func readDiagnosticLogTail(path string, maxLines int) (result []string, err error) {
@@ -850,12 +983,12 @@ func (w *setupWizard) layout(width, height int32) {
 
 	if hasError {
 		if w.hwndErrorBox != 0 {
-			errX := int32(28)
-			errY := int32(124)
-			errW := width - 56
-			errH := height - 194
-			if errH < 80 {
-				errH = 80
+			errX := int32(50)
+			errY := int32(246)
+			errW := width - 100
+			errH := height - 348
+			if errH < 70 {
+				errH = 70
 			}
 			_, _, _ = procShowWindow.Call(w.hwndErrorBox, 5)
 			_, _, _ = procMoveWindow.Call(w.hwndErrorBox, uintptr(errX), uintptr(errY), uintptr(errW), uintptr(errH), 1)
@@ -887,23 +1020,10 @@ func (w *setupWizard) onActionClicked() {
 }
 
 func (w *setupWizard) cleanup() {
-	if w.fontTitle != 0 {
-		_, _, _ = procDeleteObject.Call(w.fontTitle)
-	}
-	if w.fontBadge != 0 {
-		_, _, _ = procDeleteObject.Call(w.fontBadge)
-	}
-	if w.fontHeader != 0 {
-		_, _, _ = procDeleteObject.Call(w.fontHeader)
-	}
-	if w.fontRegular != 0 {
-		_, _, _ = procDeleteObject.Call(w.fontRegular)
-	}
-	if w.fontSmall != 0 {
-		_, _, _ = procDeleteObject.Call(w.fontSmall)
-	}
-	if w.fontMono != 0 {
-		_, _, _ = procDeleteObject.Call(w.fontMono)
+	for _, font := range []uintptr{w.fontBrand, w.fontTitle, w.fontBadge, w.fontHeader, w.fontHeadline, w.fontMetric, w.fontStep, w.fontRegular, w.fontSmall, w.fontMono} {
+		if font != 0 {
+			_, _, _ = procDeleteObject.Call(font)
+		}
 	}
 
 	// Pens
@@ -914,14 +1034,14 @@ func (w *setupWizard) cleanup() {
 	}
 
 	// Brushes
-	for _, b := range []uintptr{w.brushWindowBg, w.brushCardBg, w.brushBadgeBg, w.brushTrackBg, w.brushProgFill, w.brushProgDone, w.brushBtnNorm, w.brushBtnHover, w.brushBtnPress, w.brushBtnDis, w.brushErrorBg, w.brushShieldBg} {
+	for _, b := range []uintptr{w.brushWindowBg, w.brushCardBg, w.brushBadgeBg, w.brushTrackBg, w.brushProgFill, w.brushProgDone, w.brushBtnNorm, w.brushBtnHover, w.brushBtnPress, w.brushBtnDis, w.brushErrorBg, w.brushShieldBg, w.brushGlow, w.brushHeader, w.brushStepIdle, w.brushStepDone} {
 		if b != 0 {
 			_, _, _ = procDeleteObject.Call(b)
 		}
 	}
 }
 
-func runSetupWizard(uninstall, elevated bool) error {
+func runSetupWizard(uninstall, elevated, preview bool) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -935,8 +1055,11 @@ func runSetupWizard(uninstall, elevated bool) error {
 
 	cursorArrow, _, _ := procLoadCursorW.Call(0, uintptr(idcArrow))
 	cursorHand, _, _ := procLoadCursorW.Call(0, uintptr(idcHand))
-	icon, _, _ := procLoadIconW.Call(0, uintptr(idcArrow))
-	classNamePtr, _ := syscall.UTF16PtrFromString("VGTGeDefenseGlassWizardV4")
+	// Windows' standard shield is a better product anchor than the generic
+	// application arrow and is available even when the executable has no
+	// embedded resource section.
+	icon, _, _ := procLoadIconW.Call(0, uintptr(idcShield))
+	classNamePtr, _ := syscall.UTF16PtrFromString("VGTGeDefenseGlassWizardV5")
 
 	wc := wndClassEx{
 		Size:       uint32(unsafe.Sizeof(wndClassEx{})),
@@ -966,9 +1089,9 @@ func runSetupWizard(uninstall, elevated bool) error {
 		y = 0
 	}
 
-	title := fmt.Sprintf("VGT GeDefense Setup — Version %s", product.Version)
+	title := "GeDefense Titan · Setup " + product.Version
 	if uninstall {
-		title = fmt.Sprintf("VGT GeDefense Deinstallation — Version %s", product.Version)
+		title = "GeDefense Titan · Deinstallation"
 	}
 	titlePtr, _ := syscall.UTF16PtrFromString(title)
 
@@ -989,43 +1112,56 @@ func runSetupWizard(uninstall, elevated bool) error {
 
 	applyDwmGlassAttributes(hwnd)
 
-	// GDI Pens
-	penTopRim, _, _ := procCreatePen.Call(0, 2, rgb(0, 229, 255))
-	penDivider, _, _ := procCreatePen.Call(0, 1, rgb(28, 38, 56))
-	penCardRim, _, _ := procCreatePen.Call(0, 1, rgb(34, 48, 71))
-	penBadgeRim, _, _ := procCreatePen.Call(0, 1, rgb(14, 165, 233))
-	penTrackRim, _, _ := procCreatePen.Call(0, 1, rgb(28, 38, 56))
-	penBtnRim, _, _ := procCreatePen.Call(0, 1, rgb(0, 210, 255))
-	penBtnDisRim, _, _ := procCreatePen.Call(0, 1, rgb(45, 60, 85))
-	penShield, _, _ := procCreatePen.Call(0, 2, rgb(0, 229, 255))
-	penErrorRim, _, _ := procCreatePen.Call(0, 1, rgb(153, 27, 27))
+	// GDI Pens. One cold signal, quiet structural hairlines, semantic state only.
+	penTopRim, _, _ := procCreatePen.Call(0, 1, rgb(76, 201, 255))
+	penDivider, _, _ := procCreatePen.Call(0, 1, rgb(18, 42, 63))
+	penCardRim, _, _ := procCreatePen.Call(0, 1, rgb(27, 63, 88))
+	penBadgeRim, _, _ := procCreatePen.Call(0, 1, rgb(38, 90, 119))
+	penTrackRim, _, _ := procCreatePen.Call(0, 1, rgb(20, 48, 69))
+	penBtnRim, _, _ := procCreatePen.Call(0, 1, rgb(155, 238, 255))
+	penBtnDisRim, _, _ := procCreatePen.Call(0, 1, rgb(28, 56, 74))
+	penShield, _, _ := procCreatePen.Call(0, 2, rgb(76, 201, 255))
+	penErrorRim, _, _ := procCreatePen.Call(0, 1, rgb(116, 46, 64))
 
-	// GDI Brushes
-	brushWindowBg, _, _ := procCreateSolidBrush.Call(rgb(10, 14, 23))
-	brushCardBg, _, _ := procCreateSolidBrush.Call(rgb(15, 23, 42))
-	brushBadgeBg, _, _ := procCreateSolidBrush.Call(rgb(17, 24, 39))
-	brushTrackBg, _, _ := procCreateSolidBrush.Call(rgb(7, 10, 18))
-	brushProgFill, _, _ := procCreateSolidBrush.Call(rgb(0, 229, 255))
-	brushProgDone, _, _ := procCreateSolidBrush.Call(rgb(16, 185, 129))
-	brushBtnNorm, _, _ := procCreateSolidBrush.Call(rgb(0, 180, 216))
-	brushBtnHover, _, _ := procCreateSolidBrush.Call(rgb(56, 215, 248))
-	brushBtnPress, _, _ := procCreateSolidBrush.Call(rgb(0, 140, 175))
-	brushBtnDis, _, _ := procCreateSolidBrush.Call(rgb(22, 30, 46))
-	brushErrorBg, _, _ := procCreateSolidBrush.Call(rgb(24, 12, 16))
-	brushShieldBg, _, _ := procCreateSolidBrush.Call(rgb(10, 36, 56))
+	// GDI Brushes.
+	brushWindowBg, _, _ := procCreateSolidBrush.Call(rgb(3, 8, 17))
+	brushCardBg, _, _ := procCreateSolidBrush.Call(rgb(8, 22, 38))
+	brushBadgeBg, _, _ := procCreateSolidBrush.Call(rgb(9, 30, 48))
+	brushTrackBg, _, _ := procCreateSolidBrush.Call(rgb(4, 14, 25))
+	brushProgFill, _, _ := procCreateSolidBrush.Call(rgb(76, 201, 255))
+	brushProgDone, _, _ := procCreateSolidBrush.Call(rgb(49, 208, 170))
+	brushBtnNorm, _, _ := procCreateSolidBrush.Call(rgb(76, 201, 255))
+	brushBtnHover, _, _ := procCreateSolidBrush.Call(rgb(131, 224, 255))
+	brushBtnPress, _, _ := procCreateSolidBrush.Call(rgb(42, 160, 208))
+	brushBtnDis, _, _ := procCreateSolidBrush.Call(rgb(12, 30, 45))
+	brushErrorBg, _, _ := procCreateSolidBrush.Call(rgb(25, 12, 20))
+	brushShieldBg, _, _ := procCreateSolidBrush.Call(rgb(11, 39, 59))
+	brushGlow, _, _ := procCreateSolidBrush.Call(rgb(7, 24, 41))
+	brushHeader, _, _ := procCreateSolidBrush.Call(rgb(4, 15, 27))
+	brushStepIdle, _, _ := procCreateSolidBrush.Call(rgb(15, 42, 61))
+	brushStepDone, _, _ := procCreateSolidBrush.Call(rgb(49, 208, 170))
 
+	logoPixels, logoW, logoH := decodeInstallerLogo()
 	wizard := &setupWizard{
 		hwnd:          hwnd,
 		uninstall:     uninstall,
+		preview:       preview,
+		logoPixels:    logoPixels,
+		logoW:         logoW,
+		logoH:         logoH,
 		currentW:      defaultWidth,
 		currentH:      defaultHeight,
 		cursorArrow:   cursorArrow,
 		cursorHand:    cursorHand,
+		fontBrand:     createFont("Segoe UI Variable Display", -27, 650),
 		fontTitle:     createFont("Segoe UI", -20, 700),
-		fontBadge:     createFont("Segoe UI", -11, 700),
-		fontHeader:    createFont("Segoe UI", -15, 600),
+		fontBadge:     createFont("Segoe UI", -10, 700),
+		fontHeader:    createFont("Segoe UI", -13, 600),
+		fontHeadline:  createFont("Segoe UI Variable Display", -20, 650),
+		fontMetric:    createFont("Segoe UI Variable Display", -18, 700),
+		fontStep:      createFont("Segoe UI", -9, 600),
 		fontRegular:   createFont("Segoe UI", -12, 400),
-		fontSmall:     createFont("Segoe UI", -11, 400),
+		fontSmall:     createFont("Segoe UI", -10, 400),
 		fontMono:      createFont("Consolas", -11, 400),
 		penTopRim:     penTopRim,
 		penDivider:    penDivider,
@@ -1048,6 +1184,10 @@ func runSetupWizard(uninstall, elevated bool) error {
 		brushBtnDis:   brushBtnDis,
 		brushErrorBg:  brushErrorBg,
 		brushShieldBg: brushShieldBg,
+		brushGlow:     brushGlow,
+		brushHeader:   brushHeader,
+		brushStepIdle: brushStepIdle,
+		brushStepDone: brushStepDone,
 	}
 
 	activeWizardMu.Lock()
@@ -1078,12 +1218,16 @@ func runSetupWizard(uninstall, elevated bool) error {
 	_, _, _ = procUpdateWindow.Call(hwnd)
 
 	var workerErr error
-	go func() {
-		workerErr = execute(uninstall, elevated, func(percent int, status, detail string) {
-			wizard.Update(percent, status, detail)
-		})
-		wizard.Complete(workerErr)
-	}()
+	if preview {
+		wizard.Update(40, "Administrator-Berechtigungen bestätigt", "Signatur, Payload und Systemvoraussetzungen werden lokal geprüft.")
+	} else {
+		go func() {
+			workerErr = execute(uninstall, elevated, func(percent int, status, detail string) {
+				wizard.Update(percent, status, detail)
+			})
+			wizard.Complete(workerErr)
+		}()
+	}
 
 	var msg msgStruct
 	for {

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "defender": {
+    "cloudBlockLevel": "High"
+  },
+  "evil": true
+}

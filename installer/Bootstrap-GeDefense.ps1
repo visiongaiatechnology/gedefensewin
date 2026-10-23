@@ -37,7 +37,17 @@ if ($bootstrapSignature.Status -ne 'Valid' -or -not $bootstrapSignature.SignerCe
 $currentUserPublisher = "Cert:\CurrentUser\TrustedPublisher\$($certificate.Thumbprint)"
 $removePublisherAfterValidation = -not (Test-Path -LiteralPath $currentUserPublisher)
 if ($removePublisherAfterValidation) {
-    Import-Certificate -FilePath $certificatePath -CertStoreLocation 'Cert:\CurrentUser\TrustedPublisher' | Out-Null
+    # .NET store API: Import-Certificate may request an interactive confirmation
+    # that is unavailable in the silent setup path.
+    $publisherStore = [Security.Cryptography.X509Certificates.X509Store]::new(
+        [Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher,
+        [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+    try {
+        $publisherStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $publisherStore.Add([Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath))
+    } finally {
+        $publisherStore.Close()
+    }
 }
 
 try {
@@ -107,44 +117,3 @@ try {
     }
 }
 
-# SIG # Begin signature block
-# MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCA7P+PY4vhpYX4S
-# ecbbPLSARwdQj5kbZ3lX2hQhSPzwXKCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
-# m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
-# VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
-# MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
-# ZWFzZTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGBAL5pFqzqfhSchgN3
-# OSKoeRbHXQIUtVwI7Q5go/7UvOFVMV0d/Au5Q5yPFOr351VqQyZlLWehwPG88Wdh
-# TEPxfzYXDeJFgG6MwdjVaA10WklxDzSu8XQQzQKvoSOtf6b76xYswPdR8WaUOvYL
-# NVYHG38cZCE/Vmt8W29/+8bT0SFoMv8S++3YUL3BaTTVBj5wcunaQYu7bcBUFz8M
-# wCWGaqZUwWi/7sZPb5Ix0KKnMarxxAAM/y1GaRnWDQavGSuFZ18LmMh+Agd6znFZ
-# 6pH1USuu0NreFUOWNg2ANEmGAO4XTnst3ILT4Eab/Jsjmw4nRm8rckRaWVKJxcRc
-# P7ukJJi3cV11JegdsYSBGKvZ8TUNiSRuVI0MGg1IJl4ga/dir1crp0DnqezcC/6y
-# 9mxsnxuJLpW8I1nLdRLjE1ow5VshhvEMFjPoYbcowpcI0EUFj/clBpA+rHjPjkYF
-# jw8oow+tYqnEK/GkrYkzGwGxpApKcECh5GGHgQ5iSgKuNTPueQIDAQABo0YwRDAO
-# BgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwMwHQYDVR0OBBYEFDBP
-# H8Z9qi6vrLw8FPD3k/kz+c1gMA0GCSqGSIb3DQEBCwUAA4IBgQBIQe+HN5spItMd
-# 884eV6JR3H8xGr8DeNpgjuhQnRnQqWB60Et6ehQwQFDg5Ft8iU4sGzdEQB4U+q79
-# 9oReJ6G1CuV6yXXqDe/Ljr5DGfGr+Wah4RuRi/QGhUUeIyyn8h5kXwOgGWz4VA5I
-# 9CmN+onZHRLnv3Lu9mKyUqo7ll5WaWEd/r3hvBqe30Rg0IanD8qpWXEbshlayTux
-# 8WMgjW3nA7tEWXmToCJpRk8DsaGU5m6rNxVa6zSS7qF2JiMWnZZBsr76cQsMYvTk
-# ZgshPz+OTsl84mR7i/BalTIyuI74TWd+8LdcBB+FpmhXvYmKAPQKQg25dHGWbVlB
-# E7kK29X38hvaQBO6lVT7mtTOPx2auMTmas6LLU+1XGFNm4zvwuydpf/4ltPSYlNp
-# K8Ij5vkp2DjXOaJF02BoqBkZt6w4wQPuCdu3OOTH3A3hymQrVD0tP408qNkLuzd5
-# xI+m7oTQCw6SYCxeEUEOooR7XMWuxE1R/KyLlPRCI1zi9DjhLawxggJyMIICbgIB
-# ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
-# ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
-# AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCC4jNdzjyPH
-# EKu8C/1uE4/XEMpJy7G2DkOTinev8U6ldjANBgkqhkiG9w0BAQEFAASCAYAeCoJ+
-# mlQpWPriqKarI4lxHTw9hr0PkbXussteINwPSXdG53yTEPiIcNQJSYVo60s2n1Kd
-# pUqLIvX/m4zNr/+HCdGVmY2VX7BVIyB5vf7fb7aP55IrRLeDk9Z/7aCovfpNsCem
-# Y4vhnP90dd8zJt4lxshsyaEs3JwxViN6pN4EdBkxzdJ95Ubg+3S2JVW0gCZ22V7R
-# UXywdnHqSOsoL5aKcsoqlSkGBAMVV8itXuA2XtBZrlUk9MlXhmoEc5k9P70MGjCi
-# wYmVQ3SAMDaV3tXeGIuk6vInXG6vsO/oSICe9Xv0N1LpoGyN1bVM85idhGmXvE6F
-# l888PccaxQQY2//gyBaF5WFXuDak5dDgblCqxPteaD0kH8p6knmQ1DhIFFw73kXC
-# 6ij3nQ73UGdah33ncal7wq/IT3rf7PNH8y8C/TyrURWn5JCKT3rr7DlOR0M/2Ata
-# 9GHVCuEn60dA8onfvyl8/SehnukGnCbmTm1SNo92Ak9m13vvC8dBYSfrvQM=
-# SIG # End signature block

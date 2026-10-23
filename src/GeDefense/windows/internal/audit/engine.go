@@ -47,11 +47,15 @@ func New(script, operationRoot string, ledger *evidence.Ledger) (*Engine, error)
 func (e *Engine) Run(ctx context.Context) (Result, error) {
 	result, err := scriptengine.RunJSON[Result](e.runner, ctx, "security-audit")
 	if err != nil {
-		_ = e.ledger.Append("audit.operation", "VGT-SafetySys", "failed")
+		if e.ledger != nil {
+			_ = e.ledger.Append("audit.operation", "VGT-SafetySys", "failed")
+		}
 		return Result{}, err
 	}
-	if err := e.ledger.Append("audit.operation", "VGT-SafetySys", "verified"); err != nil {
-		return Result{}, err
+	if e.ledger != nil {
+		if err := e.ledger.Append("audit.operation", "VGT-SafetySys", "verified"); err != nil {
+			return Result{}, err
+		}
 	}
 	return result, nil
 }

@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#050b14">
-  <title>GeDefense 4 · Windows Security Center</title>
+  <meta name="theme-color" content="#06090e">
+  <title>GeDefense Titan · Sovereign Windows Defense</title>
   <link rel="manifest" href="/assets/manifest.json">
   <link rel="icon" href="/assets/gedefense-logo.png">
   <link rel="stylesheet" href="/assets/tokens.css">
@@ -14,102 +14,1044 @@
   <link rel="stylesheet" href="/assets/views.css">
   <link rel="stylesheet" href="/assets/responsive.css">
   <link rel="stylesheet" href="/assets/startup-health.css">
+  <link rel="stylesheet" href="/assets/overview-map.css">
+  <link rel="stylesheet" href="/assets/v5.css">
+  <link rel="stylesheet" href="/assets/v5-refine.css">
+  <link rel="stylesheet" href="/assets/v5-polish.css">
+  <link rel="stylesheet" href="/assets/titan.css">
+  <link rel="stylesheet" href="/assets/titan-v6.css">
+  <link rel="stylesheet" href="/assets/contrast.css">
+  <link rel="stylesheet" href="/assets/i18n.css">
+  <script type="module" src="/assets/i18n.js"></script>
   <script type="module" src="/assets/app.js"></script>
 </head>
 <body>
-  <div class="ambient" aria-hidden="true"><i></i><i></i><i></i></div>
+  <a class="skip-link" href="#mainContent">Zum Inhalt springen</a>
+
+  <svg class="visually-hidden" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-overview" viewBox="0 0 24 24"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 8h6V4h-6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.2-2.9 7.4-7 9-4.1-1.6-7-4.8-7-9V6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 12l2.2 2.2L15.5 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 4l8 4-8 4-8-4zM4 12l8 4 8-4M4 16l8 4 8-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 12.5l2.6 2.6L16 9.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-ledger" viewBox="0 0 24 24"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-radar" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M12 12l5.2-5.2M12 4v2M20 12h-2M12 20v-2M4 12h2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+      <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2.4-6 3.6 12 2.4-6H21" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+      <symbol id="i-network" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5" cy="18" r="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="19" cy="18" r="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 7.2v4.1M10.5 12.5L6.4 16M13.5 12.5L17.6 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 14h5l-1 7 8-11h-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+      <symbol id="i-hash" viewBox="0 0 24 24"><path d="M9 4L7 20M17 4l-2 16M5 9h15M4 15h15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+      <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 0112 0v4l2 3H4l2-3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9.5 19a2.5 2.5 0 005 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M4 12h3.5l2-5 3 10 2.5-5H20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 11-2.3-5.6M20 4v4.5h-4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M10 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-titan" viewBox="0 0 24 24"><path d="M12 2.8l7.2 3.1v5.6c0 4.4-3 7.8-7.2 9.7-4.2-1.9-7.2-5.3-7.2-9.7V5.9z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 6.4v9.2M8.8 10.4h6.4M9.4 15.7h5.2" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/></symbol>
+      <symbol id="i-seal" viewBox="0 0 24 24"><circle cx="12" cy="10" r="5.4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 15l-1.3 6 4.3-2.4 4.3 2.4L15 15M10 10l1.5 1.5L14.4 8.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-quarantine" viewBox="0 0 24 24"><path d="M12 3l8 4v5.4c0 4.5-3.2 7.9-8 9.6-4.8-1.7-8-5.1-8-9.6V7z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    </defs>
+  </svg>
+
   <div class="shell">
-    <aside id="sidebar" class="sidebar">
+    <aside id="sidebar" class="sidebar" aria-label="GeDefense Navigation">
       <div class="brand">
         <img src="/assets/gedefense-logo.png" alt="">
-        <div><strong>GeDefense</strong><small>WINDOWS DEFENSE // V4</small></div>
+        <div class="brand-copy">
+          <strong>GeDefense</strong>
+          <small>TITAN // WINDOWS DEFENSE</small>
+          <span class="brand-beta">TITAN 5.2</span>
+        </div>
       </div>
-      <nav aria-label="Security Center">
-        <button class="nav active" data-view="overview"><span class="nav-icon">◈</span><span>Übersicht</span></button>
-        <button class="nav" data-view="protection"><span class="nav-icon">⬢</span><span>Protection Center</span></button>
-        <button class="nav" data-view="xdr"><span class="nav-icon">⌁</span><span>MHX XDR</span></button>
-        <button class="nav" data-view="network"><span class="nav-icon">◎</span><span>Netzwerk</span></button>
-        <button class="nav" data-view="kinetic"><span class="nav-icon">⌁</span><span>Kinetic Defense</span></button>
-        <button class="nav" data-view="integrity"><span class="nav-icon">◇</span><span>Integrität</span></button>
-        <button class="nav" data-view="hardening"><span class="nav-icon">▦</span><span>Härtung</span></button>
-        <button class="nav" data-view="audit"><span class="nav-icon">✓</span><span>SafetySys Audit</span></button>
-        <button class="nav" data-view="evidence"><span class="nav-icon">≡</span><span>Evidenz</span></button>
-        <button class="nav" data-view="system"><span class="nav-icon">⚙</span><span>System</span></button>
+
+      <nav aria-label="Hauptnavigation">
+        <div class="nav-group">
+          <span class="nav-label" id="navGroupLage">Lage</span>
+          <button type="button" class="nav active" data-view="overview" aria-current="page">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-overview"></use></svg></span><span class="nav-text">Übersicht</span>
+          </button>
+          <button type="button" class="nav nav-titan" data-view="titan">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-titan"></use></svg></span><span class="nav-text">Titan</span><span class="nav-tag">TITAN</span>
+          </button>
+        </div>
+        <div class="nav-group">
+          <span class="nav-label" id="navGroupSchutz">Schutz</span>
+          <button type="button" class="nav" data-view="protection">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-shield"></use></svg></span><span class="nav-text">Protection Center</span>
+          </button>
+          <button type="button" class="nav" data-view="hardening">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-layers"></use></svg></span><span class="nav-text">Härtung</span>
+          </button>
+          <button type="button" class="nav" data-view="audit">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-check"></use></svg></span><span class="nav-text">SafetySys Audit</span>
+          </button>
+          <button type="button" class="nav" data-view="evidence">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-ledger"></use></svg></span><span class="nav-text">Evidenz</span>
+          </button>
+        </div>
+        <div class="nav-group">
+          <span class="nav-label" id="navGroupIntel">Intelligenz &amp; Reaktion</span>
+          <button type="button" class="nav" data-view="threat-intel">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-radar"></use></svg></span><span class="nav-text">Threat Intelligence</span>
+          </button>
+          <button type="button" class="nav" data-view="xdr">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-activity"></use></svg></span><span class="nav-text">MHX XDR</span>
+          </button>
+          <button type="button" class="nav" data-view="kinetic">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-bolt"></use></svg></span><span class="nav-text">Kinetic Defense</span>
+          </button>
+          <button type="button" class="nav" data-view="network">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-network"></use></svg></span><span class="nav-text">Netzwerk</span>
+          </button>
+        </div>
+        <div class="nav-group">
+          <span class="nav-label" id="navGroupSystem">Plattform</span>
+          <button type="button" class="nav" data-view="integrity">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-hash"></use></svg></span><span class="nav-text">Integrität</span>
+          </button>
+          <button type="button" class="nav" data-view="system">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-settings"></use></svg></span><span class="nav-text">System</span>
+          </button>
+        </div>
       </nav>
+
       <div class="sidebar-foot">
-        <div class="health-dot" id="sidePulse"></div>
-        <div><strong id="sideState">AUTHENTIFIZIERUNG</strong><small id="sideDetail">Lokale Control Plane</small></div>
+        <div class="health-dot" id="sidePulse" data-state="warn"></div>
+        <div class="side-meta">
+          <strong id="sideState">AUTHENTIFIZIERUNG</strong>
+          <small id="sideDetail">Lokale Control Plane</small>
+        </div>
+        <span class="side-version" id="sideVersion">VERSION WIRD GELADEN</span>
       </div>
     </aside>
 
-    <main>
+    <main id="mainContent" tabindex="-1">
       <header class="topbar">
-        <button id="menuToggle" class="icon-button mobile-only" aria-label="Navigation öffnen">☰</button>
-        <div class="title-stack"><small>VISIONGAIA TECHNOLOGY // SOVEREIGN WINDOWS DEFENSE</small><h1 id="viewTitle">Übersicht</h1></div>
+        <div class="top-left">
+          <button type="button" id="menuToggle" class="icon-button mobile-only" aria-label="Navigation öffnen" aria-expanded="false" aria-controls="sidebar">
+            <span aria-hidden="true"><svg><use href="#i-menu"></use></svg></span>
+          </button>
+          <div class="title-stack">
+            <p class="eyebrow">VISIONGAIATECHNOLOGY // GEDEFENSE TITAN</p>
+            <div class="title-line">
+              <h1 id="viewTitle">Übersicht</h1>
+              <span id="titlePulseBadge" class="posture-badge" role="status">STATUS WIRD GELADEN</span>
+            </div>
+            <p id="viewSubtitle" class="view-subtitle">Schutzlage, Telemetrie und Evidenz dieser Windows-Instanz.</p>
+          </div>
+        </div>
         <div class="top-actions">
           <span id="clock" class="mono muted">--:--:--</span>
-          <button id="authButton" class="button ghost">Operator-Key</button>
+          <button type="button" id="healthRefreshButton" class="icon-button health-button" aria-label="Bereitschaftsprüfung öffnen" title="Bereitschaftsprüfung öffnen">
+            <span aria-hidden="true"><svg><use href="#i-pulse"></use></svg></span>
+            <span class="health-refresh-dot" id="healthRefreshDot" data-state="warn" aria-hidden="true"></span>
+            <span id="healthRefreshLabel">Bereitschaft</span>
+          </button>
+          <button type="button" id="notificationButton" class="icon-button notification-button" aria-label="Benachrichtigungen öffnen" aria-haspopup="dialog" aria-controls="notificationDialog">
+            <span aria-hidden="true"><svg><use href="#i-bell"></use></svg></span>
+            <span id="notificationCount" class="notification-count" hidden>0</span>
+          </button>
+          <button type="button" id="authButton" class="button ghost">Operator-Key</button>
+          <button type="button" id="logoutButton" class="button ghost" title="Aktuelle Sitzung serverseitig widerrufen">Abmelden</button>
           <span id="globalMode" class="status-pill locked">GESPERRT</span>
+          <label class="language-switcher" for="languageSwitcher">
+            <select id="languageSwitcher" aria-label="Sprache" title="Sprache">
+              <option value="de">Deutsch</option>
+              <option value="en">English</option>
+              <option value="ru">Русский</option>
+              <option value="zh">中文</option>
+            </select>
+          </label>
           <div class="window-controls" aria-label="Fenstersteuerung">
-            <button id="winMin" class="win-control-btn" title="Minimieren" aria-label="Minimieren"><svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg></button>
-            <button id="winMax" class="win-control-btn" title="Maximieren" aria-label="Maximieren"><svg id="winMaxIcon" width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
-            <button id="winClose" class="win-control-btn win-close" title="Schließen" aria-label="Schließen"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.3"/></svg></button>
+            <button type="button" id="winMin" class="win-control-btn" title="Minimieren" aria-label="Minimieren"><svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg></button>
+            <button type="button" id="winMax" class="win-control-btn" title="Maximieren" aria-label="Maximieren"><svg id="winMaxIcon" width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></button>
+            <button type="button" id="winClose" class="win-control-btn win-close" title="Schließen" aria-label="Schließen"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1L9 9M9 1L1 9" stroke="currentColor" stroke-width="1.3"/></svg></button>
           </div>
         </div>
       </header>
 
-      <section class="view active" data-page="overview">
-        <div class="hero glass">
+      <!-- ============================ OVERVIEW ============================ -->
+      <section class="view active" data-page="overview" aria-labelledby="viewTitle">
+        <div class="hero">
           <div class="hero-copy">
             <p class="eyebrow">GEDEFENSE WINDOWS SECURITY FABRIC</p>
-            <h2>Eine Schutzlage. Alle Windows-Sicherheitsschichten.</h2>
-            <p>Defender, ASR, App Control, Firewall, Prozess-Telemetrie, Threat Intelligence, Dateiintegrität und Evidence werden lokal zusammengeführt.</p>
-            <div class="hero-actions"><button class="button primary" data-go="protection">Schutzstatus öffnen</button><button id="heroReconcilePolicy" class="button ghost">Policy synchronisieren</button><span id="overviewMode" class="mode-caption">Status wird geladen</span></div>
+            <h2>Eine Schutzlage. Alle Windows-Schichten.</h2>
+            <p>Defender, ASR, App Control, Firewall, Prozess-Telemetrie, Threat Intelligence, Dateiintegrität und Evidence werden lokal zusammengeführt. Keine Cloud-Abhängigkeit, keine CDN-Ressourcen.</p>
+            <div class="hero-actions">
+              <button type="button" class="button primary" data-go="protection">Schutzstatus öffnen</button>
+              <button type="button" id="heroReconcilePolicy" class="button ghost">Policy synchronisieren</button>
+              <span id="overviewMode" class="mode-caption">Status wird geladen</span>
+            </div>
           </div>
-          <div class="posture-orbit" aria-hidden="true"><div class="posture-core"><strong id="postureScore">0</strong><span>POSTURE</span></div></div>
+          <aside class="posture-panel" aria-labelledby="postureLabel">
+            <div class="posture-head"><span id="postureLabel">SCHUTZINDEX</span><span class="status-pill info" id="postureBadge">—</span></div>
+            <div class="posture-score"><strong id="postureScore">0</strong><small>/ 100</small></div>
+            <div class="posture-meter" role="img" aria-label="Schutzindex als Balken"><i id="postureMeterFill"></i></div>
+            <dl class="posture-breakdown">
+              <div><dt>Modus</dt><dd id="postureMode">---</dd></div>
+              <div><dt>Policy</dt><dd id="posturePolicy">---</dd></div>
+              <div><dt>Kontrollen</dt><dd id="postureCoverage">---</dd></div>
+            </dl>
+          </aside>
         </div>
+
         <div class="metric-grid" id="overviewMetrics"></div>
-        <article class="glass section-card traffic-dashboard"><div class="section-head"><div><p class="eyebrow">LIVE NETWORK FABRIC · WINDOWS IP HELPER</p><h3>Echtzeit-Traffic</h3><p id="trafficDescription" class="muted">Warte auf Interface-Zähler. Keine Paketinhalte, keine Simulation.</p></div><span class="status-pill warn" id="trafficState">STARTING</span></div>
-          <div class="traffic-layout"><div class="traffic-values"><div><span>↓ DOWNLOAD</span><strong id="trafficRx">--</strong></div><div><span>↑ UPLOAD</span><strong id="trafficTx">--</strong></div></div><svg id="trafficGraph" class="traffic-chart" viewBox="0 0 640 170" role="img" aria-label="Echtzeit-Traffic, Download und Upload der letzten 120 Sekunden"><title>Network Traffic über Zeit</title><path class="traffic-gridline" d="M0 45H640 M0 85H640 M0 125H640"></path><path id="trafficRxPath" class="traffic-rx" d=""></path><path id="trafficTxPath" class="traffic-tx" d=""></path></svg></div><p class="mono muted">● Cyan: Empfang · ● Violett: Versand · 2-Sekunden-Samples · nur lokal erfasste Interface-Bytes; keine vollständige Paketinspektion.</p>
+
+        <article class="overview-threat-panel" id="overviewThreatPanel">
+          <header class="overview-threat-header">
+            <div class="overview-threat-title">
+              <span class="overview-threat-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+              </span>
+              <div>
+                <h3 data-i18n="overview.map.title">ECHTZEIT THREAT KARTE &amp; GLOBALE ANGRIFFSVEKTOREN</h3>
+                <p class="text-muted" data-i18n="overview.map.subtitle">Windows-WFP, Threat-IP und Prozesskorrelation · lokale GeoIP/ASN-CSV · keine externen IP-Abfragen.</p>
+              </div>
+            </div>
+            <div class="overview-threat-badges">
+              <span class="overview-threat-live" id="overviewMapStatus" role="status" aria-live="polite">TELEMETRIE WIRD GELADEN</span>
+              <span class="overview-threat-note" id="overviewMapGeo" title="GeoIP-Matrix"></span>
+              <span class="overview-threat-zoom" role="toolbar" aria-label="Kartensteuerung">
+                <button type="button" id="overviewMapZoomIn" title="vergrößern" aria-label="Karte vergrößern">+</button>
+                <button type="button" id="overviewMapZoomOut" title="verkleinern" aria-label="Karte verkleinern">−</button>
+                <button type="button" id="overviewMapPause" aria-pressed="false" data-i18n-aria="overview.map.pause" aria-label="Telemetrie pausieren">Ⅱ</button>
+                <button type="button" id="overviewMapZoomReset" title="zentrieren" aria-label="Ansicht zurücksetzen">⟲</button>
+              </span>
+            </div>
+          </header>
+
+          <div class="overview-threat-chips" role="list">
+            <div class="overview-threat-chip" role="listitem"><span data-i18n="overview.map.sources">Quellen</span><strong id="overviewMapSources">0</strong></div>
+            <div class="overview-threat-chip" role="listitem"><span data-i18n="overview.map.placed">verortet</span><strong id="overviewMapPlaced">0</strong></div>
+            <div class="overview-threat-chip danger" role="listitem"><span data-i18n="overview.map.blocked">geblockt</span><strong id="overviewMapBlocked">0</strong></div>
+            <div class="overview-threat-chip" role="listitem"><span data-i18n="overview.map.countries">Länder</span><strong id="overviewMapCountries">0</strong></div>
+            <div class="overview-threat-chip area-kinetic" role="listitem"><span data-i18n="overview.map.kinetic">Kinetic</span><strong id="overviewMapKinetic">0</strong></div>
+            <div class="overview-threat-chip area-ti" role="listitem"><span data-i18n="overview.map.ti">Threat-IP</span><strong id="overviewMapTi">0</strong></div>
+            <div class="overview-threat-chip area-xdr" role="listitem"><span data-i18n="overview.map.xdr">XDR</span><strong id="overviewMapXdr">0</strong></div>
+          </div>
+
+          <div class="overview-threat-stage">
+            <div id="overviewThreatMap" class="overview-threat-canvas" aria-label="Weltkarte der Angriffsquellen mit Bögen zum eigenen Standort"></div>
+            <p class="overview-threat-empty" id="overviewMapEmpty" hidden></p>
+            <div class="overview-threat-clean" id="overviewMapClean" hidden>
+              <span class="overview-threat-clean-pulse" aria-hidden="true"></span>
+              <div><strong data-i18n="overview.map.calmTitle">Keine Quellen im Beobachtungsbestand</strong>
+                <small data-i18n="overview.map.calmBody">Angezeigt werden echte WFP-Sperren und Threat-IP-/Prozesskorrelationen. Ein fehlender Feed-Treffer bedeutet keinen Sensorausfall.</small></div>
+            </div>
+            <div class="overview-map-legend" aria-label="Kartenlegende">
+              <span><i class="blocked" aria-hidden="true"></i><span data-i18n="overview.map.legendBlocked">Windows-WFP-Sperre beobachtet</span></span>
+              <span><i class="suspicious" aria-hidden="true"></i><span data-i18n="overview.map.legendSuspicious">Warnung / Korrelation</span></span>
+              <span><i class="tracked" aria-hidden="true"></i><span data-i18n="overview.map.legendObserved">Erfasst / Monitored</span></span>
+              <span><i class="origin" aria-hidden="true"></i><span data-i18n="overview.map.legendOrigin">Souveräner Server-Hub</span></span>
+            </div>
+            <div class="overview-threat-card" id="overviewMapCard" hidden role="dialog" data-i18n-aria="overview.map.details" aria-label="Details zur Quelle">
+              <div class="overview-threat-card-head">
+                <span class="overview-threat-card-flag" id="overviewCardFlag" aria-hidden="true">—</span>
+                <strong class="overview-threat-card-ip" id="overviewCardIP">—</strong>
+                <span class="overview-threat-card-badge" id="overviewCardBadge"></span>
+                <button type="button" class="overview-threat-card-close" id="overviewCardClose" data-i18n-aria="overview.map.close" aria-label="Details schließen">×</button>
+              </div>
+              <dl class="overview-threat-card-body">
+                <div><dt data-i18n="overview.map.country">Land</dt><dd id="overviewCardCountry">—</dd></div>
+                <div><dt data-i18n="overview.map.network">Netz</dt><dd id="overviewCardAsn">—</dd></div>
+                <div><dt data-i18n="overview.map.target">Ziel</dt><dd id="overviewCardPath">—</dd></div>
+                <div><dt data-i18n="overview.map.finding">Befund</dt><dd id="overviewCardDetail">—</dd></div>
+                <div><dt data-i18n="overview.map.seen">Gesehen</dt><dd id="overviewCardSeen">—</dd></div>
+              </dl>
+              <div class="overview-threat-card-cluster" id="overviewCardCluster" hidden></div>
+            </div>
+          </div>
+          <div class="overview-threat-feed" id="overviewMapFeed" role="region" aria-labelledby="overviewMapStreamTitle">
+            <div class="overview-threat-stream-header">
+              <div class="overview-stream-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                <h4 id="overviewMapStreamTitle" data-i18n="overview.map.streamTitle">ECHTZEIT-TELEMETRIE &amp; KORRELATIONEN</h4>
+                <span class="overview-stream-counter" id="overviewMapEventCount"></span>
+              </div>
+              <div class="overview-stream-filters" role="group" data-i18n-aria="overview.map.filters" aria-label="Telemetrie filtern">
+                <button type="button" class="overview-filter-pill" data-filter="all" aria-pressed="true" data-i18n="overview.map.filterAll">Alle Vektoren</button>
+                <button type="button" class="overview-filter-pill" data-filter="blocked" aria-pressed="false" data-i18n="overview.map.filterBlocked">Nur Geblockt</button>
+                <button type="button" class="overview-filter-pill" data-filter="suspicious" aria-pressed="false" data-i18n="overview.map.filterSuspicious">Warnungen / Korrelationen</button>
+              </div>
+            </div>
+            <div class="overview-threat-table-wrapper" tabindex="0" role="region" aria-labelledby="overviewMapStreamTitle">
+              <table class="overview-threat-stream-table" aria-labelledby="overviewMapStreamTitle">
+                <thead><tr>
+                  <th scope="col" data-i18n="overview.map.columnTime">ZEIT</th>
+                  <th scope="col" data-i18n="overview.map.columnSource">QUELL-IP &amp; GEO</th>
+                  <th scope="col" data-i18n="overview.map.columnTarget">ZIELPORT / PROZESS</th>
+                  <th scope="col" data-i18n="overview.map.columnModule">ERKENNUNGSMODUL</th>
+                  <th scope="col" data-i18n="overview.map.columnAction">AKTION</th>
+                  <th scope="col" data-i18n="overview.map.columnNetwork">ASN &amp; ORGANISATION (LOKAL)</th>
+                </tr></thead>
+                <tbody id="overviewMapFeedList"></tbody>
+              </table>
+            </div>
+            <p class="overview-threat-feed-empty" id="overviewMapFeedEmpty" hidden></p>
+            <div class="overview-threat-feed-head">
+              <span class="overview-threat-feed-host" id="overviewMapHost" data-i18n="overview.map.hostPending">Host wird bestimmt …</span>
+              <span id="overviewMapUpdated"></span>
+            </div>
+          </div>
+          <footer class="overview-threat-footer"><span id="overviewMapOrigin" data-i18n="overview.map.originPending">Standort des Hosts wird bestimmt …</span></footer>
         </article>
+        <p class="geo-attribution muted overview-map-attribution">GeoIP: DB-IP Lite (CC BY 4.0, db-ip.com) · Origin ASN (PDDL). Näherungswerte der Netzzuordnung. Die Tabelle zeigt je Quelle den neuesten beobachteten Stand.</p>
+
+        <article class="glass section-card traffic-dashboard">
+          <div class="section-head">
+            <div><p class="eyebrow">LIVE NETWORK FABRIC · WINDOWS IP HELPER</p><h3>Echtzeit-Traffic</h3><p id="trafficDescription" class="muted">Warte auf Interface-Zähler. Keine Paketinhalte, keine Simulation.</p></div>
+            <span class="status-pill warn" id="trafficState">STARTING</span>
+          </div>
+          <div class="traffic-layout">
+            <div class="traffic-values"><div><span>↓ DOWNLOAD</span><strong id="trafficRx">--</strong></div><div><span>↑ UPLOAD</span><strong id="trafficTx">--</strong></div></div>
+            <svg id="trafficGraph" class="traffic-chart" viewBox="0 0 640 170" preserveAspectRatio="none" role="img" aria-label="Echtzeit-Traffic, Download und Upload der letzten 120 Sekunden"><title>Network Traffic über Zeit</title><path class="traffic-gridline" d="M0 45H640 M0 85H640 M0 125H640"></path><path id="trafficRxPath" class="traffic-rx" d=""></path><path id="trafficTxPath" class="traffic-tx" d=""></path></svg>
+          </div>
+          <p class="mono muted">● Signal: Empfang · ● Blau: Versand · 2-Sekunden-Samples · nur lokal erfasste Interface-Bytes; keine vollständige Paketinspektion.</p>
+        </article>
+
         <div class="two-col">
           <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">SCHUTZDOMÄNEN</p><h3>Defense Coverage</h3></div><span id="anchorCount" class="status-pill info">0/0</span></div><div id="domainBars" class="bars"></div></article>
           <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">LIVE FABRIC</p><h3>Realtime Security</h3></div><span id="realtimeBadge" class="status-pill warn">STARTING</span></div><div class="compact-stats"><div><strong id="mhxEvents">0</strong><span>Prozessereignisse bewertet</span></div><div><strong id="mhxBlocked">0</strong><span>MHX-Prozesse gestoppt</span></div><div><strong id="wfpBlocks">0</strong><span>WFP-Sperrereignisse (5157)</span></div><div><strong id="networkHits">0</strong><span>Threat-IP-Matches</span></div><div><strong id="storyCount">0</strong><span>Korrelierte Attack Stories</span></div></div><p id="telemetryHealth" class="mono muted" aria-live="polite">WFP- und Feed-Verifikation werden geprüft.</p><p class="mono muted">Zähler seit Dienststart. MHX-Terminationen, Windows-WFP-Sperren, Feed-Matches und korrelierte Stories sind unterschiedliche Ereignisse; eine Null allein bedeutet keinen Schutzfehler.</p></article>
         </div>
-        <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">LETZTE KORRELATIONEN</p><h3>Attack Stories</h3></div><button class="button ghost small" data-go="xdr">Alle anzeigen</button></div><div id="overviewStories" class="story-list empty-state">Noch keine korrelierten Angriffe.</div></article>
+
+        <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">LETZTE KORRELATIONEN</p><h3>Attack Stories</h3></div><button type="button" class="button ghost small" data-go="xdr">Alle anzeigen</button></div><div id="overviewStories" class="story-list empty-state">Noch keine korrelierten Angriffe.</div></article>
       </section>
 
-      <section class="view" data-page="protection" hidden>
-        <div class="page-head"><div><p class="eyebrow">PROTECTION CENTER</p><h2>Aktiver Schutz ohne kryptische Betriebsmodi.</h2><p>Die Control Plane prüft serverseitig, welche Schutzstufe sicher aktiviert werden kann. Kein Browser entscheidet über Release-Gates.</p></div><span id="protectionBadge" class="status-pill warn">PRÜFUNG</span></div>
-        <article class="glass protection-state"><div><small>AKTUELLER MODUS</small><strong id="currentMode">---</strong><p id="currentModeText">Schutzstatus wird geladen.</p><div class="action-row"><span id="protectionHealth" class="status-pill warn">STARTING</span><span id="protectionVerified" class="mono muted">Noch nicht verifiziert</span><button id="reconcilePolicy" class="button ghost small">Policy synchronisieren</button></div></div><div class="protection-visual"><span>MONITOR</span><i></i><span>GUARDED</span><i></i><span>SOVEREIGN</span></div></article>
-        <div class="mode-grid">
-          <article class="glass mode-card"><span class="mode-number">01</span><h3>Monitor</h3><p>Erkennen, korrelieren und protokollieren. Keine MHX-Prozessterminierung.</p><button class="button ghost" data-protection="monitor">Nur überwachen</button></article>
-          <article class="glass mode-card recommended"><span class="mode-number">02</span><h3>Guarded</h3><p>Kontextuelle MHX-Entscheidungen dürfen den exakt beobachteten Prozess nach erneuter Identitätsprüfung beenden.</p><button class="button primary" data-protection="guarded">Guarded aktivieren</button></article>
-          <article class="glass mode-card danger-zone"><span class="mode-number">03</span><h3>Sovereign</h3><p>Guarded plus Windows App Control Enforcement und Default-Deny für ausgehende Netzwerkkommunikation.</p><button class="button danger" data-protection="sovereign">Sovereign vorbereiten</button></article>
+      <!-- ============================ TITAN ============================ -->
+      <section class="view titan-view" data-page="titan" hidden aria-labelledby="titanViewTitle">
+        <header class="titan-hero">
+          <div class="titan-hero-copy">
+            <p class="eyebrow">GEDEFENSE TITAN // INGRESS INTEGRITY</p>
+            <h2 id="titanViewTitle">Ingress-Kontrolle mit Beweispflicht.</h2>
+            <p class="titan-lede">Jede Änderung wird gegen deine Owner-Policy geprüft: autorisiert, geduldet oder unerwartet. Titan zeigt, wie sie beobachtet wurde und welcher unabhängige Beleg bleibt. Detect. Verify. Contain. Preserve.</p>
+            <div class="titan-hero-actions">
+              <button type="button" id="titanRefresh" class="button ghost">Neu messen</button>
+              <button type="button" id="titanVerifyButton" class="button primary">Evidenz verifizieren</button>
+              <span id="titanStatePill" class="status-pill warn" role="status">STARTET</span>
+            </div>
+          </div>
+          <aside class="titan-posture" aria-labelledby="titanPostureLabel">
+            <p id="titanPostureLabel" class="eyebrow">VERTRAUENSLAGE</p>
+            <strong id="titanPosture">STARTET</strong>
+            <p id="titanPostureDetail">Titan liest die lokale Evidenzkette und die Sensorgesundheit.</p>
+            <dl class="titan-posture-facts">
+              <div><dt>Antwortmodus</dt><dd id="titanMode">OBSERVE</dd></div>
+              <div><dt>Offene Befunde</dt><dd id="titanOpenFindings">0</dd></div>
+              <div><dt>Letzter Checkpoint</dt><dd id="titanCheckpointTime">—</dd></div>
+            </dl>
+            <div class="titan-trust-line" aria-hidden="true"><i id="titanTrustLine"></i></div>
+            <p class="titan-posture-foot" id="titanWitnessState">Witness: NICHT KONFIGURIERT</p>
+          </aside>
+        </header>
+
+        <nav class="titan-tabs" role="tablist" aria-label="Titan Bereiche">
+          <button type="button" role="tab" id="titanTabLage" aria-controls="titanPanelLage" aria-selected="true" class="active" data-titan-tab="lage">Lage</button>
+          <button type="button" role="tab" id="titanTabIngress" aria-controls="titanPanelIngress" aria-selected="false" data-titan-tab="ingress">Ingress-Timeline</button>
+          <button type="button" role="tab" id="titanTabQuarantine" aria-controls="titanPanelQuarantine" aria-selected="false" data-titan-tab="quarantine">Quarantäne <span id="titanQuarantineTabCount" class="titan-tab-count">0</span></button>
+          <button type="button" role="tab" id="titanTabPolicy" aria-controls="titanPanelPolicy" aria-selected="false" data-titan-tab="policy">Owner Policy</button>
+          <button type="button" role="tab" id="titanTabEvidence" aria-controls="titanPanelEvidence" aria-selected="false" data-titan-tab="evidence">Evidenz</button>
+        </nav>
+
+        <div class="titan-panels">
+          <section class="titan-panel active" id="titanPanelLage" role="tabpanel" data-titan-panel="lage" aria-labelledby="titanTabLage">
+            <div class="titan-lage-grid">
+              <article class="titan-surface titan-sensors-surface">
+                <div class="titan-section-head">
+                  <div><p class="eyebrow">ERFASSUNG</p><h3>Was Titan tatsächlich sieht</h3><p>Sensoren melden ihren realen Zustand. Nicht verfügbare Abdeckung wird nicht als gesund ausgegeben.</p></div>
+                  <span id="titanEventCount" class="status-pill info">0 EREIGNISSE</span>
+                </div>
+                <div id="titanSensors" class="titan-sensor-list" role="list"></div>
+                <div id="titanSensorState" class="titan-inline-state" role="status" aria-live="polite"></div>
+              </article>
+              <aside class="titan-rail" aria-label="Vertrauensanker und Abdeckung">
+                <section class="titan-rail-block">
+                  <p class="eyebrow">UNABHÄNGIGER WITNESS</p>
+                  <strong id="titanWitnessHeadline">NICHT KONFIGURIERT</strong>
+                  <p id="titanWitnessDetail">Lokale Checkpoints sind signiert und manipulationsanzeigend. Ohne externen Witness ist der Host allein keine unabhängige Quelle.</p>
+                </section>
+                <section class="titan-rail-block">
+                  <p class="eyebrow">BOOT-TRUST</p>
+                  <strong id="titanBootState">NICHT GEMESSEN</strong>
+                  <p id="titanBootDetail">Secure Boot und TPM werden nur als bestätigt dargestellt, wenn sie tatsächlich messbar sind.</p>
+                </section>
+                <section class="titan-rail-block titan-rail-roots">
+                  <p class="eyebrow">ÜBERWACHTE GRENZEN</p>
+                  <div id="titanWatchRoots" class="titan-watch-roots"></div>
+                </section>
+              </aside>
+            </div>
+            <article class="titan-surface titan-security-surface">
+              <div class="titan-section-head">
+                <div><p class="eyebrow">SICHERHEITSVERTRAG</p><h3>Kritische Einstellungen gegen den letzten geprüften Stand</h3><p>Titan bewertet gemessene Werte, nicht die Behauptung eines Administrators.</p></div>
+                <span id="titanSecuritySummary" class="status-pill info">—</span>
+              </div>
+              <div id="titanSecurityRows" class="titan-control-grid"></div>
+            </article>
+          </section>
+
+          <section class="titan-panel" id="titanPanelIngress" role="tabpanel" data-titan-panel="ingress" aria-labelledby="titanTabIngress" hidden>
+            <div class="titan-ingress-grid">
+              <article class="titan-surface titan-ingress-surface">
+                <div class="titan-section-head">
+                  <div><p class="eyebrow">INGRESS TIMELINE</p><h3>Veränderungen, Herkunft und Entscheidung</h3><p>Direkt beobachtete Tatsachen und zeitliche Korrelationen sind getrennt gekennzeichnet.</p></div>
+                  <span id="titanIngressTotal" class="status-pill info">—</span>
+                </div>
+                <div class="titan-filter-row" role="group" aria-label="Ereignisfilter">
+                  <button type="button" class="titan-filter active" data-titan-filter="all" aria-pressed="true">Alle</button>
+                  <button type="button" class="titan-filter" data-titan-filter="unexpected" aria-pressed="false">Unerwartet</button>
+                  <button type="button" class="titan-filter" data-titan-filter="persistence" aria-pressed="false">Persistenz</button>
+                  <button type="button" class="titan-filter" data-titan-filter="security" aria-pressed="false">Sicherheit</button>
+                  <button type="button" class="titan-filter" data-titan-filter="quarantine" aria-pressed="false">Quarantäne</button>
+                </div>
+                <div class="titan-review-row">
+                  <button type="button" id="titanAcknowledgeOpen" class="button ghost small">Sichtbare offene Befunde prüfen</button>
+                  <span id="titanReviewStatus" class="titan-inline-state" role="status"></span>
+                </div>
+                <div id="titanEventList" class="titan-event-list" aria-live="polite"></div>
+                <div id="titanEventEmpty" class="titan-empty" hidden></div>
+                <div id="titanEventState" class="titan-inline-state" role="status"></div>
+                <nav class="titan-pager" aria-label="Seiten der Titan-Ereignisse">
+                  <span id="titanEventPageInfo" class="pagination-info">Noch keine Ereignisse geladen</span>
+                  <div class="titan-pager-actions">
+                    <button type="button" id="titanEventPrev" class="button ghost small" disabled>Zurück</button>
+                    <button type="button" id="titanEventNext" class="button ghost small" disabled>Weiter</button>
+                  </div>
+                </nav>
+              </article>
+              <aside class="titan-side-note">
+                <p class="eyebrow">BEWEISGRENZE</p>
+                <strong>Keine erfundene Attribution.</strong>
+                <p>Ein zeitlich naher Prozess- oder Netzwerkbezug wird als <em>Temporal</em> ausgewiesen. Er belegt weder Dateiübertragung noch Urheberschaft. Fehlt die Zuordnung, zeigt Titan das ausdrücklich als <em>None</em>.</p>
+                <p class="titan-side-note-rule">Hohe Risiken entstehen aus geschützten Pfaden, Persistenz, Sicherheits-Downgrades und ausführbaren Ingress-Objekten — nicht aus einer einzelnen Vermutung.</p>
+              </aside>
+            </div>
+          </section>
+
+          <section class="titan-panel" id="titanPanelQuarantine" role="tabpanel" data-titan-panel="quarantine" aria-labelledby="titanTabQuarantine" hidden>
+            <div class="titan-quarantine-grid">
+              <article class="titan-surface">
+                <div class="titan-section-head">
+                  <div><p class="eyebrow">QUARANTINE VAULT</p><h3>Isoliert, verschlüsselt, prüfbar</h3><p>Titan sichert zuerst eine verschlüsselte Beweiskopie und entfernt das Original nur nach erfolgreicher Integritätsprüfung.</p></div>
+                  <span id="titanQuarantineSummary" class="status-pill info">0 OBJEKTE</span>
+                </div>
+                <div id="titanQuarantineList" class="titan-quarantine-list"></div>
+                <div id="titanQuarantineEmpty" class="titan-empty" hidden>Keine Objekte in Quarantäne. Neue unerwartete ausführbare Ingress-Objekte erscheinen hier nach einer Besitzerentscheidung oder einer aktiven Containment-Richtlinie.</div>
+                <div id="titanQuarantineStatus" class="titan-inline-state" role="status"></div>
+              </article>
+              <aside class="titan-side-note">
+                <p class="eyebrow">WIEDERHERSTELLUNG</p>
+                <strong>Nur mit intaktem Hash.</strong>
+                <p>Eine Wiederherstellung prüft den gespeicherten SHA-256-Wert und überschreibt niemals ein bereits vorhandenes Ziel. Jede Entscheidung wird als eigenes Evidenzereignis protokolliert.</p>
+                <p class="titan-side-note-rule">Löschen ist kein Standard. Titan bewahrt die verschlüsselte Kopie auch nach einer Wiederherstellung als Nachweis auf.</p>
+              </aside>
+            </div>
+          </section>
+
+          <section class="titan-panel" id="titanPanelPolicy" role="tabpanel" data-titan-panel="policy" aria-labelledby="titanTabPolicy" hidden>
+            <div class="titan-policy-grid">
+              <article class="titan-surface">
+                <div class="titan-section-head">
+                  <div><p class="eyebrow">OWNER POLICY</p><h3>Autorisierung ist keine Admin-Berechtigung</h3><p>Der Modus bestimmt die Reaktion. Die Risikoklasse und die Herkunft bestimmen, ob ein Objekt eine Freigabe braucht.</p></div>
+                  <span id="titanPolicyBadge" class="status-pill info">OBSERVE</span>
+                </div>
+                <div class="titan-policy-form">
+                  <label class="titan-field"><span>Antwortmodus</span>
+                    <select id="titanPolicyMode">
+                      <option value="OBSERVE">OBSERVE — ausschließlich beobachten</option>
+                      <option value="CONTAIN">CONTAIN — Hochrisiko-Objekte kontrolliert isolieren</option>
+                      <option value="STRICT">STRICT — Containment und strenge Besitzerprüfung</option>
+                    </select>
+                    <small>OBSERVE schreibt nur Evidenz. CONTAIN/STRICT erlauben die automatische Quarantäne neuer ausführbarer Hochrisiko-Objekte, wenn die Option aktiv ist.</small>
+                  </label>
+                  <label class="titan-switch">
+                    <input id="titanAutoQuarantine" type="checkbox">
+                    <span class="titan-switch-track" aria-hidden="true"><i></i></span>
+                    <span class="titan-switch-copy"><strong>Automatische Quarantäne</strong><small>Nur für neue ausführbare oder skriptfähige Objekte in geschützten Ingress-/Systempfaden, nie für normale Dokumente.</small></span>
+                  </label>
+                  <div class="titan-policy-actions">
+                    <button type="button" id="titanPolicySave" class="button primary">Richtlinie speichern</button>
+                    <span id="titanPolicyStatus" class="titan-inline-state" role="status"></span>
+                  </div>
+                </div>
+                <div id="titanPolicyRules" class="titan-policy-rules"></div>
+                <section class="titan-permit-section" aria-labelledby="titanDevRootHeading">
+                  <div class="titan-section-head">
+                    <div><p class="eyebrow">ENTWICKLUNGSBAUM</p><h3 id="titanDevRootHeading">Source- und Build-Bäume</h3><p>In diesem owner-markierten Baum bleiben Dateiereignisse vollständig in der Evidenz, werden aber nicht als Ingress-Hochrisiko eskaliert. System-/Persistenzänderungen bleiben unverändert streng.</p></div>
+                    <span id="titanDevRootsCount" class="status-pill info">0 BÄUME</span>
+                  </div>
+                  <div class="titan-permit-form">
+                    <label class="titan-field"><span>Absoluter Projektpfad</span><input id="titanDevRootPath" type="text" maxlength="260" autocomplete="off" spellcheck="false" placeholder="C:\Users\Operator\Projects\MyApp"></label>
+                    <div class="titan-policy-actions">
+                      <button type="button" id="titanDevRootAdd" class="button primary">Als Entwicklungsbaum markieren</button>
+                      <span id="titanDevRootStatus" class="titan-inline-state" role="status"></span>
+                    </div>
+                  </div>
+                  <div id="titanDevRootsList" class="titan-permit-list"></div>
+                </section>
+                <section class="titan-permit-section" aria-labelledby="titanPermitHeading">
+                  <div class="titan-section-head">
+                    <div><p class="eyebrow">BEGRENZTE FREIGABEN</p><h3 id="titanPermitHeading">Owner Permits</h3><p>Eine Freigabe gilt nur für einen konkreten Pfad, optional einen Hash, eine Aktion und einen Ablauf. Sie ersetzt keine pauschale Admin-Freigabe.</p></div>
+                    <span id="titanPermitsCount" class="status-pill info">0 AKTIV</span>
+                  </div>
+                  <div class="titan-permit-form">
+                    <label class="titan-field"><span>Dateipfad</span><input id="titanPermitPath" type="text" maxlength="260" autocomplete="off" spellcheck="false" placeholder="C:\Program Files\Beispiel\update.exe"></label>
+                    <label class="titan-field"><span>SHA-256 (optional)</span><input id="titanPermitHash" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="64 Hex-Zeichen, leer = pfadgebunden"></label>
+                    <label class="titan-field"><span>Erlaubte Aktion</span>
+                      <select id="titanPermitAction">
+                        <option value="ALLOW_CHANGE">Jede Änderung an diesem Pfad</option>
+                        <option value="FILE_CREATED">Datei anlegen</option>
+                        <option value="FILE_MODIFIED">Datei ändern</option>
+                        <option value="PERSISTENCE_ADDED">Persistenz anlegen</option>
+                        <option value="SECURITY_CHANGED">Sicherheitskonfiguration ändern</option>
+                      </select>
+                    </label>
+                    <label class="titan-field"><span>Gültigkeit</span>
+                      <select id="titanPermitTTL">
+                        <option value="15">15 Minuten</option>
+                        <option value="60" selected>1 Stunde</option>
+                        <option value="480">8 Stunden</option>
+                        <option value="1440">24 Stunden</option>
+                        <option value="10080">7 Tage</option>
+                      </select>
+                    </label>
+                    <label class="titan-switch">
+                      <input id="titanPermitSingle" type="checkbox" checked>
+                      <span class="titan-switch-track" aria-hidden="true"><i></i></span>
+                      <span class="titan-switch-copy"><strong>Einmalig</strong><small>Die Freigabe wird beim ersten passenden Ereignis verbraucht.</small></span>
+                    </label>
+                    <div class="titan-policy-actions">
+                      <button type="button" id="titanPermitCreate" class="button primary">Freigabe erteilen</button>
+                      <span id="titanPermitStatus" class="titan-inline-state" role="status"></span>
+                    </div>
+                  </div>
+                  <div id="titanPermitsList" class="titan-permit-list"></div>
+                </section>
+              </article>
+              <aside class="titan-side-note">
+                <p class="eyebrow">GRENZEN DER AUTORISIERUNG</p>
+                <strong>Was Titan nicht behauptet</strong>
+                <ul class="titan-limits-list">
+                  <li>Keine Erkennung einer Behörde, Person oder Absicht.</li>
+                  <li>Keine Datei-zu-PID-Zuordnung ohne direkten Beleg.</li>
+                  <li>Kein Schutz gegen vollständige Kernel- oder Firmware-Kontrolle ohne externen Witness.</li>
+                  <li>Kein automatisches Löschen von Beweisen oder Systemdateien.</li>
+                </ul>
+                <p class="titan-side-note-rule">Der lokale Checkpoint ist tamper-evident. Erst ein unabhängiger Witness macht das Schweigen des Hosts sichtbar.</p>
+              </aside>
+            </div>
+          </section>
+
+          <section class="titan-panel" id="titanPanelEvidence" role="tabpanel" data-titan-panel="evidence" aria-labelledby="titanTabEvidence" hidden>
+            <div class="titan-evidence-grid">
+              <article class="titan-surface">
+                <div class="titan-section-head">
+                  <div><p class="eyebrow">EVIDENCE LEDGER</p><h3>Signierte Checkpoints</h3><p>Jeder Checkpoint bindet die bisherige Journal-Kette an einen Ed25519-Schlüssel. Die Signatur schützt die Kette; sie beweist keine Urheberschaft.</p></div>
+                  <span id="titanEvidenceBadge" class="status-pill info">LOKAL</span>
+                </div>
+                <div id="titanCheckpoints" class="titan-checkpoint-list"></div>
+                <div id="titanEvidenceStatus" class="titan-inline-state" role="status"></div>
+                <div class="titan-evidence-actions">
+                  <button type="button" id="titanVerifyInline" class="button ghost">Journal und Signaturen prüfen</button>
+                </div>
+              </article>
+              <aside class="titan-side-note">
+                <p class="eyebrow">EVIDENZPAKET</p>
+                <strong>Für eine unabhängige Prüfung.</strong>
+                <p>Der Export enthält begrenzte Ereignisse, Checkpoints, den Verifikationsstatus und ausdrückliche Grenzen. Er ersetzt keine rechtliche Bewertung und keine Attribution.</p>
+                <button type="button" id="titanExportButton" class="button primary">Evidenzpaket exportieren</button>
+                <p id="titanExportStatus" class="titan-inline-state" role="status"></p>
+                <div class="titan-key-fingerprint"><span>PUBLIC KEY</span><code id="titanPublicKey">—</code></div>
+              </aside>
+            </div>
+          </section>
         </div>
-        <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">READINESS</p><h3 id="readinessTitle">Schutzstufe auswählen</h3></div></div><div id="readiness" class="readiness empty-state">Wähle eine Schutzstufe, um die serverseitigen Voraussetzungen zu prüfen.</div></article>
       </section>
 
-      <section class="view" data-page="xdr" hidden>
-        <div class="page-head"><div><p class="eyebrow">MHX XDR 7.0</p><h2>Prozess-, Defender- und Netzwerk-Korrelation.</h2><p>Prozessherkunft, Signatur, Command Semantics und Threat-Intel-Netzwerkziele werden zu überprüfbaren Angriffsketten verbunden.</p></div><div class="action-row"><button id="syncFeeds" class="button ghost">Threat Intelligence synchronisieren</button><button id="runXdr" class="button primary">Tiefenscan starten</button></div></div>
-        <div class="metric-grid" id="xdrMetrics"></div>
-        <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">SOVEREIGN THREAT INTELLIGENCE</p><h3>9-Feed Enforcement Matrix</h3><p id="threatIntelGeneration" class="mono muted">Generation wird geladen.</p></div><div class="status-cluster"><span id="threatIntelState" class="status-pill warn">STARTING</span><span id="threatEnforcementState" class="status-pill warn">WFP UNVERIFIED</span></div></div><div id="threatIntelOperationStrip" class="threat-intel-operation-strip" role="status" aria-live="polite" style="display:none;"><div style="display:flex;align-items:center;gap:10px;"><span id="threatIntelOperationState" class="status-pill info">IDLE</span><span id="threatIntelOperationDetail" class="mono" style="font-size:0.72rem">---</span></div></div><div id="threatFeedMatrix" class="threat-feed-grid"></div></article>
-        <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">MANAGEMENT SAFETY PLANE</p><h3>Protected Networks</h3><p>Explizit geschützte öffentliche Management-IP/CIDR werden vor der WFP-Block-Generation mathematisch aus BLOCK-Prefixen subtrahiert. Die Threat-Intel-Korrelation bleibt davon unberührt.</p></div><span id="protectedNetworkState" class="status-pill info">0 PREFIXES</span></div><div class="protected-network-grid"><label>Geschützte IP/CIDR, eine pro Zeile<textarea id="protectedNetworks" rows="7" maxlength="16000" spellcheck="false" placeholder="198.20.30.40/32&#10;198.20.31.0/24"></textarea></label><label>Begründung<input id="protectedNetworkReason" type="text" maxlength="512" autocomplete="off" placeholder="Warum muss diese Management-Strecke erreichbar bleiben?"></label></div><div class="section-head protected-network-actions"><p id="protectedNetworkGeneration" class="mono muted">Policy-Generation wird geladen.</p><button id="updateProtectedNetworks" class="button danger">Protected Networks anwenden</button></div></article>
+      <!-- ============================ PROTECTION ============================ -->
+      <section class="view" data-page="protection" hidden aria-labelledby="viewTitle">
+        <div class="page-head">
+          <div class="page-head-copy">
+            <p class="eyebrow">PROTECTION CENTER</p>
+            <h2>Aktiver Schutz ohne kryptische Betriebsmodi.</h2>
+            <p>Die Control Plane prüft serverseitig, welche Schutzstufe sicher aktiviert werden kann. Der Browser entscheidet nie über Release-Gates. Jede Stufe nennt ihre Wirkung, ihre Voraussetzungen und ihre Grenzen.</p>
+          </div>
+          <div class="page-actions"><span id="protectionBadge" class="status-pill warn">PRÜFUNG</span><button type="button" id="protectionHealthCheck" class="button ghost">Bereitschaft prüfen</button></div>
+        </div>
+
+        <article class="glass protection-state">
+          <div>
+            <small>AKTUELLER SCHUTZMODUS</small>
+            <strong id="currentMode">---</strong>
+            <p id="currentModeText">Schutzstatus wird geladen.</p>
+            <div class="action-row">
+              <span id="protectionHealth" class="status-pill warn">STARTING</span>
+              <span id="protectionVerified" class="mono muted">Noch nicht verifiziert</span>
+              <button type="button" id="reconcilePolicy" class="button ghost small">Policy synchronisieren</button>
+            </div>
+          </div>
+          <div class="protection-visual" aria-hidden="true"><span>MONITOR</span><i></i><span>GUARDED</span><i></i><span>SOVEREIGN</span></div>
+        </article>
+
+        <div class="mode-ladder" id="modeGrid" aria-live="polite"></div>
+
+        <article class="glass section-card">
+          <div class="section-head">
+            <div><p class="eyebrow">AKTIVE KONTROLLEN</p><h3>Was in dieser Schutzstufe tatsächlich gilt</h3><p id="protectionControlSource">Werte stammen aus der Live-Telemetrie und den Hardening-Messungen.</p></div>
+            <button type="button" class="button ghost small" data-go="hardening">Härtung öffnen</button>
+          </div>
+          <div id="protectionControls" class="control-list" aria-live="polite"></div>
+        </article>
+
+        <article class="glass section-card">
+          <div class="section-head"><div><p class="eyebrow">READINESS</p><h3 id="readinessTitle">Schutzstufe auswählen</h3><p>Voraussetzungen werden serverseitig geprüft. Blockierende Bedingungen sind konkret benannt, nicht versteckt.</p></div></div>
+          <div id="readiness" class="readiness empty-state">Wähle eine Schutzstufe, um die serverseitigen Voraussetzungen zu prüfen.</div>
+        </article>
+
+        <article class="glass section-card">
+          <div class="section-head">
+            <div><p class="eyebrow">CUSTOM PROTECTION PROFILE</p><h3>Eigenes Schutzprofil entwerfen</h3><p>Ein Profil bündelt eine Basisstufe und ausgewählte Kontrollen. Entwürfe bleiben lokal in dieser Sitzung; das Anwenden benötigt die serverseitige V5-Settings-API.</p></div>
+            <span id="profileApiBadge" class="status-pill warn">API WIRD GEPRÜFT</span>
+          </div>
+          <div id="profileStudioState"></div>
+          <div class="profile-studio">
+            <div>
+              <div class="profile-list" id="profileList" aria-live="polite"></div>
+              <p class="field-hint" id="profileListHint">Entwürfe sind nicht persistent und werden nicht als aktive Richtlinie dargestellt.</p>
+            </div>
+            <form id="profileForm" class="profile-form" novalidate>
+              <h3 id="profileFormTitle">Neues Profil</h3>
+              <div class="field-grid">
+                <label><span>Profilname</span><input id="profileName" type="text" maxlength="64" autocomplete="off" placeholder="z. B. Werkstatt-PC"></label>
+                <label><span>Basisstufe</span><select id="profileLevel">
+                  <option value="monitor">Monitor — nur erkennen</option>
+                  <option value="guarded">Guarded — kontextuelle Response</option>
+                  <option value="sovereign">Sovereign — Enforcement</option>
+                  <option value="custom">Benutzerdefiniert — eigene Kontrollwerte</option>
+                </select></label>
+              </div>
+              <label><span>Beschreibung (optional)</span><textarea id="profileDescription" rows="2" maxlength="240" placeholder="Zweck und Geltungsbereich dieses Profils"></textarea></label>
+              <fieldset class="fieldset">
+                <legend>Kontrollen im Profil</legend>
+                <div id="profileControls"></div>
+              </fieldset>
+              <div id="profileFormStatus" class="form-status" role="status" aria-live="polite"></div>
+              <div class="form-actions">
+                <button type="submit" id="profileSave" class="button primary">Entwurf speichern</button>
+                <button type="button" id="profileReset" class="button ghost">Zurücksetzen</button>
+              </div>
+            </form>
+          </div>
+        </article>
+      </section>
+
+      <!-- ============================ HARDENING ============================ -->
+      <section class="view" data-page="hardening" hidden aria-labelledby="viewTitle">
+        <div class="page-head">
+          <div class="page-head-copy">
+            <p class="eyebrow">WINDOWS HARDENING</p>
+            <h2>Idempotente Sicherheitskontrollen.</h2>
+            <p>Der vollständige Kontrollkatalog wird sofort dargestellt. Jede Karte aktualisiert sich live, sobald die Messung vorliegt; fehlende Messwerte werden als unbekannt und nicht als fehlend dargestellt.</p>
+          </div>
+          <div class="page-actions">
+            <button type="button" id="refreshHardening" class="button ghost">Status aktualisieren</button>
+            <button type="button" id="enforceBalanced" class="button primary">Empfohlenes Profil anwenden</button>
+          </div>
+        </div>
+        <div class="catalog-toolbar">
+          <div class="filter-chips" id="hardeningFilters" role="group" aria-label="Katalog filtern"></div>
+          <span class="catalog-count" id="hardeningCatalogState" role="status" aria-live="polite">Katalog wird vorbereitet …</span>
+        </div>
+        <div id="hardeningCount" class="catalog-count"></div>
+        <div id="hardeningComponents" class="component-grid" aria-live="polite"></div>
+        <article class="glass rollback-card">
+          <div><p class="eyebrow">ROLLBACK</p><h3>Gesicherten Vorzustand wiederherstellen</h3><p>Verwendet die bestehende reversible VGT-Transaktionslogik. Rollback benötigt eine klare Bestätigung.</p></div>
+          <button type="button" id="rollback" class="button danger">Rollback</button>
+        </article>
+      </section>
+
+      <!-- ============================ AUDIT ============================ -->
+      <section class="view" data-page="audit" hidden aria-labelledby="viewTitle">
+        <div class="page-head">
+          <div class="page-head-copy">
+            <p class="eyebrow">SAFETYSYS</p>
+            <h2>Windows Security Baseline Audit.</h2>
+            <p>Read-only Prüfung der lokalen Defender-, Netzwerk-, Plattform-, Identitäts-, Logging- und Systemkontrollen. Der Lauf zeigt sofort einen Dialog mit Stufe und Laufzeit; es gibt kein stilles Warten.</p>
+          </div>
+          <button type="button" id="runAudit" class="button primary">Audit starten</button>
+        </div>
+        <article class="glass audit-hero">
+          <div>
+            <p class="eyebrow">LETZTER LAUF</p>
+            <h3 id="auditLastRun">Noch kein Audit in dieser Sitzung</h3>
+            <p id="auditScope">Read-only. Es werden keine Einstellungen verändert.</p>
+          </div>
+          <span id="auditState" class="status-pill info">BEREIT</span>
+        </article>
+        <div class="metric-grid" id="auditMetrics"></div>
+        <article class="glass table-card">
+          <div class="section-head"><div><p class="eyebrow">KONTROLLEN</p><h3>Prüfergebnisse</h3></div></div>
+          <div class="table-wrap"><table><thead><tr><th>ID</th><th>Kategorie</th><th>Prüfung</th><th>Status</th><th>Ist / Soll</th></tr></thead><tbody id="auditRows"></tbody></table></div>
+          <p class="audit-table-note" id="auditTableNote">Ergebnisse erscheinen nach einem abgeschlossenen Audit. Ein neuer Lauf ersetzt die Anzeige, nicht die lokale Evidenz.</p>
+        </article>
+      </section>
+
+      <!-- ============================ EVIDENCE ============================ -->
+      <section class="view" data-page="evidence" hidden aria-labelledby="viewTitle">
+        <div class="page-head">
+          <div class="page-head-copy">
+            <p class="eyebrow">TAMPER-EVIDENT LEDGER</p>
+            <h2>Lokale, verkettete Evidence.</h2>
+            <p>HMAC-verkettete Security-Ereignisse machen nachträgliche Manipulation detektierbar. Angezeigt werden seitenweise die neuesten Einträge; es gibt keine endlose Liste.</p>
+          </div>
+          <div class="page-actions">
+            <button type="button" id="evidenceRefresh" class="button ghost">Aktualisieren</button>
+            <button type="button" id="verifyEvidence" class="button primary">Ledger verifizieren</button>
+          </div>
+        </div>
+        <div id="evidenceState"></div>
+        <div class="evidence-toolbar">
+          <span class="evidence-meta"><span id="evidenceSource" class="mono">—</span><span id="evidenceTotal" class="mono"></span></span>
+          <span class="pagination-info" id="evidencePageInfo">Seite 1</span>
+        </div>
+        <article class="glass table-card">
+          <div class="table-wrap"><table><thead><tr><th>Sequenz</th><th>Zeit</th><th>Typ</th><th>Aktion</th><th>Ergebnis</th></tr></thead><tbody id="evidenceRows"></tbody></table></div>
+        </article>
+        <nav class="pagination" aria-label="Evidence-Seiten">
+          <span class="pagination-info" id="evidenceRange">Keine Einträge geladen</span>
+          <div class="pagination-actions">
+            <button type="button" id="evidencePrev" class="button ghost" disabled><span aria-hidden="true"><svg width="14" height="14"><use href="#i-arrow-left"></use></svg></span>Zurück</button>
+            <button type="button" id="evidenceNext" class="button ghost" disabled>Weiter<span aria-hidden="true"><svg width="14" height="14"><use href="#i-arrow-right"></use></svg></span></button>
+          </div>
+        </nav>
+      </section>
+
+      <!-- ============================ THREAT INTELLIGENCE ============================ -->
+      <section class="view" data-page="threat-intel" hidden aria-labelledby="viewTitle">
+        <div class="page-head">
+          <div class="page-head-copy">
+            <p class="eyebrow">SOVEREIGN THREAT INTELLIGENCE</p>
+            <h2>Feeds, Zyklen und geschützte Netze.</h2>
+            <p>Threat Intelligence ist eine eigene Betriebsfläche: Feed-Zustand, letzte Synchronisation, nächster Abruf, konfigurierbares Intervall und geschützte Management-Prefixe. Keine externen IP-Abfragen im Browser.</p>
+          </div>
+          <div class="page-actions">
+            <span id="threatIntelState" class="status-pill warn">STARTING</span>
+            <span id="threatEnforcementState" class="status-pill warn">WFP UNVERIFIED</span>
+            <button type="button" id="syncFeeds" class="button primary">Jetzt synchronisieren</button>
+          </div>
+        </div>
+
+        <div id="tiErrorNotice"></div>
+        <div id="threatIntelOperationStrip" class="threat-intel-operation-strip" role="status" aria-live="polite" hidden>
+          <div class="action-row"><span id="threatIntelOperationState" class="status-pill info">IDLE</span><span id="threatIntelOperationDetail" class="mono">---</span></div>
+        </div>
+
+        <div class="ti-vitals">
+          <div class="ti-vital"><span>BLOCK-REGELN</span><strong id="tiBlockingIndicators">—</strong><small>Feodo + Spamhaus nach Protected-Subtraktion</small></div>
+          <div class="ti-vital"><span>INDIKATOREN</span><strong id="tiIndicators">—</strong><small id="tiFeedsReady">Block-Feeds: —</small></div>
+          <div class="ti-vital"><span>KORRELATION</span><strong id="tiCorrelationIndicators">—</strong><small>5 Intelligenz-Feeds</small></div>
+          <div class="ti-vital"><span>GESCHÜTZT</span><strong id="tiProtectedPrefixes">—</strong><small>Management-Prefixe</small></div>
+          <div class="ti-vital"><span>LETZTER SYNC</span><strong id="tiLastSuccess">—</strong><small id="tiLastAttempt">Versuch: —</small></div>
+          <div class="ti-vital"><span>NÄCHSTER ABRUF</span><strong id="tiNextPoll">—</strong><small id="tiCountdown">Intervall wird geladen</small></div>
+        </div>
+
+        <div class="ti-layout">
+          <article class="glass section-card">
+            <div class="section-head">
+              <div><p class="eyebrow">FEED-MATRIX</p><h3>9-Feed Enforcement</h3><p id="threatIntelGeneration" class="mono muted">Generation wird geladen.</p></div>
+            </div>
+            <div id="threatFeedMatrix" class="feed-list" aria-live="polite"></div>
+            <div class="ti-poll">
+              <label><span>Automatisches Abrufintervall (Minuten)</span><select id="tiInterval">
+                <option value="15">Alle 15 Minuten</option>
+                <option value="30">Alle 30 Minuten</option>
+                <option value="60">Jede Stunde</option>
+                <option value="120">Alle 2 Stunden</option>
+                <option value="240">Alle 4 Stunden</option>
+                <option value="360">Alle 6 Stunden</option>
+                <option value="720">Alle 12 Stunden</option>
+                <option value="1440">Täglich</option>
+              </select></label>
+              <button type="button" id="tiIntervalSave" class="button ghost">Intervall speichern</button>
+              <div id="tiIntervalStatus" class="form-status" role="status" aria-live="polite"></div>
+            </div>
+            <p class="field-hint" id="tiIntervalNote">Das Intervall wird serverseitig persistiert, sobald die Settings-API verfügbar ist. Ohne Backend bleibt eine Auswahl nur lokal in dieser Sitzung und wird nicht als gespeichert ausgegeben.</p>
+          </article>
+
+          <div class="ti-side">
+            <article class="glass section-card ti-protected">
+              <div class="section-head">
+                <div><p class="eyebrow">MANAGEMENT SAFETY PLANE</p><h3>Protected Networks</h3></div>
+                <span id="protectedNetworkState" class="status-pill info">0 PREFIXE</span>
+              </div>
+              <p class="muted">Explizit geschützte öffentliche Management-IP/CIDR werden vor der WFP-Block-Generation mathematisch aus BLOCK-Prefixen subtrahiert. Die Threat-Intel-Korrelation bleibt unberührt.</p>
+              <div class="field-grid">
+                <label><span>Geschützte IP/CIDR, eine pro Zeile</span><textarea id="protectedNetworks" rows="7" maxlength="16000" spellcheck="false" placeholder="198.20.30.40/32&#10;198.20.31.0/24"></textarea></label>
+                <label><span>Begründung</span><input id="protectedNetworkReason" type="text" maxlength="512" autocomplete="off" placeholder="Warum muss diese Management-Strecke erreichbar bleiben?"></label>
+              </div>
+              <div class="ti-protected-actions">
+                <p id="protectedNetworkGeneration" class="mono muted">Policy-Generation wird geladen.</p>
+                <button type="button" id="updateProtectedNetworks" class="button danger">Protected Networks anwenden</button>
+              </div>
+            </article>
+
+            <article class="glass section-card">
+              <div class="section-head"><div><p class="eyebrow">FEHLER &amp; GRENZEN</p><h3>Was der Feed-Status nicht aussagt</h3></div></div>
+              <p class="muted">Ein alter oder leerer Feed ist ein Betriebsproblem, kein Beweis für einen Angriff. WFP-Blocksperren werden nur als Schutzwirkung gewertet, wenn die aktive Regelgeneration verifiziert ist und zur Datenbasis passt.</p>
+              <p class="mono muted" id="tiLimitations">Enforcement-Generation: wird geladen.</p>
+            </article>
+          </div>
+        </div>
+
+        <article class="glass section-card ti-feed-policy" id="tiFeedPolicyCard">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">FEED-AUTORITÄT</p>
+              <h3>Blocken, korrelieren oder nur annotieren.</h3>
+              <p>Jeder Feed hat eine klare Rolle. Änderungen werden serverseitig validiert, persistiert und erst nach verifizierter WFP-Generation als aktive Sperrwirkung ausgewiesen. <strong>BLOCK</strong> ist eine echte Firewall-Autorität; <strong>KORRELATION</strong> und <strong>ANNOTATION</strong> liefern Kontext, ohne zusätzliche Sperren zu erzeugen.</p>
+            </div>
+            <div class="action-row feed-policy-badges">
+              <span id="tiFeedPolicyStore" class="status-pill info">WIRD GELADEN</span>
+              <span id="tiFeedPolicyPending" class="status-pill info" hidden>PENDING</span>
+            </div>
+          </div>
+          <div id="tiFeedPolicyState"></div>
+          <div id="tiFeedPolicyList" class="feed-policy-list" aria-live="polite"></div>
+          <div class="feed-policy-footer">
+            <p class="field-hint" id="tiFeedPolicyHint">Die Rolle <em>DEFAULT</em> stellt die unveränderliche Katalog-Autorität wieder her. Eine Änderung wird evidenzpflichtig protokolliert; BLOCK-Promotionen ohne vollständige Feed-Abdeckung werden fail-closed abgelehnt.</p>
+            <div class="action-row">
+              <button type="button" id="tiFeedPolicyApply" class="button primary" disabled>Feed-Rollen anwenden</button>
+              <button type="button" id="tiFeedPolicyReload" class="button ghost">Neu laden</button>
+              <span id="tiFeedPolicyStatus" class="form-status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- ============================ XDR ============================ -->
+      <section class="view" data-page="xdr" hidden aria-labelledby="viewTitle">
+        <div class="page-head">
+          <div class="page-head-copy">
+            <p class="eyebrow">MHX XDR 7.0</p>
+            <h2>Prozess-, Defender- und Netzwerk-Korrelation.</h2>
+            <p>Prozessherkunft, Signatur, Command Semantics und Threat-Intel-Netzwerkziele werden zu überprüfbaren Angriffsketten verbunden. Threat-Intelligence-Betrieb liegt auf der eigenen Seite.</p>
+          </div>
+          <div class="page-actions">
+            <button type="button" class="button ghost" data-go="threat-intel">Threat Intelligence</button>
+            <button type="button" id="runXdr" class="button primary">Tiefenscan starten</button>
+          </div>
+        </div>
+        <div class="xdr-status" id="xdrMetrics" aria-live="polite"></div>
+
+        <article class="glass section-card xdr-policy-card">
+          <div class="section-head">
+            <div><p class="eyebrow">XDR-RICHTLINIE</p><h3>Aggressivität, Response und Benachrichtigungen</h3><p>Änderungen werden serverseitig validiert. Nicht anwendbare Einstellungen werden abgelehnt, nicht still akzeptiert.</p></div>
+            <span id="mhxSettingsBadge" class="status-pill warn">API WIRD GEPRÜFT</span>
+          </div>
+          <div id="mhxSettingsState"></div>
+          <form id="mhxSettingsForm" class="settings-form xdr-policy-form" data-available="false" novalidate>
+            <section class="control-surface" aria-labelledby="mhxAggressivenessTitle">
+              <header class="control-surface-head">
+                <div><p class="eyebrow">01 · DURCHSETZUNGSSTUFE</p><h4 id="mhxAggressivenessTitle">Aggressivität — ein verifiziertes Schutzprofil</h4></div>
+                <span class="status-pill info">SYNCHRON</span>
+              </header>
+              <p class="field-hint" id="mhxAggressivenessHint">Die drei Domänen teilen sich eine einzige, verifizierte Schutzprofil-Stufe. Die Auswahlfelder sind synchron; getrennte Werte lehnt die Control Plane mit 409 ab. Die Stufe leitet sich aus dem aktiven Protection-Profile ab.</p>
+              <div class="domain-controls">
+                <label class="domain-control"><span>Prozess-Domäne</span><select id="mhxProcessLevel" disabled>
+                  <option value="monitor">Monitor — nur bewerten</option>
+                  <option value="balanced">Ausgewogen — kontextuelle Response</option>
+                  <option value="aggressive">Aggressiv — frühe Response</option>
+                </select><small>Prozess-, Signatur- und Kontextbewertung.</small></label>
+                <label class="domain-control"><span>Netzwerk-Domäne</span><select id="mhxNetworkLevel" disabled>
+                  <option value="monitor">Monitor — nur korrelieren</option>
+                  <option value="balanced">Ausgewogen — blockierende Treffer melden</option>
+                  <option value="aggressive">Aggressiv — verdächtige Ziele früher behandeln</option>
+                </select><small>Threat-IP- und Verbindungsbewertung.</small></label>
+                <label class="domain-control"><span>Anwendungs-Domäne</span><select id="mhxApplicationLevel" disabled>
+                  <option value="monitor">Monitor — nur protokollieren</option>
+                  <option value="balanced">Ausgewogen — Allowlist erzwingen</option>
+                  <option value="aggressive">Aggressiv — Default-Deny für Unbekanntes</option>
+                </select><small>App-Control- und Allowlist-Verhalten.</small></label>
+              </div>
+            </section>
+
+            <section class="control-surface" aria-labelledby="mhxResponseTitle">
+              <header class="control-surface-head">
+                <div><p class="eyebrow">02 · RESPONSE &amp; BENACHRICHTIGUNGEN</p><h4 id="mhxResponseTitle">Antwortautorität und Ereignisstrom</h4></div>
+              </header>
+              <div class="switch-stack">
+                <label class="switch"><input type="checkbox" id="mhxAutoTerminate" disabled><span class="switch-track" aria-hidden="true"></span><span class="switch-copy"><strong>Automatische Terminierung</strong><small>Nur MHX-bestätigte Prozesse nach erneuter Identitätsprüfung beenden. Guarded/Sovereign erforderlich.</small></span></label>
+                <label class="switch"><input type="checkbox" id="mhxNotifyEvents" disabled><span class="switch-track" aria-hidden="true"></span><span class="switch-copy"><strong>Benachrichtigungen bei Sperren</strong><small>Block- und Response-Ereignisse im Notification Center anzeigen. Stammt aus dem echten MHX-Ereignisstrom.</small></span></label>
+                <label class="switch"><input type="checkbox" id="mhxNotifyCritical" disabled><span class="switch-track" aria-hidden="true"></span><span class="switch-copy"><strong>Nur kritische Findings melden</strong><small>Hebt die Mindest-Schwere für Benachrichtigungen auf CRITICAL an; deaktiviert bleiben LOW und höher sichtbar.</small></span></label>
+              </div>
+              <div class="toast-config">
+                <div class="control-surface-head">
+                  <div><p class="eyebrow">WINDOWS-TOASTS</p><h4>Eigene Benachrichtigungen für echte Blocker</h4></div>
+                  <span class="status-pill info">TRAY</span>
+                </div>
+                <p class="field-hint">Windows-Benachrichtigungen werden ausschließlich für tatsächlich blockierte Ereignisse erzeugt. Kein Feed-Sync, kein Audit und keine reine Korrelation wird als Toast gemeldet.</p>
+                <div class="switch-stack">
+                  <label class="switch"><input type="checkbox" id="mhxToastEnabled" disabled><span class="switch-track" aria-hidden="true"></span><span class="switch-copy"><strong>Windows-Toasts bei Blockaktionen</strong><small>Zeigt eine native Windows-Benachrichtigung mit dem GeDefense-Icon, wenn eine Blockaktion verifiziert wurde.</small></span></label>
+                </div>
+                <label class="field standalone"><span>Toast-Mindestschwere</span><select id="mhxToastSeverity" disabled>
+                  <option value="LOW">LOW — alle echten Blocks</option>
+                  <option value="MEDIUM">MEDIUM — ab mittlerer Schwere</option>
+                  <option value="HIGH">HIGH — nur hohe Schwere</option>
+                  <option value="CRITICAL">CRITICAL — nur kritische Blocks</option>
+                </select></label>
+              </div>
+              <label class="field standalone"><span>Netzwerkzugriff nicht gelisteter Anwendungen</span><select id="mhxUnknownAppPolicy" disabled>
+                <option value="audit">Audit — erlauben und protokollieren</option>
+                <option value="block" disabled>Block — in diesem Build nicht unabhängig durchsetzbar</option>
+              </select></label>
+              <p class="field-hint">Die Allowlist wird über Windows App Control durchgesetzt. Eine Default-Deny-Regel für unbekannte Anwendungen ist in diesem Build nicht unabhängig schaltbar; die Control Plane lehnt sie ab.</p>
+            </section>
+
+            <section class="control-surface" aria-labelledby="mhxLimitsTitle">
+              <header class="control-surface-head">
+                <div><p class="eyebrow">03 · SERVER-GRENZEN</p><h4 id="mhxLimitsTitle">Nicht unterstützte Einstellungen</h4></div>
+              </header>
+              <div id="mhxLimits" class="app-list"></div>
+            </section>
+
+            <div class="form-actions">
+              <button type="submit" id="mhxSettingsSave" class="button primary" disabled>XDR-Richtlinie speichern</button>
+              <button type="button" id="mhxSettingsReload" class="button ghost">Neu laden</button>
+              <span id="mhxSettingsStatus" class="form-status" role="status" aria-live="polite"></span>
+            </div>
+          </form>
+        </article>
+
+        <article class="glass section-card app-policy-card" id="mhxAllowCard">
+          <div class="section-head">
+            <div><p class="eyebrow">ANWENDUNGSFREIGABEN</p><h3>App Control Allowlist</h3><p>Echte Freigaben aus der Windows App-Control-Schicht. Hinzufügen und Entfernen wird als protokollierte Sicherheits-Transaktion ausgeführt.</p></div>
+            <span id="mhxApplicationsCount" class="status-pill info">—</span>
+          </div>
+          <div id="mhxApplicationsState"></div>
+          <div id="mhxApplicationsList" class="app-list" aria-live="polite"></div>
+          <div class="app-add">
+            <label><span>Programmpfad</span><input id="mhxAppPath" type="text" maxlength="1024" autocomplete="off" spellcheck="false" placeholder="C:\Program Files\Beispiel\app.exe"></label>
+            <button type="button" id="mhxAppAdd" class="button">Hinzufügen</button>
+            <button type="button" id="mhxApplicationsReload" class="button ghost">Neu laden</button>
+          </div>
+          <div id="mhxApplicationsStatus" class="form-status" role="status" aria-live="polite"></div>
+        </article>
+
+        <article class="glass section-card" id="mhxDenyCard"><div class="section-head"><div><p class="eyebrow">NETZWERK-SPERREN</p><h3>Anwendungen vom Traffic ausschließen</h3><p>Echte Windows-Firewall-Programmregeln (ausgehend und eingehend, Aktion Block). Der Pfad wird serverseitig validiert, gehasht und als Sicherheits-Transaktion protokolliert.</p></div><span id="mhxDeniesCount" class="status-pill info">—</span></div>
+          <div id="mhxDeniesState"></div>
+          <div id="mhxDeniesList" class="app-list" aria-live="polite"></div>
+          <div class="app-add">
+            <label><span>Programmpfad blockieren</span><input id="mhxDenyPath" type="text" maxlength="1024" autocomplete="off" spellcheck="false" placeholder="C:\Program Files\Beispiel\app.exe"></label>
+            <button type="button" id="mhxDenyAdd" class="button danger">Netzwerk blockieren</button>
+            <button type="button" id="mhxDeniesReload" class="button ghost">Neu laden</button>
+          </div>
+          <div id="mhxDeniesStatus" class="form-status" role="status" aria-live="polite"></div>
+        </article>
+
         <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">ATTACK STORIES</p><h3>Korrelation</h3></div></div><div id="attackStories" class="story-list empty-state">Noch keine korrelierten Angriffe.</div></article>
-        <article class="glass table-card"><div class="section-head"><div><p class="eyebrow">REALTIME ANALYSES</p><h3>Prozessentscheidungen</h3></div></div><div class="table-wrap"><table><thead><tr><th>Zeit</th><th>Schwere</th><th>Prozess</th><th>Erkennung</th><th>Signale</th><th>Aktion</th></tr></thead><tbody id="analysisRows"></tbody></table></div></article>
-        <article class="glass table-card"><div class="section-head"><div><p class="eyebrow">FORENSISCHER SCAN</p><h3>Persistenz & System Findings</h3></div></div><div class="table-wrap"><table><thead><tr><th>Schwere</th><th>Kategorie</th><th>Finding</th><th>Entität</th><th>Evidenz</th></tr></thead><tbody id="xdrRows"></tbody></table></div></article>
+        <article class="glass table-card">
+          <div class="section-head">
+            <div><p class="eyebrow">REALTIME ANALYSES</p><h3>Prozessentscheidungen</h3></div>
+            <span id="analysisCount" class="status-pill info">—</span>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>Zeit</th><th>Schwere</th><th>Prozess</th><th>Erkennung</th><th>Signale</th><th>Aktion</th></tr></thead><tbody id="analysisRows"></tbody></table></div>
+          <nav class="pager-bar" aria-label="Seiten der Prozessentscheidungen">
+            <span class="pagination-info" id="analysisPageInfo">Noch keine Analysen geladen</span>
+            <div class="pagination-actions">
+              <button type="button" id="analysisPrev" class="button ghost small" disabled>Zurück</button>
+              <button type="button" id="analysisNext" class="button ghost small" disabled>Weiter</button>
+            </div>
+          </nav>
+        </article>
+        <article class="glass table-card"><div class="section-head"><div><p class="eyebrow">FORENSISCHER SCAN</p><h3>Persistenz &amp; System Findings</h3></div></div><div class="table-wrap"><table><thead><tr><th>Schwere</th><th>Kategorie</th><th>Finding</th><th>Entität</th><th>Evidenz</th></tr></thead><tbody id="xdrRows"></tbody></table></div></article>
       </section>
 
-      <section class="view" data-page="network" hidden>
-        <div class="page-head"><div><p class="eyebrow">NATIVE NETWORK TELEMETRY</p><h2>Remote-IP → Owning PID → Prozesskontext.</h2><p>GeDefense nutzt Windows-eigene TCP-Tabellen und verbindet Threat-Intel-Treffer ohne zusätzliche Runtime mit MHX.</p></div><span id="networkState" class="status-pill info">NATIVE TCP</span></div>
+      <!-- ============================ NETWORK ============================ -->
+      <section class="view" data-page="network" hidden aria-labelledby="viewTitle">
+        <div class="page-head">
+          <div class="page-head-copy">
+            <p class="eyebrow">NATIVE NETWORK TELEMETRY</p>
+            <h2>Remote-IP → Owning PID → Prozesskontext.</h2>
+            <p>GeDefense nutzt Windows-eigene TCP-Tabellen und verbindet Threat-Intel-Treffer ohne zusätzliche Runtime mit MHX.</p>
+          </div>
+          <span id="networkState" class="status-pill info">NATIVE TCP</span>
+        </div>
         <div class="metric-grid" id="networkMetrics"></div>
-        <article class="glass table-card"><div class="section-head"><div><p class="eyebrow">THREAT NETWORK FINDINGS</p><h3>Korrelierte Verbindungen</h3></div></div><div class="table-wrap"><table><thead><tr><th>Zeit</th><th>Prozess</th><th>Remote</th><th>Port</th><th>Policy</th><th>Feeds</th><th>Schwere</th><th>Response</th></tr></thead><tbody id="networkRows"></tbody></table></div></article>
+        <article class="glass table-card"><div class="section-head"><div><p class="eyebrow">THREAT NETWORK FINDINGS</p><h3>Korrelierte Verbindungen</h3></div><span id="networkFindingsCount" class="status-pill info">—</span></div><div class="table-wrap"><table><thead><tr><th>Zeit</th><th>Prozess</th><th>Remote</th><th>Port</th><th>Policy</th><th>Feeds</th><th>Schwere</th><th>Response</th></tr></thead><tbody id="networkRows"></tbody></table></div></article>
       </section>
 
-      <section class="view" data-page="kinetic" hidden>
-        <div class="page-head"><div><p class="eyebrow">KINETIC DEFENSE // WINDOWS</p><h2>Signal. Kontext. Schutz.</h2><p>WFP-5157-Bursts werden mit Threat-IP-Feeds korreliert. Ein erkannter Burst ist keine nachgewiesene SYN-Flut.</p></div><span class="status-pill warn" id="kineticState">OBSERVE ONLY</span></div>
-        <article class="glass section-card kinetic-hero"><div><p class="eyebrow">OPERATOR-CONTROLLED KINETIC</p><h3 id="kineticTitle">Beobachtungsmodus</h3><p id="kineticExplanation">Keine eigenständigen Kinetic-Sperrregeln. Windows Threat-Intel-WFP-Blockregeln werden nur nach geprüfter Generation als Schutzwirkung gewertet.</p><p class="mono muted" id="kineticCoverage">Coverage wird geladen.</p></div><div class="kinetic-actions"><button class="button primary" id="kineticArm">Threat-IP-Korrelation scharfschalten</button><button class="button ghost" id="kineticDisarm">Beobachtungsmodus</button></div></article>
+      <!-- ============================ KINETIC ============================ -->
+      <section class="view" data-page="kinetic" hidden aria-labelledby="viewTitle">
+        <div class="page-head">
+          <div class="page-head-copy">
+            <p class="eyebrow">KINETIC DEFENSE // WINDOWS</p>
+            <h2>Signal. Kontext. Schutz.</h2>
+            <p>WFP-5157-Bursts werden mit Threat-IP-Feeds korreliert. Ein erkannter Burst ist keine nachgewiesene SYN-Flut. Die Richtlinie ist operatorgesteuert und fail-secure.</p>
+          </div>
+          <span class="status-pill warn" id="kineticState">OBSERVE ONLY</span>
+        </div>
+
+        <article class="glass section-card kinetic-hero">
+          <div>
+            <p class="eyebrow">OPERATOR-CONTROLLED KINETIC</p>
+            <h3 id="kineticTitle">Beobachtungsmodus</h3>
+            <p id="kineticExplanation">Keine eigenständigen Kinetic-Sperrregeln. Windows Threat-Intel-WFP-Blockregeln werden nur nach geprüfter Generation als Schutzwirkung gewertet.</p>
+            <p class="mono muted" id="kineticCoverage">Coverage wird geladen.</p>
+          </div>
+          <div class="kinetic-actions">
+            <button type="button" class="button primary" id="kineticArm">Threat-IP-Korrelation scharfschalten</button>
+            <button type="button" class="button ghost" id="kineticDisarm">Beobachtungsmodus</button>
+          </div>
+        </article>
+
         <div class="metric-grid" id="kineticMetrics"></div>
+
+        <article class="glass section-card kinetic-policy-card">
+          <div class="section-head">
+            <div><p class="eyebrow">KINETIC-RICHTLINIE</p><h3>Persistenz, Schwellen und Benachrichtigungen</h3><p>Schwellen werden serverseitig validiert. Persistenz bedeutet: Die Bewaffnung wird nach einem Neustart nur wiederhergestellt, wenn alle Verifikationsbedingungen erneut erfüllt sind.</p></div>
+            <span id="kineticSettingsBadge" class="status-pill warn">API WIRD GEPRÜFT</span>
+          </div>
+          <div id="kineticSettingsState"></div>
+          <div class="persisted-strip">
+            <span>PERSISTENZ</span><strong id="kineticPersistState">—</strong>
+            <span>QUELLE</span><strong id="kineticConfigSource">—</strong>
+            <span>REARM</span><strong id="kineticRearmedState">—</strong>
+            <span id="kineticPersistenceBadge" class="status-pill info">UNBEKANNT</span>
+          </div>
+          <form id="kineticSettingsForm" class="settings-form kinetic-config" data-available="false" novalidate>
+            <div class="kinetic-config-grid">
+              <section class="control-surface" aria-labelledby="kineticPersistTitle">
+                <header class="control-surface-head">
+                  <div><p class="eyebrow">01 · NEUSTART</p><h4 id="kineticPersistTitle">Persistenz der Bewaffnung</h4></div>
+                </header>
+                <label class="switch"><input type="checkbox" id="kineticPersistArmed" disabled><span class="switch-track" aria-hidden="true"></span><span class="switch-copy"><strong>Bewaffnung nach Neustart wiederherstellen</strong><small>Nur nach erneuter, verifizierter Threat-IP/WFP-Generation. Kein fail-open.</small></span></label>
+              </section>
+              <section class="control-surface" aria-labelledby="kineticThresholdTitle">
+                <header class="control-surface-head">
+                  <div><p class="eyebrow">02 · SCHWELLEN</p><h4 id="kineticThresholdTitle">Burst-Erkennung</h4></div>
+                </header>
+                <div class="field-grid threshold-grid">
+                  <label><span>Burst-Fenster (Sekunden)</span><input id="kineticWindowSeconds" type="number" min="2" max="300" step="1" value="10" disabled><small class="field-hint">Beobachtungsfenster je Burst.</small></label>
+                  <label><span>Mindest-Ereignisse</span><input id="kineticMinEvents" type="number" min="3" max="32" step="1" value="12" disabled><small class="field-hint">WFP-5157-Ereignisse im Fenster.</small></label>
+                  <label><span>Mindest-Portvielfalt</span><input id="kineticMinDistinctPorts" type="number" min="2" max="16" step="1" value="3" disabled><small class="field-hint">Distinkte Zielports, keine Allowlist.</small></label>
+                  <label><span>Auto-Disarm (Minuten, 0 = aus)</span><input id="kineticAutoDisarm" type="number" min="0" max="10080" step="1" value="0" disabled><small class="field-hint">Automatische Rückkehr in Beobachtung (0 oder 5–10080 Minuten).</small></label>
+                </div>
+                <p class="field-hint" id="kineticThresholdHint">Die Mindest-Portvielfalt ist eine Anzahl distinkter Ports im Burst-Fenster (2–16) und darf die Mindest-Ereignisse nicht überschreiten. Sie ist keine Port-Allowlist.</p>
+              </section>
+            </div>
+            <section class="control-surface" aria-labelledby="kineticNotifyTitle">
+              <header class="control-surface-head">
+                <div><p class="eyebrow">03 · BENACHRICHTIGUNGEN</p><h4 id="kineticNotifyTitle">Ereignisstrom</h4></div>
+              </header>
+              <label class="switch"><input type="checkbox" id="kineticNotifyEnabled" disabled><span class="switch-track" aria-hidden="true"></span><span class="switch-copy"><strong>Benachrichtigungen bei Burst-Korrelationen</strong><small>Nur echte, von der Control Plane gemeldete Ereignisse erscheinen im Notification Center.</small></span></label>
+            </section>
+            <div class="form-actions">
+              <button type="submit" id="kineticSettingsSave" class="button primary" disabled>Kinetic-Richtlinie speichern</button>
+              <button type="button" id="kineticSettingsReload" class="button ghost">Neu laden</button>
+              <span id="kineticSettingsStatus" class="form-status" role="status" aria-live="polite"></span>
+            </div>
+          </form>
+        </article>
+
         <article class="glass section-card kinetic-geocard">
           <div class="section-head"><div><p class="eyebrow">KINETIC GEO INTELLIGENCE // LOCAL ONLY</p><h3>Weltkarte · Länder · ASN</h3><p>Ungefähre Netzherkunft aus lokaler GeoIP/ASN-CSV. Keine externe IP-Anfrage, keine Herkunftsbehauptung über Personen.</p></div></div>
           <div id="kineticGeoMap" class="kinetic-geo-map" aria-label="Kinetic Weltkarte"></div>
@@ -117,52 +1059,189 @@
           <div class="table-wrap"><table><thead><tr><th>Quell-IP</th><th>Land</th><th>ASN</th><th>Provider</th><th>Ereignis</th></tr></thead><tbody id="kineticGeoRows"></tbody></table></div>
           <p class="muted geo-attribution">Daten: DB-IP Lite (CC BY 4.0, db-ip.com), Origin ASN (PDDL). Näherungswerte, nicht Personenstandorte.</p>
         </article>
+
         <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">KINETIC TIMELINE</p><h3>Erkannte Bursts und Threat-IP-Korrelation</h3></div></div><div id="kineticTimeline" class="story-list empty-state">Noch keine Burst-Ereignisse.</div></article>
-        <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">KINETIC SIGNAL PIPELINE</p><h3>Erkennung und Verifikation</h3></div></div><div class="kinetic-pipeline"><span>WFP 5157<br><small>echte Blockevents</small></span><b>›</b><span>Burstfenster<br><small>≥ 12 / 10s / 3 Ports</small></span><b>›</b><span>Threat-IP<br><small>Feed-Match</small></span><b>›</b><span>WFP Generation<br><small>muss verifiziert sein</small></span></div><p class="muted">Kinetic Armed bedeutet aktuell aktive Korrelation, nicht die Installation neuer Kinetic-Sperrregeln. Separate dynamische Blocks benötigen einen eigenen, getesteten Enforcement-/Rollback-Mechanismus.</p></article>
+
+        <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">KINETIC SIGNAL PIPELINE</p><h3>Erkennung und Verifikation</h3></div></div><div class="kinetic-pipeline"><span>WFP 5157<small>echte Blockevents</small></span><b>›</b><span>Burstfenster<small>≥ 12 / 10s / 3 Ports</small></span><b>›</b><span>Threat-IP<small>Feed-Match</small></span><b>›</b><span>WFP Generation<small>muss verifiziert sein</small></span></div><p class="muted">Kinetic Armed bedeutet aktive Korrelation, nicht die Installation neuer Kinetic-Sperrregeln. Separate dynamische Blocks benötigen einen eigenen, getesteten Enforcement-/Rollback-Mechanismus.</p></article>
       </section>
 
-      <section class="view" data-page="integrity" hidden>
-        <div class="page-head"><div><p class="eyebrow">FILE INTEGRITY FABRIC</p><h2>Atomare SHA-256-Systemintegrität.</h2><p>Reguläre Dateien auf festen Laufwerken werden in bounded Worker-Pipelines geprüft. Reparse- und Junction-Traversal bleibt ausgeschlossen.</p></div><div class="action-row"><select id="integrityInterval"><option value="12">Alle 12 Stunden</option><option value="24">Alle 24 Stunden</option></select><button id="integrityToggle" class="button ghost">Überwachung aktivieren</button><button id="integrityScan" class="button primary">Jetzt scannen</button></div></div>
+      <!-- ============================ INTEGRITY ============================ -->
+      <section class="view" data-page="integrity" hidden aria-labelledby="viewTitle">
+        <div class="page-head">
+          <div class="page-head-copy">
+            <p class="eyebrow">FILE INTEGRITY FABRIC</p>
+            <h2>Atomare SHA-256-Systemintegrität.</h2>
+            <p>Reguläre Dateien auf festen Laufwerken werden in bounded Worker-Pipelines geprüft. Reparse- und Junction-Traversal bleibt ausgeschlossen.</p>
+          </div>
+          <div class="page-actions">
+            <select id="integrityInterval" aria-label="Integritätsintervall"><option value="12">Alle 12 Stunden</option><option value="24">Alle 24 Stunden</option></select>
+            <button type="button" id="integrityToggle" class="button ghost">Überwachung aktivieren</button>
+            <button type="button" id="integrityScan" class="button primary">Jetzt scannen</button>
+          </div>
+        </div>
         <div class="metric-grid" id="integrityMetrics"></div>
         <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">SCAN</p><h3 id="integrityProgressText">Noch keine Baseline</h3></div><span id="integrityState" class="status-pill info">DISABLED</span></div><div class="progress"><span id="integrityProgressBar"></span></div><p id="integritySchedule" class="muted"></p></article>
-        <article class="glass table-card"><div class="table-wrap"><table><thead><tr><th>Typ</th><th>Datei</th><th>Alter Hash</th><th>Neuer Hash</th><th>Größe</th></tr></thead><tbody id="integrityRows"></tbody></table></div></article>
+        <article class="glass table-card"><div class="section-head"><div><p class="eyebrow">ÄNDERUNGEN</p><h3>Erkannte Dateiveränderungen</h3></div><span id="integrityChangesCount" class="status-pill info">—</span></div><div class="table-wrap"><table><thead><tr><th>Typ</th><th>Datei</th><th>Alter Hash</th><th>Neuer Hash</th><th>Größe</th></tr></thead><tbody id="integrityRows"></tbody></table></div></article>
       </section>
 
-      <section class="view" data-page="hardening" hidden>
-        <div class="page-head"><div><p class="eyebrow">WINDOWS HARDENING</p><h2>Idempotente Sicherheitskontrollen.</h2><p>Jede Komponente wird live gemessen und einzeln als protokollierte Security-Transaktion aktiviert.</p></div><div class="action-row"><button id="refreshHardening" class="button ghost">Status aktualisieren</button><button id="enforceBalanced" class="button primary">Empfohlenes Profil anwenden</button></div></div>
-        <div id="hardeningComponents" class="component-grid"></div>
-        <article class="glass rollback-card"><div><p class="eyebrow">ROLLBACK</p><h3>Gesicherten Vorzustand wiederherstellen</h3><p>Verwendet die bestehende reversible VGT-Transaktionslogik.</p></div><button id="rollback" class="button danger">Rollback</button></article>
+      <!-- ============================ SYSTEM ============================ -->
+      <section class="view" data-page="system" hidden aria-labelledby="viewTitle">
+        <div class="page-head">
+          <div class="page-head-copy">
+            <p class="eyebrow">SYSTEM</p>
+            <h2>Lokale GeDefense-Instanz.</h2>
+            <p>Keine Cloud-Control-Plane, keine CDN-Abhängigkeiten und keine zusätzlichen Runtime-Module. Version und Bereitschaft stammen direkt aus der lokalen Control Plane.</p>
+          </div>
+          <button type="button" id="systemHealthCheck" class="button ghost">Bereitschaftsprüfung öffnen</button>
+        </div>
+        <div class="system-grid">
+          <article class="glass system-card"><span>VERSION</span><strong id="systemVersion">---</strong></article>
+          <article class="glass system-card"><span>PLATTFORM</span><strong id="systemPlatform">---</strong></article>
+          <article class="glass system-card"><span>CONTROL PLANE</span><strong>127.0.0.1:17831</strong></article>
+          <article class="glass system-card"><span>MHX TELEMETRIE</span><strong id="systemTelemetry">---</strong></article>
+          <article class="glass system-card"><span>NETZWERK-TELEMETRIE</span><strong id="systemNetwork">---</strong></article>
+          <article class="glass system-card"><span>APP CONTROL</span><strong id="systemAppControl">---</strong></article>
+          <article class="glass system-card"><span>PROTECTION POLICY</span><strong id="systemProtectionHealth">---</strong></article>
+          <article class="glass system-card"><span>LETZTE BEREITSCHAFT</span><strong id="systemHealthChecked">---</strong><small id="systemHealthHealthy" class="mono muted"></small></article>
+        </div>
       </section>
 
-      <section class="view" data-page="audit" hidden>
-        <div class="page-head"><div><p class="eyebrow">SAFETYSYS</p><h2>Windows Security Baseline Audit.</h2><p>Read-only Prüfung der lokalen Defender-, Netzwerk-, Plattform-, Identitäts-, Logging- und Systemkontrollen.</p></div><button id="runAudit" class="button primary">Audit starten</button></div>
-        <div class="metric-grid" id="auditMetrics"></div>
-        <article class="glass table-card"><div class="table-wrap"><table><thead><tr><th>ID</th><th>Kategorie</th><th>Prüfung</th><th>Status</th><th>Ist / Soll</th></tr></thead><tbody id="auditRows"></tbody></table></div></article>
-      </section>
-
-      <section class="view" data-page="evidence" hidden>
-        <div class="page-head"><div><p class="eyebrow">TAMPER-EVIDENT LEDGER</p><h2>Lokale, verkettete Evidence.</h2><p>HMAC-verkettete Security-Ereignisse machen nachträgliche Manipulation detektierbar.</p></div><button id="verifyEvidence" class="button primary">Ledger verifizieren</button></div>
-        <article class="glass table-card"><div class="table-wrap"><table><thead><tr><th>Sequenz</th><th>Zeit</th><th>Typ</th><th>Aktion</th><th>Ergebnis</th></tr></thead><tbody id="evidenceRows"></tbody></table></div></article>
-      </section>
-
-      <section class="view" data-page="system" hidden>
-        <div class="page-head"><div><p class="eyebrow">SYSTEM</p><h2>Lokale GeDefense-Instanz.</h2><p>Keine Cloud-Control-Plane, keine CDN-Abhängigkeiten und keine neuen Third-Party-Go-Module.</p></div></div>
-        <div class="system-grid"><article class="glass system-card"><span>VERSION</span><strong id="systemVersion">---</strong></article><article class="glass system-card"><span>PLATTFORM</span><strong id="systemPlatform">---</strong></article><article class="glass system-card"><span>CONTROL PLANE</span><strong>127.0.0.1:17831</strong></article><article class="glass system-card"><span>MHX TELEMETRIE</span><strong id="systemTelemetry">---</strong></article><article class="glass system-card"><span>NETZWERK TELEMETRIE</span><strong id="systemNetwork">---</strong></article><article class="glass system-card"><span>APP CONTROL</span><strong id="systemAppControl">---</strong></article><article class="glass system-card"><span>PROTECTION POLICY</span><strong id="systemProtectionHealth">---</strong></article></div>
-      </section>
+      <div id="pageLive" class="visually-hidden" aria-live="polite"></div>
     </main>
   </div>
 
-  <dialog id="kineticDialog"><form method="dialog"><div class="dialog-head"><div><p class="eyebrow">KINETIC OPERATOR GATE</p><h2 id="kineticDialogTitle">Kinetic umschalten</h2></div></div><p id="kineticDialogExplanation">Freigabe wird geprüft.</p><label>Begründung<input id="kineticReason" type="text" maxlength="512" autocomplete="off" placeholder="Mindestens 8 Zeichen"></label><div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="kineticConfirm" value="default" class="button primary">Bestätigen</button></div></form></dialog>
-  <dialog id="authDialog"><form method="dialog"><div class="dialog-head"><div><p class="eyebrow">OPERATOR ACCESS</p><h2>Lokale Sitzung entsperren</h2></div></div><p>Der Operator-Key bleibt ausschließlich im Arbeitsspeicher dieses Browser-Tabs.</p><label>Operator-Key<input id="operatorKey" type="password" autocomplete="off" spellcheck="false"></label><div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="authSubmit" value="default" class="button primary">Entsperren</button></div></form></dialog>
-  <dialog id="protectionDialog"><form method="dialog"><div class="dialog-head"><div><p class="eyebrow">PROTECTION TRANSITION</p><h2 id="protectionDialogTitle">Schutzstufe ändern</h2></div></div><div id="protectionDialogBody" class="dialog-copy"></div><label>Begründung<input id="protectionReason" type="text" maxlength="512" autocomplete="off" placeholder="Warum wird diese Schutzstufe aktiviert?"></label><div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="protectionConfirm" value="default" class="button primary">Bestätigen</button></div></form></dialog>
-  <dialog id="confirmDialog"><form method="dialog"><div class="dialog-head"><div><p class="eyebrow">SECURITY TRANSACTION</p><h2 id="confirmTitle">Aktion bestätigen</h2></div></div><p id="confirmText"></p><div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="confirmAction" value="default" class="button danger">Ausführen</button></div></form></dialog>
-  <dialog id="syncDialog"><form method="dialog"><div class="dialog-head"><div><p class="eyebrow">SOVEREIGN THREAT INTELLIGENCE</p><h2 id="syncDialogTitle">Threat Intelligence Synchronisation</h2></div></div><div id="syncDialogBody" class="dialog-copy"><p id="syncDialogStatusText">Threat-Feeds werden synchronisiert und WFP-Blockregeln verifiziert...</p><div class="progress" style="margin:16px 0"><span id="syncDialogProgressBar" style="width:25%"></span></div><div id="syncDialogDetails" class="mono muted" style="font-size:0.72rem;line-height:1.6">Verbindung zu Threat-Intelligence-Quellen wird aufgebaut...</div></div><div class="dialog-actions"><button id="syncDialogClose" value="cancel" class="button ghost" disabled>Schließen</button></div></form></dialog>
-  <dialog id="startupDialog" aria-labelledby="startupTitle" aria-describedby="startupSummary">
-    <header class="health-header"><div class="health-brand"><img src="/assets/gedefense-logo.png" alt=""><p class="eyebrow">GEDEFENSE · SYSTEMBEREITSCHAFT</p></div><h2 id="startupTitle">GeDefense wird vorbereitet</h2><p id="startupSummary"></p></header>
-    <div class="health-progress"><div class="health-progress-label" role="status" aria-live="polite"><span id="startupStage">Startcheck</span><span id="startupCount">0 / 4</span></div><progress id="startupProgress" value="0" max="4" aria-label="Fortschritt der Synchronisierung"></progress></div>
-    <ul id="startupChecks" class="health-checks" aria-label="Schutzbereiche"></ul>
-    <footer class="health-actions"><button id="startupRetry" class="button primary" hidden>Erneut synchronisieren</button><button id="startupClose" class="button ghost" autofocus>Im Hintergrund fortsetzen</button></footer>
+  <!-- ============================ DIALOGS ============================ -->
+  <dialog id="kineticDialog" aria-labelledby="kineticDialogTitle">
+    <form method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">KINETIC OPERATOR GATE</p><h2 id="kineticDialogTitle">Kinetic umschalten</h2></div></div>
+      <p id="kineticDialogExplanation" class="dialog-copy">Freigabe wird geprüft.</p>
+      <label><span>Begründung</span><input id="kineticReason" type="text" maxlength="512" autocomplete="off" placeholder="Mindestens 8 Zeichen"></label>
+      <div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="kineticConfirm" value="default" class="button primary">Bestätigen</button></div>
+    </form>
   </dialog>
+
+  <dialog id="authDialog" aria-labelledby="authTitle">
+    <form method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">OPERATOR ACCESS</p><h2 id="authTitle">Lokale Sitzung entsperren</h2></div></div>
+      <p class="dialog-copy">Der Operator-Key bleibt ausschließlich im Arbeitsspeicher dieses Browser-Tabs.</p>
+      <label><span>Operator-Key</span><input id="operatorKey" type="password" autocomplete="off" spellcheck="false"></label>
+      <div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="authSubmit" value="default" class="button primary">Entsperren</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="protectionDialog" aria-labelledby="protectionDialogTitle">
+    <form method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">PROTECTION TRANSITION</p><h2 id="protectionDialogTitle">Schutzstufe ändern</h2></div></div>
+      <div id="protectionDialogBody" class="dialog-copy"></div>
+      <div id="protectionProgress" class="protection-progress" role="status" aria-live="polite" hidden>
+        <span class="health-spinner" aria-hidden="true"></span>
+        <div><strong id="protectionProgressTitle">Schutzstufe wird angewendet …</strong><small id="protectionProgressDetail">Die Schutzregeln werden serverseitig verifiziert.</small></div>
+        <span id="protectionProgressElapsed" class="protection-progress-elapsed">0 s</span>
+      </div>
+      <label><span>Begründung</span><input id="protectionReason" type="text" maxlength="512" autocomplete="off" placeholder="Warum wird diese Schutzstufe aktiviert?"></label>
+      <div class="dialog-actions"><button id="protectionCancel" value="cancel" class="button ghost">Abbrechen</button><button id="protectionConfirm" value="default" class="button primary">Bestätigen</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDialog" aria-labelledby="confirmTitle">
+    <form method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">SECURITY TRANSACTION</p><h2 id="confirmTitle">Aktion bestätigen</h2></div></div>
+      <p id="confirmText" class="dialog-copy"></p>
+      <div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="confirmAction" value="default" class="button danger">Ausführen</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="syncDialog" aria-labelledby="syncDialogTitle">
+    <form method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">SOVEREIGN THREAT INTELLIGENCE</p><h2 id="syncDialogTitle">Threat Intelligence Synchronisation</h2></div></div>
+      <div id="syncDialogBody" class="dialog-copy">
+        <p id="syncDialogStatusText">Threat-Feeds werden synchronisiert und WFP-Blockregeln verifiziert …</p>
+        <div class="progress"><span id="syncDialogProgressBar"></span></div>
+        <div id="syncDialogDetails" class="mono muted">Verbindung zu Threat-Intelligence-Quellen wird aufgebaut …</div>
+      </div>
+      <div class="dialog-actions"><button id="syncDialogClose" value="cancel" class="button ghost" disabled>Schließen</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="auditDialog" class="audit-dialog" aria-labelledby="auditDialogTitle">
+    <div class="audit-dialog-header">
+      <div class="dialog-head">
+        <div><p class="eyebrow">SAFETYSYS BASELINE</p><h2 id="auditDialogTitle">Audit wird vorbereitet</h2></div>
+        <button type="button" class="dialog-close" id="auditDialogClose" aria-label="Audit-Dialog schließen">×</button>
+      </div>
+      <p id="auditDialogStatus" class="dialog-copy" role="status" aria-live="polite">Verbindung zur lokalen Control Plane wird geprüft …</p>
+      <div class="audit-elapsed"><strong id="auditElapsed">0:00</strong><span>VERSTRICHEN</span><span id="auditDialogPhase" class="status-pill info">VORBEREITUNG</span></div>
+    </div>
+    <div class="audit-dialog-body">
+      <ol id="auditStages" class="audit-stages">
+        <li class="audit-stage" data-stage="request" data-state="pending"><span class="audit-stage-marker" aria-hidden="true"></span><div><strong>Auftrag an die Control Plane</strong><small>Read-only Audit-Transaktion anfordern; keine Einstellungen ändern.</small></div><span class="audit-stage-state">Wartet</span></li>
+        <li class="audit-stage" data-stage="run" data-state="pending"><span class="audit-stage-marker" aria-hidden="true"></span><div><strong>Windows-Baseline messen</strong><small>Defender, Firewall, Plattform, Identität, Logging und Evidenz werden geprüft.</small></div><span class="audit-stage-state">Wartet</span></li>
+        <li class="audit-stage" data-stage="eval" data-state="pending"><span class="audit-stage-marker" aria-hidden="true"></span><div><strong>Ergebnisse auswerten</strong><small>Compliance, bestandene und fehlgeschlagene Kontrollen zusammenführen.</small></div><span class="audit-stage-state">Wartet</span></li>
+        <li class="audit-stage" data-stage="report" data-state="pending"><span class="audit-stage-marker" aria-hidden="true"></span><div><strong>Bericht anzeigen</strong><small>Ergebnis im Security Center darstellen; Dialog kann offen bleiben.</small></div><span class="audit-stage-state">Wartet</span></li>
+      </ol>
+      <div id="auditDialogSummary" class="audit-summary" hidden></div>
+      <div class="dialog-actions">
+        <button type="button" id="auditRerun" class="button ghost" disabled>Erneut ausführen</button>
+        <button type="button" id="auditKeepOpen" class="button ghost" hidden>Offen lassen</button>
+        <button type="button" id="auditClose" class="button primary" disabled>Ergebnisse anzeigen</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="notificationDialog" class="notification-dialog" aria-labelledby="notificationTitle">
+    <div class="dialog-shell">
+      <div class="dialog-head">
+        <div><p class="eyebrow">NOTIFICATION CENTER</p><h2 id="notificationTitle">Sicherheitsereignisse</h2></div>
+        <button type="button" class="dialog-close" id="notificationClose" aria-label="Benachrichtigungen schließen">×</button>
+      </div>
+      <p class="dialog-copy" id="notificationSubtitle">Nur echte Ereignisse aus Evidence, MHX-Netzwerktreffern und XDR-Findings. Keine simulierten Meldungen.</p>
+      <div id="notificationState"></div>
+      <ul id="notificationList" class="notification-list" aria-live="polite"></ul>
+      <div id="notificationEmpty" class="notification-empty" hidden>Keine neuen Sicherheitsereignisse aus den erreichbaren Quellen.</div>
+      <div class="notification-footer">
+        <button type="button" id="notificationMarkAll" class="button ghost small">Alle als gelesen markieren</button>
+        <button type="button" id="notificationRefresh" class="button ghost small">Aktualisieren</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="hardeningDetailDialog" aria-labelledby="hardeningDetailTitle">
+    <div class="dialog-shell">
+      <div class="dialog-head">
+        <div><p class="eyebrow">HARDENING-KOMPONENTE</p><h2 id="hardeningDetailTitle">Komponente</h2></div>
+        <button type="button" class="dialog-close" id="hardeningDetailClose" aria-label="Details schließen">×</button>
+      </div>
+      <div id="hardeningDetailBody" class="hardening-detail"></div>
+      <div class="dialog-actions">
+        <button type="button" id="hardeningDetailDismiss" class="button ghost">Schließen</button>
+        <button type="button" id="hardeningDetailApply" class="button primary" disabled>Komponente aktivieren</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="startupDialog" aria-labelledby="startupTitle" aria-describedby="startupSummary">
+    <header class="health-header">
+      <div class="health-brand"><img src="/assets/gedefense-logo.png" alt=""><p class="eyebrow">GEDEFENSE · SYSTEMBEREITSCHAFT</p></div>
+      <h2 id="startupTitle">GeDefense wird vorbereitet</h2>
+      <p id="startupSummary"></p>
+    </header>
+    <div class="health-progress">
+      <div class="health-progress-label" role="status" aria-live="polite"><span id="startupStage">Startcheck</span><span class="health-sync-meta"><span id="startupSpinner" class="health-spinner" hidden aria-hidden="true"></span><span id="startupElapsed" class="mono">0 s</span><span id="startupCount">0 / 4</span></span></div>
+      <progress id="startupProgress" value="0" max="4" aria-label="Fortschritt der Synchronisierung"></progress>
+    </div>
+    <ul id="startupChecks" class="health-checks" aria-label="Schutzbereiche"></ul>
+    <footer class="health-actions"><button type="button" id="startupRetry" class="button primary" hidden>Erneut synchronisieren</button><button type="button" id="startupClose" class="button ghost">Im Hintergrund fortsetzen</button></footer>
+  </dialog>
+
+  <dialog id="reasonDialog" aria-labelledby="reasonDialogTitle">
+    <form method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">SECURITY TRANSACTION</p><h2 id="reasonDialogTitle">Änderung bestätigen</h2></div></div>
+      <p id="reasonDialogText" class="dialog-copy"></p>
+      <label><span id="reasonDialogLabel">Begründung</span><input id="reasonDialogReason" type="text" maxlength="512" autocomplete="off" placeholder="Mindestens 8 Zeichen"></label>
+      <div class="dialog-actions"><button value="cancel" class="button ghost">Abbrechen</button><button id="reasonDialogConfirm" value="confirm" class="button primary">Bestätigen</button></div>
+    </form>
+  </dialog>
+
   <div id="toasts" class="toasts" aria-live="polite"></div>
 </body>
 </html>

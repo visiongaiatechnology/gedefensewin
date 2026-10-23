@@ -133,6 +133,11 @@ func (e *Engine) intelligenceLoop(stop <-chan struct{}) {
 			} else {
 				enforcementRetryUTC = time.Time{}
 			}
+			if err == nil {
+				// A freshly verified Threat-IP/WFP generation is exactly the
+				// trigger for promoting a persisted Kinetic arming intent.
+				e.reconcileKinetic(time.Now().UTC())
+			}
 			continue
 		}
 
@@ -148,12 +153,73 @@ func (e *Engine) intelligenceLoop(stop <-chan struct{}) {
 		select {
 		case <-stop:
 			if !timer.Stop() {
-				<-timer.C
+				select {
+				case <-timer.C:
+				default:
+				}
 			}
 			return
+		case <-e.intelligenceWake:
+			// The operator changed the polling interval; recompute deadlines
+			// immediately instead of sleeping on the previous cadence.
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			continue
 		case <-timer.C:
 		}
 	}
+}
+
+// wakeIntelligence asks the feed scheduler to recompute its next wake time.
+func (e *Engine) wakeIntelligence() {
+	if e == nil || e.intelligenceWake == nil {
+		return
+	}
+	select {
+	case e.intelligenceWake <- struct{}{}:
+	default:
+	}
+}
+
+// ThreatIntelPolling returns the effective validated polling policy together
+// with the last/next synchronization timestamps.
+func (e *Engine) ThreatIntelPolling() threatintel.PollingConfig {
+	if e == nil || e.feeds == nil {
+		return threatintel.PollingConfig{}
+	}
+	return e.feeds.PollingConfig()
+}
+
+// SetThreatIntelPolling validates and persists the automatic synchronization
+// interval and wakes the scheduler so a shortened interval takes effect
+// immediately. Feed authority and security gates are untouched.
+func (e *Engine) SetThreatIntelPolling(ctx context.Context, seconds int) (threatintel.PollingConfig, error) {
+	if e == nil || e.feeds == nil {
+		return threatintel.PollingConfig{}, errors.New("threat intelligence manager unavailable")
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return e.feeds.PollingConfig(), errors.New("threat intelligence polling update requires an active request")
+	}
+	previous := e.feeds.PollingConfig()
+	config, err := e.feeds.SetPollingIntervalSeconds(seconds)
+	if err != nil {
+		e.ledgerAppend("mhx.intelligence", "polling-interval", "rejected")
+		return previous, err
+	}
+	if e.ledger != nil {
+		if ledgerErr := e.ledger.Append("mhx.intelligence", "polling-interval", fmt.Sprintf("%ds", config.IntervalSeconds)); ledgerErr != nil {
+			if _, rollbackErr := e.feeds.SetPollingIntervalSeconds(previous.IntervalSeconds); rollbackErr != nil {
+				return config, fmt.Errorf("threat intelligence polling evidence failed and rollback failed: %w", ledgerErr)
+			}
+			return previous, fmt.Errorf("threat intelligence polling evidence failed: %w", ledgerErr)
+		}
+	}
+	e.wakeIntelligence()
+	return config, nil
 }
 
 func (e *Engine) ProtectedNetworkPolicy() ProtectedNetworkPolicy {

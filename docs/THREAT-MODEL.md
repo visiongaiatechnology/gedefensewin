@@ -25,15 +25,16 @@ Ein lokaler Administrator und Kernel-Code liegen außerhalb einer absoluten Schu
 
 | Bedrohung | Gegenmaßnahme |
 |---|---|
-| unautorisierter API-Zugriff | Loopback, RemoteAddr/Host/Origin, Master-Token, One-Time-Bootstrap |
-| Replay | kryptografische Request-ID und bounded Replay-Fenster |
+| unautorisierter API-Zugriff | Loopback, RemoteAddr/Host/Origin, Master-Token (Break-Glass, SYSTEM/Administratoren-only) oder per Windows-Prozesstoken verifizierte Operator-Broker-Session mit Scopes; One-Time-Bootstrap nur noch als administrativer Kompatibilitätspfad |
+| Rollen-/Client-Verwechslung | getrennte Scopes (read/operate/policy/window), OS-Konto-Attribution der Broker-Session, widerrufbare Sessions; Center/Tray lesen den Master-Token nicht mehr |
+| Replay | kryptografische Request-ID und bounded Replay-Fenster, verpflichtend für jede Mutation |
 | Session-/Cardinality-Flood | feste Obergrenzen für Sessions, Bootstrap, Replay und Rate-State |
 | PID-Reuse | Creation-Time- und Image-Revalidierung vor Korrelation und Termination |
 | Feed-Manipulation | TLS, Größen-/Indikatorlimits, Prefix-Validierung, atomare Generation |
 | Feed verursacht Selbstsperre | private/lokale/reservierte und gefährlich breite Netze werden abgelehnt |
 | EncodedCommand-Umgehung | bounded Decode, Inhaltsanalyse, Provenance und Hash-Evidenz |
 | falsche Known-good-Freigabe | Zweck-, Payload-, Signatur- und Parent-Prüfung |
-| Evidenzmanipulation | HMAC-SHA-256-Kette und geschützte ACLs |
+| Evidenzmanipulation | HMAC-SHA-256-Kette, SIGNIERTE Checkpoints, geschützte SYSTEM-/Administratoren-ACLs und optionaler externer Witness mit Truncation-Erkennung |
 | File-Race/Reparse | handlebasierte Prüfung, Reparse-Reject, Vor-/Nach-Metadaten |
 | Ressourcenerschöpfung | bounded Channels, State, Feeds, API-Bodies und Integrity-Manifeste |
 | gefährliche Bedienhandlung | Guided Activation mit serverseitiger Readiness |

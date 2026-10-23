@@ -273,18 +273,35 @@ func OpenProcessIdentity(pid uint32, terminate bool) (ProcessIdentity, error) {
 		}
 		return ProcessIdentity{}, errors.New("OpenProcess failed")
 	}
-	identity := ProcessIdentity{Handle: Handle(handle), PID: pid}
+	identity, err := QueryProcessIdentity(Handle(handle))
+	if err != nil {
+		return ProcessIdentity{}, errors.Join(err, CloseHandle(Handle(handle)))
+	}
+	identity.PID = pid
+	return identity, nil
+}
+
+// QueryProcessIdentity reads the creation time and image path of a process
+// through an already-open handle. Because an open handle pins the kernel
+// process object, a handle obtained before a child exited can never observe a
+// recycled PID; comparing the queried creation time against a previously
+// recorded value therefore detects PID reuse instead of acting on it.
+func QueryProcessIdentity(handle Handle) (ProcessIdentity, error) {
+	if handle == 0 {
+		return ProcessIdentity{}, errors.New("process handle required")
+	}
+	identity := ProcessIdentity{Handle: handle}
 	var creation, exit, kernel, user FileTime
-	result, _, timeErr := procGetProcessTimes.Call(handle, uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)), uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)))
+	result, _, timeErr := procGetProcessTimes.Call(uintptr(handle), uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)), uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)))
 	if result == 0 {
-		return ProcessIdentity{}, errors.Join(CheckBOOL("GetProcessTimes", result, timeErr), CloseHandle(identity.Handle))
+		return ProcessIdentity{}, CheckBOOL("GetProcessTimes", result, timeErr)
 	}
 	identity.CreationUnixNano = fileTimeUnixNano(creation)
 	buffer := make([]uint16, 32768)
 	size := uint32(len(buffer))
-	result, _, pathErr := procQueryFullProcessImage.Call(handle, 0, uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&size)))
+	result, _, pathErr := procQueryFullProcessImage.Call(uintptr(handle), 0, uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&size)))
 	if result == 0 || size == 0 || int(size) > len(buffer) {
-		return ProcessIdentity{}, errors.Join(errors.New("QueryFullProcessImageNameW failed"), errnoResult(pathErr), CloseHandle(identity.Handle))
+		return ProcessIdentity{}, errors.Join(errors.New("QueryFullProcessImageNameW failed"), errnoResult(pathErr))
 	}
 	identity.ImagePath = syscall.UTF16ToString(buffer[:size])
 	return identity, nil
@@ -395,6 +412,27 @@ func MoveFileReplace(temporaryPath, path string) error {
 		return err
 	}
 	result, _, callErr := procMoveFileExW.Call(uintptr(unsafe.Pointer(from)), uintptr(unsafe.Pointer(to)), uintptr(MoveFileReplaceExisting|MoveFileWriteThrough))
+	if result == 0 {
+		if err := errnoResult(callErr); err != nil {
+			return err
+		}
+		return errors.New("MoveFileExW failed")
+	}
+	return nil
+}
+
+// MoveFileNoReplace atomically moves a file only when the destination does not
+// already exist. It is used for evidence-preserving restore operations.
+func MoveFileNoReplace(fromPath, toPath string) error {
+	from, err := utf16Ptr(fromPath)
+	if err != nil {
+		return err
+	}
+	to, err := utf16Ptr(toPath)
+	if err != nil {
+		return err
+	}
+	result, _, callErr := procMoveFileExW.Call(uintptr(unsafe.Pointer(from)), uintptr(unsafe.Pointer(to)), uintptr(MoveFileWriteThrough))
 	if result == 0 {
 		if err := errnoResult(callErr); err != nil {
 			return err

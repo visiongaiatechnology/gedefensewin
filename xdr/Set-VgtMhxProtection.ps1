@@ -22,15 +22,142 @@ function Get-StatePath {
     return Join-Path $root 'windows-policy-baseline.json'
 }
 
+function Test-VgtMhxBaselineState {
+    # HP-FIND-006: values persisted in the MHX baseline are restored with SYSTEM
+    # authority. Validate every field against fixed allowlists before any
+    # firewall, ASR or network default is changed.
+    param([Parameter(Mandatory)][object]$State)
+    if ($null -eq $State) { return $false }
+    $formatProperty = $State.PSObject.Properties['Format']
+    if ($null -ne $formatProperty -and $null -ne $formatProperty.Value) {
+        $format = 0
+        if (-not [int]::TryParse([string]$formatProperty.Value,[ref]$format)) { return $false }
+        if ($format -ne 2) { return $false }
+    }
+    $profilesProperty = $State.PSObject.Properties['FirewallProfiles']
+    if ($null -eq $profilesProperty -or $null -eq $profilesProperty.Value) { return $false }
+    $profiles = @($profilesProperty.Value)
+    if ($profiles.Count -lt 1 -or $profiles.Count -gt 3) { return $false }
+    $seenProfiles = @{}
+    foreach ($profile in $profiles) {
+        if ($null -eq $profile) { return $false }
+        $nameProperty = $profile.PSObject.Properties['Name']
+        $actionProperty = $profile.PSObject.Properties['DefaultOutboundAction']
+        if ($null -eq $nameProperty -or $null -eq $actionProperty) { return $false }
+        $name = [string]$nameProperty.Value
+        if ($name -notin @('Domain','Private','Public')) { return $false }
+        if ($seenProfiles.ContainsKey($name.ToLowerInvariant())) { return $false }
+        $seenProfiles[$name.ToLowerInvariant()] = $true
+        if ([string]$actionProperty.Value -notin @('Allow','Block','NotConfigured')) { return $false }
+    }
+    $idsProperty = $State.PSObject.Properties['AsrIds']
+    $actionsProperty = $State.PSObject.Properties['AsrActions']
+    if ($null -eq $idsProperty -or $null -eq $actionsProperty) { return $false }
+    $ids = @()
+    if ($null -ne $idsProperty.Value) { $ids = @($idsProperty.Value) }
+    $actions = @()
+    if ($null -ne $actionsProperty.Value) { $actions = @($actionsProperty.Value) }
+    if ($ids.Count -ne $actions.Count) { return $false }
+    if ($ids.Count -gt 256) { return $false }
+    $seenIds = @{}
+    for ($index = 0; $index -lt $ids.Count; $index++) {
+        $id = ([string]$ids[$index]).Trim()
+        if ($id -notmatch '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$') { return $false }
+        $key = $id.ToLowerInvariant()
+        if ($seenIds.ContainsKey($key)) { return $false }
+        $seenIds[$key] = $true
+        $action = 0L
+        if (-not [long]::TryParse([string]$actions[$index],[ref]$action)) { return $false }
+        if (@(0,1,2,6) -notcontains [int]$action) { return $false }
+    }
+    return $true
+}
+
+function Get-VgtMhxBaselineIntegrityMaterial {
+    param([Parameter(Mandatory)][object]$State)
+    $material = [ordered]@{
+        Format = [int]$State.Format
+        FirewallProfiles = @($State.FirewallProfiles)
+        AsrIds = @($State.AsrIds)
+        AsrActions = @($State.AsrActions)
+    }
+    return ($material | ConvertTo-Json -Depth 5 -Compress)
+}
+
+function Get-VgtMhxBaselineIntegrityHash {
+    param([Parameter(Mandatory)][object]$State)
+    $material = Get-VgtMhxBaselineIntegrityMaterial -State $State
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($material)))).Replace('-','').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Test-VgtMhxBaselineIntegrity {
+    param([Parameter(Mandatory)][object]$State)
+    $integrityProperty = $State.PSObject.Properties['Integrity']
+    if ($null -eq $integrityProperty -or $null -eq $integrityProperty.Value) { return 'Legacy' }
+    $integrity = $integrityProperty.Value
+    $algorithmProperty = $integrity.PSObject.Properties['Algorithm']
+    $hashProperty = $integrity.PSObject.Properties['BaselineSha256']
+    if ($null -eq $algorithmProperty -or $null -eq $hashProperty) { return 'Mismatch' }
+    if ([string]$algorithmProperty.Value -ne 'SHA256') { return 'Mismatch' }
+    $stored = ([string]$hashProperty.Value).Trim().ToLowerInvariant()
+    if ($stored -notmatch '^[0-9a-f]{64}$') { return 'Mismatch' }
+    $computed = Get-VgtMhxBaselineIntegrityHash -State $State
+    if (-not [string]::Equals($stored,$computed,[StringComparison]::Ordinal)) { return 'Mismatch' }
+    return 'Valid'
+}
+
 function Save-Baseline {
     $path = Get-StatePath
-    if (Test-Path -LiteralPath $path -PathType Leaf) { return }
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        $existing = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not (Test-VgtMhxBaselineState -State $existing)) {
+            # Older 5.x baselines predate the canonical schema and would brick
+            # upgrades. Archive the legacy anchor for forensics and rebuild.
+            $legacyShape = $false
+            try {
+                $legacyShape = ([int]$existing.Format -eq 2) -and ($null -ne $existing.TimestampUtc) -and
+                    (@($existing.FirewallProfiles).Count -ge 1) -and ($null -ne $existing.AsrIds)
+            } catch { $legacyShape = $false }
+            if (-not $legacyShape) {
+                throw [Security.SecurityException]::new('Existing MHX baseline failed validation.')
+            }
+            $legacyArchive = Join-Path (Split-Path -Parent $path) ('windows-policy-baseline.legacy-{0}.json' -f [DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))
+            Move-Item -LiteralPath $path -Destination $legacyArchive -Force
+            Write-Warning ('Legacy MHX baseline archived after schema upgrade: {0}' -f (Split-Path -Leaf $legacyArchive))
+        } else {
+            $existingIntegrity = Test-VgtMhxBaselineIntegrity -State $existing
+            if ($existingIntegrity -eq 'Mismatch') {
+                throw [Security.SecurityException]::new('Existing MHX baseline failed integrity verification.')
+            }
+            return
+        }
+    }
     $preference = Get-MpPreference
+    # Persist firewall actions as their canonical string names. Select-Object
+    # serializes the enum numerically, which the validator correctly rejects on
+    # the next transaction/install; storing strings keeps the write-once anchor
+    # self-consistent across upgrades.
+    $firewallProfiles = @(Get-NetFirewallProfile | ForEach-Object {
+        [ordered]@{
+            Name = [string]$_.Name
+            DefaultOutboundAction = [string]$_.DefaultOutboundAction
+        }
+    })
     $state = [ordered]@{
+        Format = 2
         TimestampUtc = [DateTime]::UtcNow.ToString('o')
-        FirewallProfiles = @(Get-NetFirewallProfile | Select-Object Name,DefaultOutboundAction)
+        FirewallProfiles = $firewallProfiles
         AsrIds = @($preference.AttackSurfaceReductionRules_Ids | ForEach-Object { [string]$_ })
         AsrActions = @($preference.AttackSurfaceReductionRules_Actions | ForEach-Object { [int]$_ })
+    }
+    $state['Integrity'] = [ordered]@{
+        Algorithm = 'SHA256'
+        BaselineSha256 = (Get-VgtMhxBaselineIntegrityHash -State ([pscustomobject]$state))
     }
     $temporary = "$path.$PID.tmp"
     $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $temporary -Encoding UTF8
@@ -92,28 +219,84 @@ function Add-SovereignAllowRules {
 
 function Restore-NetworkBaseline {
     $path = Get-StatePath
-    Remove-VgtFirewallRules
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        Set-NetFirewallProfile -Profile Domain,Private,Public -DefaultOutboundAction Allow
-        return
+        # HP-FIND-006: never fail open with "allow everything" when the
+        # operator baseline is missing or was removed.
+        throw [Security.SecurityException]::new('MHX network baseline is unavailable; refusing to relax outbound defaults.')
     }
     $state = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not (Test-VgtMhxBaselineState -State $state)) {
+        throw [Security.SecurityException]::new('MHX network baseline validation failed.')
+    }
+    $integrity = Test-VgtMhxBaselineIntegrity -State $state
+    if ($integrity -eq 'Mismatch') {
+        throw [Security.SecurityException]::new('MHX network baseline integrity verification failed.')
+    }
+    if ($integrity -eq 'Legacy') {
+        Write-Warning 'MHX network baseline has no integrity metadata (legacy format); structural validation passed.'
+    }
+    # Mutate firewall state only after the persisted baseline has passed
+    # validation, so a rejected restore leaves the previous rules untouched.
+    Remove-VgtFirewallRules
     foreach ($profile in @($state.FirewallProfiles)) {
         Set-NetFirewallProfile -Name ([string]$profile.Name) -DefaultOutboundAction ([string]$profile.DefaultOutboundAction)
+    }
+    $applied = @(Get-NetFirewallProfile)
+    foreach ($profile in @($state.FirewallProfiles)) {
+        $actual = @($applied | Where-Object { [string]$_.Name -eq [string]$profile.Name } | Select-Object -First 1)
+        if ($actual.Count -ne 1) {
+            throw [Security.SecurityException]::new('MHX network baseline restore verification failed.')
+        }
+        if ([string]$actual[0].DefaultOutboundAction -ne [string]$profile.DefaultOutboundAction) {
+            throw [Security.SecurityException]::new('MHX network baseline restore verification failed.')
+        }
     }
 }
 
 function Restore-AsrBaseline {
     $path = Get-StatePath
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw [Security.SecurityException]::new('MHX ASR baseline is unavailable.')
+    }
     $state = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
-    $ids = @($state.AsrIds)
-    $actions = @($state.AsrActions)
-    if ($ids.Count -gt 0 -and $ids.Count -eq $actions.Count) {
-        Set-MpPreference -AttackSurfaceReductionRules_Ids $ids -AttackSurfaceReductionRules_Actions $actions
+    if (-not (Test-VgtMhxBaselineState -State $state)) {
+        throw [Security.SecurityException]::new('MHX ASR baseline validation failed.')
+    }
+    $integrity = Test-VgtMhxBaselineIntegrity -State $state
+    if ($integrity -eq 'Mismatch') {
+        throw [Security.SecurityException]::new('MHX ASR baseline integrity verification failed.')
+    }
+    $ids = @()
+    if ($null -ne $state.AsrIds) { $ids = @($state.AsrIds) }
+    $actions = @()
+    if ($null -ne $state.AsrActions) { $actions = @($state.AsrActions) }
+    if ($ids.Count -ne $actions.Count) {
+        throw [Security.SecurityException]::new('MHX ASR baseline rule/action counts differ.')
+    }
+    if ($ids.Count -gt 0) {
+        Set-MpPreference -AttackSurfaceReductionRules_Ids $ids -AttackSurfaceReductionRules_Actions @($actions | ForEach-Object { [int]$_ })
     } else {
         $currentIds = @((Get-MpPreference).AttackSurfaceReductionRules_Ids)
         if ($currentIds.Count -gt 0) { Remove-MpPreference -AttackSurfaceReductionRules_Ids $currentIds }
+    }
+    $preference = Get-MpPreference
+    $actualRules = @{}
+    $actualIds = @($preference.AttackSurfaceReductionRules_Ids)
+    $actualActions = @($preference.AttackSurfaceReductionRules_Actions)
+    for ($index = 0; $index -lt $actualIds.Count; $index++) {
+        $actualRules[([string]$actualIds[$index]).ToLowerInvariant()] = [int]$actualActions[$index]
+    }
+    $expectedRules = @{}
+    for ($index = 0; $index -lt $ids.Count; $index++) {
+        $expectedRules[([string]$ids[$index]).ToLowerInvariant()] = [int]$actions[$index]
+    }
+    if ($actualRules.Count -ne $expectedRules.Count) {
+        throw [Security.SecurityException]::new('MHX ASR baseline restore verification failed.')
+    }
+    foreach ($key in $expectedRules.Keys) {
+        if (-not $actualRules.ContainsKey($key) -or $actualRules[$key] -ne $expectedRules[$key]) {
+            throw [Security.SecurityException]::new('MHX ASR baseline restore verification failed.')
+        }
     }
 }
 
@@ -167,44 +350,3 @@ try {
     exit 20
 }
 
-# SIG # Begin signature block
-# MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCUrws4ye76ORyN
-# SBgypqwCm8m/IUbR5qU2DDyA+5/hPqCCBCwwggQoMIICkKADAgECAhBc5F62BB+R
-# m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
-# VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
-# MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
-# ZWFzZTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGBAL5pFqzqfhSchgN3
-# OSKoeRbHXQIUtVwI7Q5go/7UvOFVMV0d/Au5Q5yPFOr351VqQyZlLWehwPG88Wdh
-# TEPxfzYXDeJFgG6MwdjVaA10WklxDzSu8XQQzQKvoSOtf6b76xYswPdR8WaUOvYL
-# NVYHG38cZCE/Vmt8W29/+8bT0SFoMv8S++3YUL3BaTTVBj5wcunaQYu7bcBUFz8M
-# wCWGaqZUwWi/7sZPb5Ix0KKnMarxxAAM/y1GaRnWDQavGSuFZ18LmMh+Agd6znFZ
-# 6pH1USuu0NreFUOWNg2ANEmGAO4XTnst3ILT4Eab/Jsjmw4nRm8rckRaWVKJxcRc
-# P7ukJJi3cV11JegdsYSBGKvZ8TUNiSRuVI0MGg1IJl4ga/dir1crp0DnqezcC/6y
-# 9mxsnxuJLpW8I1nLdRLjE1ow5VshhvEMFjPoYbcowpcI0EUFj/clBpA+rHjPjkYF
-# jw8oow+tYqnEK/GkrYkzGwGxpApKcECh5GGHgQ5iSgKuNTPueQIDAQABo0YwRDAO
-# BgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwMwHQYDVR0OBBYEFDBP
-# H8Z9qi6vrLw8FPD3k/kz+c1gMA0GCSqGSIb3DQEBCwUAA4IBgQBIQe+HN5spItMd
-# 884eV6JR3H8xGr8DeNpgjuhQnRnQqWB60Et6ehQwQFDg5Ft8iU4sGzdEQB4U+q79
-# 9oReJ6G1CuV6yXXqDe/Ljr5DGfGr+Wah4RuRi/QGhUUeIyyn8h5kXwOgGWz4VA5I
-# 9CmN+onZHRLnv3Lu9mKyUqo7ll5WaWEd/r3hvBqe30Rg0IanD8qpWXEbshlayTux
-# 8WMgjW3nA7tEWXmToCJpRk8DsaGU5m6rNxVa6zSS7qF2JiMWnZZBsr76cQsMYvTk
-# ZgshPz+OTsl84mR7i/BalTIyuI74TWd+8LdcBB+FpmhXvYmKAPQKQg25dHGWbVlB
-# E7kK29X38hvaQBO6lVT7mtTOPx2auMTmas6LLU+1XGFNm4zvwuydpf/4ltPSYlNp
-# K8Ij5vkp2DjXOaJF02BoqBkZt6w4wQPuCdu3OOTH3A3hymQrVD0tP408qNkLuzd5
-# xI+m7oTQCw6SYCxeEUEOooR7XMWuxE1R/KyLlPRCI1zi9DjhLawxggJyMIICbgIB
-# ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
-# ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
-# AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCChUZuquvCF
-# M4kQY1rXI8Z6gbwiyQYA9H/SnwJEzDkQcTANBgkqhkiG9w0BAQEFAASCAYBxHenx
-# KFkr4qnKXtVyfHXm7Hoo6vlpGxlMoV2928mVGblzjRyhKKHR6KgcK3jlPuwjwWGY
-# hnXJotUSY60CSMj66g6JvZ2TGxsTqjrLQWFgD4MV4lTWhxquB4rbYNlCbAnACL4u
-# PF+hN/YuPAuM2yDkQaMYV2HYvzKCXhKg4E9sFmpwOFcNLCpDWLyP8o+XEl7BV0/R
-# Xl1TxYqpQ2tKR6htuKZC3gX+Hb26UBgtxkEuRapb1efrGgCsUOo+wpGZaYjU/Pmq
-# dyhXYSx9CboHOlOkIiwIA2xuTTrg2Awn29WkjbKfYSpqWozYCcZ+jSXQeqnNfPy8
-# uGoOE3e3ILnPZkZllBYxB7xfgJygU1av51268ENY+gL/l/5Axo1z93jk8jf9ESXv
-# vAvXBCREXLBzrPgzpj57H+/Kezquks50bZzNZXclQ0BSOS3gUYY2Tz7Bpdtpe1mP
-# 2MZ8Y5UILPLXkV1unZyXL7HJop1QnbpTNROmjOzkmigdwZ23jKPQLRjn6/8=
-# SIG # End signature block

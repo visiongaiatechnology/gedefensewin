@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "firewall": {
+    "profiles": [
+      { "name": "Domain", "logMaxSizeKilobytes": 40000 }
+    ]
+  }
+}

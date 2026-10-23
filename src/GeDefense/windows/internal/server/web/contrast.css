@@ -1,0 +1,81 @@
+/* STATUS: PLATIN — VGT legibility layer
+ *
+ * The Glass 2100 system uses muted blue-grey copy for secondary information.
+ * On the real Windows panels that secondary copy loses too much contrast,
+ * especially on blue surfaces. This layer is deliberately loaded last and
+ * makes every foreground white; hierarchy now comes from size, weight and
+ * spacing, while semantic state remains encoded by tinted surfaces, borders
+ * and status dots. Primary actions are dark glass so white copy stays readable.
+ */
+:root{
+  --vgt-mist:#ffffff;
+  --vgt-muted:#ffffff;
+  --vgt-faint:#ffffff;
+  --muted:#ffffff;
+  --text:#ffffff;
+  --vgt-text:#ffffff;
+  --vgt-chalk:#ffffff;
+}
+
+html,
+body,
+body *{
+  color:#ffffff !important;
+}
+
+body ::placeholder,
+input::placeholder,
+textarea::placeholder{
+  color:rgba(255,255,255,.68) !important;
+  opacity:1;
+}
+
+body a{
+  color:#ffffff !important;
+  text-decoration-color:rgba(255,255,255,.42);
+}
+
+body ::selection{
+  color:#04121a !important;
+  background:rgba(194,240,245,.9);
+}
+
+/* Primary actions are intentionally dark glass: the old bright-cyan fill
+ * would turn white copy into a low-contrast label. The ice border keeps the
+ * primary action unmistakable. */
+.button.primary,
+.button.primary:hover:not(:disabled),
+.titan-view .button.primary,
+.titan-view .button.primary:hover:not(:disabled){
+  color:#ffffff !important;
+  background:linear-gradient(135deg,rgba(22,78,105,.96),rgba(9,38,57,.96)) !important;
+  border-color:rgba(143,220,232,.58) !important;
+  box-shadow:0 8px 24px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.08) !important;
+}
+
+.button.danger,
+.button.danger:hover:not(:disabled){
+  color:#ffffff !important;
+  background:linear-gradient(135deg,rgba(92,32,47,.86),rgba(48,18,29,.9)) !important;
+  border-color:rgba(240,138,155,.42) !important;
+}
+
+.button:disabled,
+.button:disabled *{
+  color:#ffffff !important;
+}
+
+/* Legacy module badges declare coloured copy with !important; keep their
+ * borders and tints, but make the copy white like the rest of the shell. */
+.brand-beta,
+.nav-tag,
+.nav-titan.active .nav-tag{
+  color:#ffffff !important;
+}
+
+/* Native form popups must not reintroduce dark-on-dark text. */
+option,
+optgroup{
+  color:#ffffff !important;
+  background:#0a1521 !important;
+}

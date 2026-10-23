@@ -1,4 +1,4 @@
-﻿# STATUS: DIAMANT VGT SUPREME
+# STATUS: DIAMANT VGT SUPREME
 [CmdletBinding()]
 param(
     [switch]$TrustDevelopmentCertificate
@@ -116,18 +116,40 @@ if (Test-Path -LiteralPath (Join-Path $projectRoot 'data\geoip.csv')) {
         Copy-Item -LiteralPath (Join-Path $projectRoot 'data\geoip.csv.sha256') -Destination (Join-Path $payloadRoot 'bin\geoip.csv.sha256') -Force
     }
 }
-New-Item -Path (Join-Path $payloadRoot 'installer') -ItemType Directory -Force | Out-Null
-foreach ($scriptName in @('Install-GeDefense.ps1','Uninstall-GeDefense.ps1','Bootstrap-GeDefense.ps1')) {
-    Copy-Item -LiteralPath (Join-Path $projectRoot "installer\$scriptName") -Destination (Join-Path $payloadRoot "installer\$scriptName") -Force
+$installerPayloadRoot = Join-Path $payloadRoot 'installer'
+New-Item -Path $installerPayloadRoot -ItemType Directory -Force | Out-Null
+foreach ($installerFile in @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'installer') -File | Where-Object { $_.Extension -in @('.ps1','.psm1') })) {
+    Copy-Item -LiteralPath $installerFile.FullName -Destination (Join-Path $installerPayloadRoot $installerFile.Name) -Force
+}
+foreach ($requiredInstallerFile in @('Install-GeDefense.ps1','Uninstall-GeDefense.ps1','Bootstrap-GeDefense.ps1','InstallerSafety.psm1')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $installerPayloadRoot $requiredInstallerFile) -PathType Leaf)) { throw [IO.FileNotFoundException]::new(('Required installer payload file is missing: {0}' -f $requiredInstallerFile)) }
 }
 Copy-Item -LiteralPath $publicCertificate -Destination (Join-Path $payloadRoot 'vgt-release.cer') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'VERSION') -Destination (Join-Path $payloadRoot 'VERSION') -Force
 
 $signable = @(Get-ChildItem -LiteralPath $payloadRoot -Recurse -File | Where-Object { $_.Extension -in '.ps1','.psm1','.exe' })
 foreach ($file in $signable) {
+    if ($file.Extension -in '.ps1','.psm1') {
+        # PowerShell's signing cmdlet can drop the last code line when a script
+        # already contains an Authenticode banner. Strip any stale banner from
+        # the copied source first, then sign the clean script.
+        $text = [IO.File]::ReadAllText($file.FullName)
+        $marker = '# SIG # Begin signature block'
+        $markerIndex = $text.IndexOf($marker, [StringComparison]::Ordinal)
+        if ($markerIndex -ge 0) {
+            $clean = $text.Substring(0, $markerIndex)
+            if (-not $clean.EndsWith("`n")) { $clean += "`n" }
+            [IO.File]::WriteAllText($file.FullName, $clean, [Text.UTF8Encoding]::new($false))
+        }
+    }
     $signed = Set-AuthenticodeSignature -LiteralPath $file.FullName -Certificate $certificate -HashAlgorithm SHA256
     if (-not $signed.SignerCertificate -or $signed.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) { throw [Security.SecurityException]::new("Artifact signing failed: $($file.FullName)") }
     Assert-VgtAuthenticodeSignature -Path $file.FullName -ExpectedThumbprint $certificate.Thumbprint
+    if ($file.Extension -in '.ps1','.psm1') {
+        $parseErrors = $null
+        $null = [Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$parseErrors)
+        if ($parseErrors.Count -gt 0) { throw [IO.InvalidDataException]::new(("Signed payload script is not parseable: {0} ({1})" -f $file.FullName, $parseErrors[0].Message)) }
+    }
 }
 
 $manifest = foreach ($file in Get-ChildItem -LiteralPath $payloadRoot -Recurse -File | Sort-Object FullName) {
@@ -145,45 +167,3 @@ $signedCatalog = Set-AuthenticodeSignature -LiteralPath $catalogPath -Certificat
 if (-not $signedCatalog.SignerCertificate -or $signedCatalog.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) { throw [Security.SecurityException]::new('Payload catalog signing failed.') }
 Assert-VgtAuthenticodeSignature -Path $catalogPath -ExpectedThumbprint $certificate.Thumbprint
 Write-Output "VGT payload built: $payloadRoot"
-
-# SIG # Begin signature block
-# MIIHSAYJKoZIhvcNAQcCoIIHOTCCBzUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCA8XUF9MV2CZRPs
-# u8bA5SmYI1kLKdSqApuSjRxxw9sI56CCBCwwggQoMIICkKADAgECAhBc5F62BB+R
-# m08OD57tPeOLMA0GCSqGSIb3DQEBCwUAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEg
-# VGVjaG5vbG9neSBWR1QgUmVsZWFzZTAeFw0yNjA4MjExMzUyNDFaFw0zNjA4MjEx
-# MjAyNDBaMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVs
-# ZWFzZTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGBAL5pFqzqfhSchgN3
-# OSKoeRbHXQIUtVwI7Q5go/7UvOFVMV0d/Au5Q5yPFOr351VqQyZlLWehwPG88Wdh
-# TEPxfzYXDeJFgG6MwdjVaA10WklxDzSu8XQQzQKvoSOtf6b76xYswPdR8WaUOvYL
-# NVYHG38cZCE/Vmt8W29/+8bT0SFoMv8S++3YUL3BaTTVBj5wcunaQYu7bcBUFz8M
-# wCWGaqZUwWi/7sZPb5Ix0KKnMarxxAAM/y1GaRnWDQavGSuFZ18LmMh+Agd6znFZ
-# 6pH1USuu0NreFUOWNg2ANEmGAO4XTnst3ILT4Eab/Jsjmw4nRm8rckRaWVKJxcRc
-# P7ukJJi3cV11JegdsYSBGKvZ8TUNiSRuVI0MGg1IJl4ga/dir1crp0DnqezcC/6y
-# 9mxsnxuJLpW8I1nLdRLjE1ow5VshhvEMFjPoYbcowpcI0EUFj/clBpA+rHjPjkYF
-# jw8oow+tYqnEK/GkrYkzGwGxpApKcECh5GGHgQ5iSgKuNTPueQIDAQABo0YwRDAO
-# BgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwMwHQYDVR0OBBYEFDBP
-# H8Z9qi6vrLw8FPD3k/kz+c1gMA0GCSqGSIb3DQEBCwUAA4IBgQBIQe+HN5spItMd
-# 884eV6JR3H8xGr8DeNpgjuhQnRnQqWB60Et6ehQwQFDg5Ft8iU4sGzdEQB4U+q79
-# 9oReJ6G1CuV6yXXqDe/Ljr5DGfGr+Wah4RuRi/QGhUUeIyyn8h5kXwOgGWz4VA5I
-# 9CmN+onZHRLnv3Lu9mKyUqo7ll5WaWEd/r3hvBqe30Rg0IanD8qpWXEbshlayTux
-# 8WMgjW3nA7tEWXmToCJpRk8DsaGU5m6rNxVa6zSS7qF2JiMWnZZBsr76cQsMYvTk
-# ZgshPz+OTsl84mR7i/BalTIyuI74TWd+8LdcBB+FpmhXvYmKAPQKQg25dHGWbVlB
-# E7kK29X38hvaQBO6lVT7mtTOPx2auMTmas6LLU+1XGFNm4zvwuydpf/4ltPSYlNp
-# K8Ij5vkp2DjXOaJF02BoqBkZt6w4wQPuCdu3OOTH3A3hymQrVD0tP408qNkLuzd5
-# xI+m7oTQCw6SYCxeEUEOooR7XMWuxE1R/KyLlPRCI1zi9DjhLawxggJyMIICbgIB
-# ATBAMCwxKjAoBgNVBAMMIVZpc2lvbkdhaWEgVGVjaG5vbG9neSBWR1QgUmVsZWFz
-# ZQIQXORetgQfkZtPDg+e7T3jizANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3
-# AgEMMQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisG
-# AQQBgjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCBBAlxGnhhZ
-# fDKvZ/Pe3lyM19YoF3j3w1OF7Za2LvvKszANBgkqhkiG9w0BAQEFAASCAYAqrq0v
-# bQYlaSt5mdYLY0PVZVyiac4gOB7noDHkA3ae2mQmRhIpg2017GFMALOKfWgOtwDh
-# dOE1/cdk/rUrVLH6GdyCcjfK7Mpz2taKLoScPVoPpbP86s9E3UUFtfuhzW4C0h6W
-# JshzR3l6qSY0Mr+p7TQmrgmqwpJJgXLMLeL9XsZJ5Ir968ZE4pcXaETa9LKJjqOG
-# A3C5422bn2wqPRfgbMXOBjzvmXosNy4GEt96NtKV1I4UBHDFsEDCyzx7R37ofF+a
-# X0p5hFk6pySMjenf9HwJ/Ek8Kz+QEAytGSC60NsFLfgPo5iPttoIEG8D/Zzgo5ZL
-# 9Gx8diq2rPm+lD2ChZ6gDvYOYXO3dC1xOYdELRtqXkYXFWk+x+lNokc20DhULU6X
-# pqHZAMuLW98l7R9iAFSKeORLEUDQahGKysYRiRw8Nq14Jj9ffSGp1nmDm0OAAgm0
-# dTGgGknRuZToOUKLv5GCxEU30z+ua+rDPOvyT21GjK+suV5Z09xHfc5cFso=
-# SIG # End signature block

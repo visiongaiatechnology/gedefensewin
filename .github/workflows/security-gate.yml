@@ -1,0 +1,129 @@
+# VGT GeDefense Titan — hosted security/release gate (LD-FIND-001).
+#
+# This workflow is the CI definition for a later repository hosting. It was NOT
+# executed in the delivery workspace (that tree contains no .git repository and
+# no hosted runner); it must not be presented as a passed gate until it has run
+# on the protected release runner.
+#
+# The job runs the same local gate that is used for the offline release
+# (build/Test-GeDefenseRelease.ps1) under Windows PowerShell 5.1, because the
+# gate pins PowerShell 5.1 and enforces the Go toolchain from TOOLCHAINS.lock.
+# The actual release build/signing stays a manual, four-eyes release-runner step
+# (public CA/timestamp/revocation and the external anti-rollback anchor are
+# documented external blockers, see README.md and SECURITY.md).
+name: security-gate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-gate:
+    name: VGT release/security gate (Windows PowerShell 5.1)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read pinned toolchain from TOOLCHAINS.lock
+        id: toolchain
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lock = @{}
+          foreach ($line in Get-Content -LiteralPath 'TOOLCHAINS.lock' -Encoding UTF8) {
+            $trimmed = $line.Trim()
+            if ($trimmed -eq '' -or $trimmed.StartsWith('#')) { continue }
+            $parts = $trimmed.Split('=', 2)
+            if ($parts.Count -ne 2) { throw "TOOLCHAINS.lock contains an invalid entry: $trimmed" }
+            $lock[$parts[0].Trim()] = $parts[1].Trim()
+          }
+          if (-not $lock.ContainsKey('go')) { throw 'TOOLCHAINS.lock does not pin the Go toolchain.' }
+          if (-not $lock.ContainsKey('go_windows_amd64_zip_sha256')) { throw 'TOOLCHAINS.lock does not pin the Go archive SHA-256.' }
+          if ($lock['powershell'] -ne '5.1') { throw "The release gate requires Windows PowerShell 5.1; TOOLCHAINS.lock pins '$($lock['powershell'])'." }
+          "go=$($lock['go'])" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Set up pinned Go toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.toolchain.outputs.go }}
+          check-latest: false
+          cache: false
+
+      - name: Install pinned release gate tools
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # govulncheck is the binary vulnerability gate. Its analyzer version is
+          # intentionally installed at the latest advisory database instead of a
+          # stale pin; the pinned build toolchain itself comes from TOOLCHAINS.lock.
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          if ($LASTEXITCODE -ne 0) { throw 'go install govulncheck failed.' }
+          $goBin = Join-Path (go env GOPATH) 'bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $goBin 'govulncheck.exe') -PathType Leaf)) { throw 'govulncheck.exe was not installed.' }
+          $goBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Ensure C toolchain for go test -race
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Get-Command gcc -ErrorAction SilentlyContinue) { Write-Host 'gcc already available.'; exit 0 }
+          foreach ($candidate in @('C:\ProgramData\mingw64\mingw64\bin', 'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin', 'C:\mingw64\bin')) {
+            if (Test-Path -LiteralPath (Join-Path $candidate 'gcc.exe') -PathType Leaf) {
+              Write-Host "Using preinstalled MinGW at $candidate"
+              $candidate | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              exit 0
+            }
+          }
+          choco install mingw --yes --no-progress --limit-output
+          if ($LASTEXITCODE -ne 0) { throw 'MinGW installation failed; go test -race requires a C compiler.' }
+          $gcc = Get-ChildItem -Path 'C:\ProgramData\chocolatey\lib\mingw' -Recurse -Filter 'gcc.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $gcc) { throw 'MinGW installed but gcc.exe was not found.' }
+          $gcc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Run local release/security gate
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gateLog = Join-Path $env:RUNNER_TEMP 'vgt-security-gate.log'
+          # Windows PowerShell 5.1 is mandatory for the gate (it pins 5.1 and
+          # checks the process bitness); invoke it explicitly instead of relying
+          # on the default shell.
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build\Test-GeDefenseRelease.ps1 *>&1 | Tee-Object -FilePath $gateLog
+          $gateExitCode = $LASTEXITCODE
+          if ($gateExitCode -ne 0) { throw "build/Test-GeDefenseRelease.ps1 failed with exit code $gateExitCode. See the uploaded 'vgt-security-gate-log' artifact." }
+
+      - name: Upload gate log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vgt-security-gate-log
+          path: ${{ runner.temp }}/vgt-security-gate.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Write gate summary
+        if: always()
+        shell: powershell
+        run: |
+          $gateLog = Join-Path $env:RUNNER_TEMP 'vgt-security-gate.log'
+          if (-not (Test-Path -LiteralPath $gateLog -PathType Leaf)) {
+            'The release gate did not produce a log file.' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            exit 0
+          }
+          '## VGT release/security gate (last 40 log lines)' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          '' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          Get-Content -LiteralPath $gateLog -Tail 40 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

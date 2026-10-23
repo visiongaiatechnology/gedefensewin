@@ -16,6 +16,7 @@ async function main(){
  let scenario='healthy';
  let reconciled=false;
  let feedReady=false;
+ let startupRequired=true;
  let calls=[];
  const status=()=>({version:'test',platform:'Windows · Test fixture',protection:{Defender:true,DefenderService:true,RealTimeProtection:true,Firewall:true},mhx:{protectionMode:'guarded',protectionHealth:reconciled?'VERIFIED':'STARTING',realtime:true,threatIntelligence:feedReady?{state:'CURRENT',indicators:123,blockingFeedsReady:1,blockingFeedsTotal:1,enforcementGenerationSha256:'generation'}:{state:'STARTING'},threatEnforcement:feedReady?{state:'VERIFIED',activeGenerationSha256:'generation'}:{state:'UNVERIFIED'},traffic:{}},integrity:{}});
  const server=http.createServer(async(req,res)=>{
@@ -24,6 +25,8 @@ async function main(){
    if(target.pathname.startsWith('/api/')){
     calls.push(target.pathname);
     res.setHeader('Content-Type','application/json');
+    if(target.pathname==='/api/v1/startup/state')return res.end(JSON.stringify({required:startupRequired,reason:startupRequired?'reboot':'',version:'test',currentVersion:'test'}));
+    if(target.pathname==='/api/v1/startup/ack'){startupRequired=false;return res.end(JSON.stringify({required:false,reason:'',version:'test',currentVersion:'test'}))}
     if(target.pathname==='/api/v1/status')return res.end(JSON.stringify(status()));
     if(target.pathname==='/api/v1/mhx/stories')return res.end('[]');
     if(target.pathname==='/api/v1/mhx/status')return res.end(JSON.stringify(status().mhx));
@@ -34,7 +37,7 @@ async function main(){
      reconciled=true;return res.end('{}');
     }
     if(target.pathname==='/api/v1/mhx/feeds/sync'){feedReady=true;return res.end('{}')}
-    if(target.pathname==='/api/v1/health/refresh'){
+    if(target.pathname==='/api/v1/health/refresh'||target.pathname==='/api/v1/health/status'){
      const checks=definitions.map(([id,label])=>({id,label,state:(scenario==='attention'&&id==='defender')||(!reconciled&&id==='policy')?'attention':'healthy',detail:scenario==='attention'&&id==='defender'?'Defender oder Echtzeitschutz ist nicht aktiv. Windows-Sicherheit prüfen.':'Aktueller Zustand verifiziert.'}));
      if(scenario==='malformed')checks[0].id='unexpected';
      return res.end(JSON.stringify({healthy:scenario!=='attention'&&reconciled,checkedUtc:new Date().toISOString(),checks}));
@@ -51,13 +54,30 @@ async function main(){
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  const browser=await chromium.launch({executablePath:path.join(process.env.ProgramFiles,'Google/Chrome/Application/chrome.exe'),headless:true});
  try{
-  for(const test of [{name:'desktop',width:1440,height:1000,scenario:'healthy'},{name:'narrow',width:800,height:900,scenario:'healthy'},{name:'mobile',width:390,height:844,scenario:'healthy'},{name:'attention',width:1100,height:900,scenario:'attention'},{name:'error',width:1100,height:900,scenario:'error'},{name:'malformed',width:1100,height:900,scenario:'malformed'}]){
-   scenario=test.scenario;reconciled=false;feedReady=false;calls=[];
+  for(const test of [{name:'desktop',width:1440,height:1000,scenario:'healthy'},{name:'narrow',width:800,height:900,scenario:'healthy'},{name:'mobile',width:390,height:844,scenario:'healthy'},{name:'attention',width:1100,height:900,scenario:'attention'},{name:'error',width:1100,height:900,scenario:'error'},{name:'malformed',width:1100,height:900,scenario:'malformed'},{name:'normal-open',width:1100,height:900,scenario:'healthy',startupRequired:false}]){
+   scenario=test.scenario;reconciled=test.name==='normal-open';feedReady=test.name==='normal-open';startupRequired=test.startupRequired!==false;calls=[];
    const page=await browser.newPage({viewport:{width:test.width,height:test.height},reducedMotion:'reduce'});
    const failures=[];page.on('pageerror',error=>failures.push(error.message));
    await page.goto('http://127.0.0.1:'+server.address().port);
+   if(test.name==='normal-open'){
+    await page.waitForTimeout(900);
+    assert.equal(failures.length,0,failures.join('\n'));
+    assert.equal(await page.locator('#startupDialog').isVisible(),false);
+    assert.equal(calls.filter(route=>route==='/api/v1/startup/state').length>0,true);
+    assert.equal(calls.filter(route=>route==='/api/v1/startup/ack').length,0);
+    const dimensions=await page.evaluate(()=>({body:document.documentElement.scrollWidth,width:innerWidth}));
+    assert.ok(dimensions.body<=dimensions.width,'horizontal page overflow (normal open)');
+    await page.screenshot({path:path.join(output,'startup-'+test.name+'.png')});
+    await page.close();
+    process.stdout.write('PASS '+test.name+'\n');
+    continue;
+   }
    await page.locator('#startupDialog[open]').waitFor();
    await page.getByRole('button',{name:'Zum Security Center',exact:true}).waitFor();
+   if(test.name==='desktop'){
+     const colors=await page.evaluate(()=>['.health-state','.health-header>p:last-child','.health-brand .eyebrow','.health-checks p'].map(selector=>{const element=document.querySelector(selector);return element?getComputedStyle(element).color:null}));
+     assert.deepEqual(colors,['rgb(255, 255, 255)','rgb(255, 255, 255)','rgb(255, 255, 255)','rgb(255, 255, 255)']);
+   }
    assert.equal(failures.length,0,failures.join('\n'));
    assert.equal(await page.locator('#startupChecks li').count(),7);
    if(test.scenario==='healthy'){

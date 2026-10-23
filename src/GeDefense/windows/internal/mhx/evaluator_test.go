@@ -104,6 +104,36 @@ func TestIndependentSignalsGrantResponseAuthority(t *testing.T) {
 	}
 }
 
+func TestExecutionPolicyBypassAloneIsReviewOnly(t *testing.T) {
+	event := ProcessEvent{
+		Image:        "powershell.exe",
+		ImagePath:    `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+		CommandLine:  `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command Get-Date`,
+		SignerStatus: "Valid",
+	}
+	result := (Evaluator{}).Analyze(event)
+	if result.Disposition != DispositionAudit || result.Classification != "REVIEW ONLY" {
+		t.Fatalf("weak single signal was over-escalated: %+v", result)
+	}
+	if result.EffectiveSeverity != SeverityMedium {
+		t.Fatalf("review-only signal severity = %s", result.EffectiveSeverity)
+	}
+}
+
+func TestTransientSystemSignatureReadIsNotBlocked(t *testing.T) {
+	event := ProcessEvent{
+		Image:        "powershell.exe",
+		ImagePath:    `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+		CommandLine:  `powershell.exe -NoProfile -Command Get-Date`,
+		SignerStatus: "NotSigned",
+		ParentPID:    0,
+	}
+	result := (Evaluator{}).Analyze(event)
+	if result.Disposition != DispositionAudit {
+		t.Fatalf("system binary signature race was treated as a block: %+v", result)
+	}
+}
+
 func TestUnresolvedEncodedCommandDoesNotGrantResponseAuthority(t *testing.T) {
 	payload := "Get-Date"
 	event := ProcessEvent{

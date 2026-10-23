@@ -298,7 +298,7 @@ func Run(ready func(winapi.Handle)) (err error) {
 		return err
 	}
 	bounds := InitialBounds(work)
-	title, err := syscall.UTF16PtrFromString("GeDefense 4 · Windows Security Center")
+	title, err := syscall.UTF16PtrFromString("GeDefense V5 · Windows Security Center")
 	if err != nil {
 		return err
 	}

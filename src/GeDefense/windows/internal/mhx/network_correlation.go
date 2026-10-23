@@ -97,13 +97,17 @@ func (e *Engine) evaluateNetwork(event networkEvent) {
 		ledgerResult += "-protected-network"
 	}
 	_ = e.ledger.Append("mhx.network", event.RemoteIP, ledgerResult)
-	if !correlated || !recent.analysis.ResponseAuthority || match.Protected || match.Action == threatintel.ActionAnnotateOnly || e.Mode() == "monitor" {
+	if match.Action != threatintel.ActionAnnotateOnly {
+		e.notifyEvent(notificationKindThreatIntel, finding.Severity, "Threat-Intelligence-Treffer", event.RemoteIP)
+	}
+	settings := e.currentPolicySettings()
+	if !correlated || !recent.analysis.ResponseAuthority || match.Protected || match.Action == threatintel.ActionAnnotateOnly || e.Mode() == "monitor" || !networkResponsePolicyAllows(settings, recent.analysis.EffectiveSeverity) {
 		return
 	}
 	// A threat-intelligence match never grants process-kill authority by itself.
 	// The process must already carry independent response authority and its
 	// identity is revalidated immediately before termination.
-	if err := terminateProcess(recent.event); err == nil {
+	if err := e.terminateObserved(recent.event); err == nil {
 		e.blocked.Add(1)
 		_ = e.ledger.Append("mhx.correlated-response", recent.analysis.Detection, "terminated-after-network-correlation")
 	}
@@ -195,6 +199,7 @@ func (e *Engine) evaluateWFPBlock(event wfpBlockEvent) {
 						e.mu.Unlock()
 						e.kineticBlockedCorrelations.Add(1)
 						_ = e.ledger.Append("kinetic.correlate", "verified-ti-wfp-burst", "WFP_BLOCK_OBSERVED")
+						e.notifyEvent(notificationKindKinetic, SeverityHigh, "Verifizierter Threat-IP-Burst", event.RemoteIP)
 					} else {
 						_ = e.ledger.Append("kinetic.correlate", "threat-ip-burst", "DETECTED_NOT_ENFORCED_BY_KINETIC")
 					}
