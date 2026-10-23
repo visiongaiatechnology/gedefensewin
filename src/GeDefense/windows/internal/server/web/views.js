@@ -130,7 +130,8 @@ export function renderKinetic(status){
   setPill('kineticState',effective?'ARMED · WFP CORRELATED':armed?'ARMED · DEGRADED':'OBSERVE ONLY',effective?'good':'warn');
   setText('kineticTitle',effective?'Threat-IP-Korrelation scharf':armed?'Korrelation angefordert, Durchsetzung nicht bestätigt':'Beobachtungsmodus');
   setText('kineticExplanation',armed?'Kinetic korreliert Burst-Signale mit Threat-IP-Feeds. Als blockiert gelten ausschließlich tatsächlich beobachtete, unserer WFP-Regelgeneration zugeordnete Sperren.':'Kinetic erkennt auffällige WFP-Sperrhaufen ohne neue Firewall-Regeln zu installieren.');
-  setText('kineticCoverage',`Audit: ${readiness.wfpAudit||'UNVERIFIED'} · TI-WFP: ${readiness.threatRules||'UNVERIFIED'}`);
+  const wfpSignal=readiness.wfpAudit==='BLOCK_EVENTS_OBSERVED'?'Blockereignisse beobachtet':(readiness.wfpAudit||'UNVERIFIED');
+  setText('kineticCoverage',`WFP-Signale: ${wfpSignal} · TI-Regeln: ${readiness.threatRules||'UNVERIFIED'}`);
   const timeline=clear('kineticTimeline');
   if(timeline){
     for(const incident of [...(Array.isArray(status.kineticIncidents)?status.kineticIncidents:[])].reverse()){
@@ -249,7 +250,7 @@ export function renderStatus(status){
     ['ENDPOINT',[protection.Defender&&protection.DefenderService,protection.RealTimeProtection,protection.BehaviorProtection,protection.CloudProtection,protection.TamperProtection]],
     ['NETZWERK',[protection.NetworkProtection,protection.Firewall,tiVerified]],
     ['PLATTFORM',[protection.SecureBoot,protection.Tpm,protection.BitLocker,protection.Vbs,protection.CredentialGuard,protection.MemoryIntegrity]],
-    ['REAKTION',[mhx.realtime,mhx.protectionMode!=='monitor',protection.AsrBlockRules>0,protection.ControlledFolderAccess]],
+    ['REAKTION',[mhx.realtime,mhx.protectionMode!=='monitor',Number(protection.AsrBlockRules ?? protection.ASRBlockRules ?? 0)>0,protection.ControlledFolderAccess]],
   ];
   const bars=clear('domainBars');
   if(bars)for(const [domain,values]of domains)bars.append(barNode(domain,boolCount(values),values.length));
@@ -413,7 +414,7 @@ function renderXdrMetrics(status){
         enforcementReady?'good':'bad'),
       xdrStatusRow('WFP-Sperrereignisse','Windows-Security-Event 5157',
         formatNumber(status.wfpBlockedEvents),displayToken(status.wfpBlockTelemetry||'---')),
-      xdrStatusRow('WFP-Audit','Ereignisabfrage der Control Plane',
+      xdrStatusRow('WFP-Ereignisquelle','Windows-Security-Event 5157',
         displayToken(readiness.wfpAudit||status.wfpBlockTelemetry||'POLLING'),
         wfpObserved?'Blockereignisse beobachtet':'Audit-Policy nicht bestätigt',
         wfpObserved?'good':'warn'),

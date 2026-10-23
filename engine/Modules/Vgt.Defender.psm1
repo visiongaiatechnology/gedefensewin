@@ -281,7 +281,16 @@ function Get-VgtDefenderTelemetry {
             if ($null -ne $latestTime) { $latestDetection = $latestTime.ToUniversalTime().ToString('o') }
         }
         $activeThreatCount = $null
-        if ($threatAvailable) { $activeThreatCount = $threats.Count }
+        if ($threatAvailable) {
+            $activeThreatCount = 0
+            $activeKnown = $true
+            foreach ($threat in @($threats)) {
+                $isActive = Get-VgtPropertyValue $threat 'IsActive'
+                if ($null -eq $isActive) { $activeKnown = $false; break }
+                if ([bool]$isActive) { $activeThreatCount++ }
+            }
+            if (-not $activeKnown) { $activeThreatCount = $null }
+        }
         $threatReport = [ordered]@{
             Available = $true
             DetectionQueryAvailable = $detectionAvailable
