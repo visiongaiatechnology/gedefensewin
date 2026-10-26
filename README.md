@@ -28,6 +28,10 @@
 
 ---
 
+<img width="1536" height="1024" alt="GeDefense_ Real Security, Many Feathers" src="https://github.com/user-attachments/assets/68406427-a185-4fa5-b06a-af874a747dcb" />
+
+
+
 ## ⚠️ Public Beta Advisory
 
 > [!IMPORTANT]
