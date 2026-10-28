@@ -32,6 +32,11 @@
 
 
 
+> [!IMPORTANT]
+> **Installer update (5.3.0):** The previous self-signed PowerShell bootstrap could fail on fresh Windows installations because the VGT certificate was not trusted. The release now uses a branded **Inno Setup installer** that imports the beta certificate automatically after you accept the licence — no manual certificate import is required.
+>
+> **[Download the GeDefense Windows 5.3.0 installer](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v5.3.0/GeDefense-Setup-x64-v5.3.0.exe)**
+
 ## ⚠️ Public Beta Advisory
 
 > [!IMPORTANT]

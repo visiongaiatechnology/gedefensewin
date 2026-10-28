@@ -30,6 +30,11 @@
 
 <img width="1536" height="1024" alt="GeDefense_ Real Security, Many Feathers" src="https://github.com/user-attachments/assets/68406427-a185-4fa5-b06a-af874a747dcb" />
 
+> [!IMPORTANT]
+> **安装程序更新（5.3.0）：**此前的自签名 PowerShell 引导程序在全新 Windows 系统上可能因 VGT 证书不受信任而失败。本版本现使用品牌化的 **Inno Setup 安装程序**，在您接受许可证后自动导入测试版证书——无需再手动处理证书。
+>
+> **[下载 GeDefense Windows 5.3.0 安装程序](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v5.3.0/GeDefense-Setup-x64-v5.3.0.exe)**
+
 <a id="public-beta-advisory"></a>
 
 ## ⚠️ 公开测试版公告

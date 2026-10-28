@@ -30,6 +30,11 @@
 
 <img width="1536" height="1024" alt="GeDefense_ Real Security, Many Feathers" src="https://github.com/user-attachments/assets/68406427-a185-4fa5-b06a-af874a747dcb" />
 
+> [!IMPORTANT]
+> **Installer-Update (5.3.0):** Der bisherige selbstsignierte PowerShell-Bootstrap konnte auf frischen Windows-Installationen fehlschlagen, weil das VGT-Zertifikat nicht vertraut war. Das Release verwendet jetzt einen gebrandeten **Inno-Setup-Installer**, der das Beta-Zertifikat nach Annahme der Lizenz automatisch importiert — manuelle Zertifikatsschritte sind nicht mehr nötig.
+>
+> **[GeDefense Windows 5.3.0 Installer herunterladen](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v5.3.0/GeDefense-Setup-x64-v5.3.0.exe)**
+
 <a id="public-beta-advisory"></a>
 
 ## ⚠️ Hinweis zur öffentlichen Beta
