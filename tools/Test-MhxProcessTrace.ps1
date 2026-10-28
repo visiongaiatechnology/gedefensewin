@@ -1,4 +1,4 @@
-# STATUS: DIAMANT VGT SUPREME
+﻿# STATUS: DIAMANT VGT SUPREME
 [CmdletBinding()]
 param()
 
@@ -6,57 +6,103 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $outputPath = Join-Path $projectRoot 'work\mhx-process-trace-diagnostic.json'
-$sourceId = 'VGT_MHX_ProcessTrace_Diagnostic'
 $probe = $null
 
+function Read-VgtSecurity4688 {
+    param([string]$XPath = '', [switch]$Newest)
+    try {
+        if ($Newest) { @(Get-WinEvent -FilterHashtable @{LogName = 'Security'; Id = 4688 } -MaxEvents 1 -ErrorAction Stop) }
+        else { @(Get-WinEvent -LogName 'Security' -FilterXPath $XPath -MaxEvents 128 -ErrorAction Stop) }
+    } catch {
+        if ($_.FullyQualifiedErrorId.Split(',')[0] -eq 'NoMatchingEventsFound') { return @() }
+        throw
+    }
+}
+
+function ConvertFrom-VgtProcessId {
+    param([string]$Value)
+    $trimmed = ([string]$Value).Trim()
+    if ($trimmed -match '^0[xX][0-9a-fA-F]{1,8}$') { return [long][Convert]::ToInt64($trimmed.Substring(2), 16) }
+    $parsed = 0L
+    if ([long]::TryParse($trimmed, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
+    return 0L
+}
+
+# Native Security 4688 diagnostics: the MHX process sensor subscribes to the
+# same channel/event id through wevtapi (no WMI process-trace bridge
+# and no persistent PowerShell telemetry child process).
 try {
-    Register-CimIndicationEvent -Namespace 'root/cimv2' -ClassName 'Win32_ProcessStartTrace' -SourceIdentifier $sourceId | Out-Null
-    $probe = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 8') -PassThru -WindowStyle Hidden
-    $deadline = [DateTime]::UtcNow.AddSeconds(6)
+    $auditPolicy = -1L
+    try {
+        $auditPolicy = [long](Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit' -Name 'ProcessCreationIncludeCmdLine_Enabled' -ErrorAction Stop).ProcessCreationIncludeCmdLine_Enabled
+    } catch { $auditPolicy = -1L }
+    $latest = @(Read-VgtSecurity4688 -Newest)
+    $cursor = if ($latest.Count -gt 0) { [long]$latest[0].RecordId } else { 0L }
+    $probe = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 8') -PassThru -WindowStyle Hidden
+    $deadline = [DateTime]::UtcNow.AddSeconds(8)
     $matched = $null
     $observed = 0
     while ([DateTime]::UtcNow -lt $deadline -and $null -eq $matched) {
-        $event = Wait-Event -SourceIdentifier $sourceId -Timeout 1
-        if ($null -eq $event) { continue }
-        try {
+        Start-Sleep -Milliseconds 500
+        $query = "*[System[EventID=4688 and EventRecordID > $cursor]]"
+        $events = @(Read-VgtSecurity4688 -XPath $query)
+        foreach ($item in $events) {
+            $cursor = [Math]::Max($cursor, [long]$item.RecordId)
             $observed++
-            $trace = $event.SourceEventArgs.NewEvent
-            if ([uint32]$trace.ProcessID -eq [uint32]$probe.Id) {
-                $matched = [ordered]@{
-                    processId = [uint32]$trace.ProcessID
-                    parentProcessId = [uint32]$trace.ParentProcessID
-                    processName = [string]$trace.ProcessName
-                    sessionId = [uint32]$trace.SessionID
-                }
+            $xml = [xml]$item.ToXml()
+            $fields = @{}
+            foreach ($entry in @($xml.Event.EventData.Data)) {
+                if ($null -eq $entry.Name) { continue }
+                $fields[[string]$entry.Name] = [string]$entry.'#text'
             }
-        } finally {
-            Remove-Event -EventIdentifier $event.EventIdentifier -ErrorAction SilentlyContinue
+            $newProcessId = ConvertFrom-VgtProcessId ([string]$fields['NewProcessId'])
+            if ($newProcessId -ne [long]$probe.Id) { continue }
+            $parentProcessId = 0L
+            if ($fields.ContainsKey('CreatorProcessId')) { $parentProcessId = ConvertFrom-VgtProcessId ([string]$fields['CreatorProcessId']) }
+            if ($parentProcessId -eq 0 -and $fields.ContainsKey('ProcessId')) { $parentProcessId = ConvertFrom-VgtProcessId ([string]$fields['ProcessId']) }
+            $commandLine = ''
+            if ($fields.ContainsKey('CommandLine')) { $commandLine = [string]$fields['CommandLine'] }
+            $matched = [ordered]@{
+                recordId        = [long]$item.RecordId
+                timeCreatedUtc  = $item.TimeCreated.ToUniversalTime().ToString('o')
+                processId       = $newProcessId
+                parentProcessId = $parentProcessId
+                image           = [string]$fields['NewProcessName']
+                parentImage     = if ($fields.ContainsKey('ParentProcessName')) { [string]$fields['ParentProcessName'] } else { '' }
+                commandLine     = $commandLine
+            }
         }
     }
-    if ($matched) {
-        $process = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f [uint32]$probe.Id) -ErrorAction Stop
-        $parent = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f [uint32]$process.ParentProcessId) -ErrorAction SilentlyContinue
-        $signature = if ($process.ExecutablePath) { Get-AuthenticodeSignature -LiteralPath $process.ExecutablePath -ErrorAction SilentlyContinue } else { $null }
-        $parentSignature = if ($parent -and $parent.ExecutablePath) { Get-AuthenticodeSignature -LiteralPath $parent.ExecutablePath -ErrorAction SilentlyContinue } else { $null }
-        $sha = if ($process.ExecutablePath) { (Get-FileHash -LiteralPath $process.ExecutablePath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash } else { '' }
-        $parentSha = if ($parent -and $parent.ExecutablePath) { (Get-FileHash -LiteralPath $parent.ExecutablePath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash } else { '' }
-        $result = [ordered]@{
-            timestampUtc=[DateTime]::UtcNow.ToString('o'); state='ENRICHED'; observed=$observed; probeId=$probe.Id; match=$matched
-            process=[ordered]@{ image=[string]$process.Name; path=[string]$process.ExecutablePath; commandLine=[string]$process.CommandLine; signerStatus=if($signature){[string]$signature.Status}else{'Unknown'}; signer=if($signature -and $signature.SignerCertificate){[string]$signature.SignerCertificate.Subject}else{''}; sha256=[string]$sha }
-            parent=[ordered]@{ image=if($parent){[string]$parent.Name}else{''}; path=if($parent){[string]$parent.ExecutablePath}else{''}; signerStatus=if($parentSignature){[string]$parentSignature.Status}else{'Unknown'}; signer=if($parentSignature -and $parentSignature.SignerCertificate){[string]$parentSignature.SignerCertificate.Subject}else{''}; sha256=[string]$parentSha }
-        }
-    } else {
-        $result = [ordered]@{ timestampUtc=[DateTime]::UtcNow.ToString('o'); state='NOT_MATCHED'; observed=$observed; probeId=$probe.Id; match=$null }
+    $state = 'NOT_MATCHED'
+    if ($null -ne $matched) {
+        if ([string]::IsNullOrWhiteSpace([string]$matched.commandLine)) { $state = 'MATCHED_WITHOUT_COMMAND_LINE' }
+        else { $state = 'ENRICHED' }
+    }
+    $result = [ordered]@{
+        timestampUtc          = [DateTime]::UtcNow.ToString('o')
+        state                 = $state
+        source                = 'Security/4688'
+        auditCmdLinePolicy    = $auditPolicy
+        observed              = $observed
+        cursor                = $cursor
+        probeId               = $probe.Id
+        match                 = $matched
     }
 } catch {
-    $result = [ordered]@{ timestampUtc=[DateTime]::UtcNow.ToString('o'); state='FAILED'; exceptionType=$_.Exception.GetType().FullName; message=$_.Exception.Message; line=$_.InvocationInfo.ScriptLineNumber }
+    $result = [ordered]@{
+        timestampUtc    = [DateTime]::UtcNow.ToString('o')
+        state           = 'FAILED'
+        source          = 'Security/4688'
+        exceptionType   = $_.Exception.GetType().FullName
+        message         = $_.Exception.Message
+        line            = $_.InvocationInfo.ScriptLineNumber
+    }
 } finally {
     if ($probe -and -not $probe.HasExited) { Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue }
-    Unregister-Event -SourceIdentifier $sourceId -ErrorAction SilentlyContinue
-    Get-Event -SourceIdentifier $sourceId -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
 }
 
-$result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $outputPath -Encoding UTF8
+$builder = New-Object System.Text.StringBuilder
+$null = $builder.Append(($result | ConvertTo-Json -Depth 6))
+[IO.File]::WriteAllText($outputPath, $builder.ToString(), [Text.UTF8Encoding]::new($false))
 if ($result.state -ne 'ENRICHED') { exit 1 }
 exit 0
-

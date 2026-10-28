@@ -63,12 +63,12 @@ Assert-Vgt ($productVersionSource.Contains('const Version = "' + $version + '"')
 
 # Clean-source repository contract: generated build output and AI-agent handoff
 # artifacts are gitignored and must never be part of the delivered source tree.
+# CHANGELOG.md is intentionally public documentation as of 5.3.0.
 $forbiddenRepositoryFiles = @(
     'Next.md',
     'MERGE_REPORT.json',
     'START_HERE_FULL_MERGED_SOURCE.md',
     'GITHUB-UPLOAD.md',
-    'CHANGELOG.md',
     'RELEASE-NOTES.md'
 )
 foreach ($forbiddenFile in $forbiddenRepositoryFiles) {

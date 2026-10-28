@@ -31,3 +31,29 @@ func TestOperatorPeerRejectsZeroPID(t *testing.T) {
 		t.Fatal("pid 0 accepted")
 	}
 }
+
+// TestTokenGroupAuthorisationFilterExcludesDenyOnly pins the token group filter:
+// deny-only and disabled groups never authorise. The SAM fallback only applies
+// when the operator group SID is entirely absent from the token, so the
+// stale-token repair cannot bypass this filter.
+func TestTokenGroupAuthorisationFilterExcludesDenyOnly(t *testing.T) {
+	tests := []struct {
+		name       string
+		attributes uint32
+		want       bool
+	}{
+		{"disabled", 0, false},
+		{"deny only without enabled", seGroupUseForDenyOnly, false},
+		{"enabled and deny only", seGroupEnabled | seGroupUseForDenyOnly, false},
+		{"enabled", seGroupEnabled, true},
+		{"enabled and mandatory", seGroupEnabled | 0x00000001, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := usableTokenGroupAttribute(test.attributes); got != test.want {
+				t.Fatalf("usableTokenGroupAttribute(%#x) = %t, want %t",
+					test.attributes, got, test.want)
+			}
+		})
+	}
+}

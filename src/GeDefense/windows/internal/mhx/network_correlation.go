@@ -15,6 +15,21 @@ import (
 
 func (e *Engine) evaluateNetwork(event networkEvent) {
 	e.networkObserved.Add(1)
+
+	// VGT 5.3.0 Ghost Mode: Cut off telemetry processes attempting outbound connections
+	if e.sentinelStore != nil && e.sentinelStore.Config().GhostModeTelemetryKill {
+		e.mu.RLock()
+		rec, found := e.recentProcesses[event.PID]
+		e.mu.RUnlock()
+		if found && isTelemetryProcess(rec.event.ImagePath) {
+			_ = e.terminateObserved(rec.event)
+			e.blocked.Add(1)
+			_ = e.ledger.Append("ghostmode.blocked", "Telemetry connection severed", fmt.Sprintf("pid-%d-ip-%s", event.PID, event.RemoteIP))
+			e.notifyEvent(notificationKindBlock, SeverityCritical, "Ghost Mode Active", fmt.Sprintf("Uplink von %s zu %s gekappt", rec.event.Image, event.RemoteIP))
+			return
+		}
+	}
+
 	address, err := netip.ParseAddr(event.RemoteIP)
 	if err != nil {
 		return

@@ -54,13 +54,15 @@ import {
   bindThreatIntelSettingsPanel,
 } from './settings.js';
 import {bindTitan, loadTitan} from './titan.js';
+import {bindSentinel, loadSentinel} from './sentinel.js';
 import {initSetupWizard} from './setup-wizard.js';
 import {locale} from './i18n.js';
 
-const pages=new Set(['overview','titan','protection','threat-intel','xdr','network','kinetic','integrity','hardening','audit','evidence','system']);
+const pages=new Set(['overview','titan','sentinel','protection','threat-intel','xdr','network','kinetic','integrity','hardening','audit','evidence','system']);
 const pageMeta={
   overview:{title:'Übersicht',subtitle:'Schutzlage, Telemetrie und Evidenz dieser Windows-Instanz.'},
   titan:{title:'Titan Control Center',subtitle:'Sovereign Endpoint Integrity: Ingress, Autorisierung, Quarantäne und Beweise.'},
+  sentinel:{title:'Sentinel // Killerdom',subtitle:'MHX 4.1 Killerdom-Engine, Paranoia Default-Deny, Lineage-Schutz & Ghost Mode Telemetriekappung.'},
   protection:{title:'Protection Center',subtitle:'Schutzstufen, Readiness, aktive Kontrollen und eigene Profile.'},
   'threat-intel':{title:'Threat Intelligence',subtitle:'Feeds, Synchronisationszyklus, Enforcement-Generation und geschützte Netze.'},
   xdr:{title:'MHX XDR',subtitle:'Prozess-, Defender- und Netzwerk-Korrelation mit überprüfbaren Antworten.'},
@@ -72,7 +74,7 @@ const pageMeta={
   evidence:{title:'Evidenz',subtitle:'HMAC-verkettete Ereignisse, serverseitig paginiert.'},
   system:{title:'System',subtitle:'Lokale GeDefense-Instanz, Bereitschaft und Plattformzustand.'},
 };
-const liveRefreshPages=new Set(['overview','titan','protection','xdr','network','kinetic','integrity','threat-intel','system']);
+const liveRefreshPages=new Set(['overview','titan','sentinel','protection','xdr','network','kinetic','integrity','threat-intel','system']);
 const trafficPages=new Set(['overview']);
 
 let active='overview';
@@ -110,6 +112,7 @@ function setMobileNavigation(open){
 async function loadPage(page){
   if(page==='overview'||page==='system')return loadOverview();
   if(page==='titan')return loadTitan();
+  if(page==='sentinel')return loadSentinel();
   if(page==='protection')return loadProtection();
   if(page==='threat-intel')return loadThreatIntel();
   if(page==='xdr')return loadXdr();
@@ -320,6 +323,7 @@ function bindStaticControls(){
   bindKineticSettingsPanel();
   bindThreatIntelSettingsPanel();
   bindTitan();
+  bindSentinel();
   bindHealthRefreshButton();
 
   document.addEventListener('keydown',event=>{
@@ -400,6 +404,7 @@ function startPolling(){
       const page=activePage();
       if(page==='overview'||page==='system')await loadOverview();
       else if(page==='titan')await loadTitan({refresh:true});
+      else if(page==='sentinel')await loadSentinel({silent:true});
       else if(page==='protection')await loadProtection();
       else if(page==='xdr')await loadXdr({includeSettings:false});
       else if(page==='network')await loadNetwork();

@@ -65,18 +65,22 @@ func TestEncodedCommandSwitchRejectedSet(t *testing.T) {
 	}
 }
 
-// Cross-layer consistency (VGT-094): the process telemetry fast path and the
-// XDR scanner must recognize the same accepted alias set as the Go decoder.
+// Cross-layer consistency (VGT-094): every layer that recognizes an encoded
+// command switch must normalize the same accepted alias set as the Go decoder;
+// the native Security 4688 sensor calls this decoder directly, so a missed alias
+// would drop an encoded payload from the process telemetry triage.
 func TestEncodedCommandAliasLayerConsistency(t *testing.T) {
-	// The watcher fast path only skips hash enrichment for encoded commands; a
-	// missed alias must not lead to an unclassified command.
 	for _, alias := range []string{"-e", "-en", "-ec", "-encodedc", "-encodedco", "-encodedcommand", "/ec"} {
 		if !isEncodedCommandSwitch(alias) {
 			t.Fatalf("decoder does not normalize %q", alias)
 		}
 	}
-	if count := strings.Count(processTraceScript, "enco"); count < 1 {
-		t.Fatal("process telemetry fast path lost its encoded-command regex")
+	payload := encodedUTF16LE("Get-Date")
+	for _, alias := range []string{"-e", "-en", "-ec", "-encodedc", "-encodedco", "-encodedcommand", "/ec"} {
+		_, _, encoded, err := DecodePowerShellCommand("powershell.exe " + alias + " " + payload)
+		if err != nil || !encoded {
+			t.Fatalf("decoder did not classify alias %q as encoded (%v)", alias, err)
+		}
 	}
 }
 

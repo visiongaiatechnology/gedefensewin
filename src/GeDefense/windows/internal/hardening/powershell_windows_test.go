@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,35 +42,15 @@ func quotePowerShellPath(path string) string {
 
 func TestPowerShellEngineScriptsParse(t *testing.T) {
 	root := engineDirectory(t)
-	var files []string
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		if extension := strings.ToLower(filepath.Ext(path)); extension == ".ps1" || extension == ".psm1" {
-			files = append(files, path)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk engine directory: %v", err)
-	}
-	if len(files) == 0 {
-		t.Fatal("no PowerShell engine files discovered")
-	}
-	var builder strings.Builder
-	builder.WriteString("$parseErrors = @(); $files = @(")
-	for index, file := range files {
-		if index > 0 {
-			builder.WriteString(",")
-		}
-		builder.WriteString(quotePowerShellPath(file))
-	}
-	builder.WriteString("); foreach ($file in $files) { $tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($file,[ref]$tokens,[ref]$errors); if (@($errors).Count -gt 0) { $parseErrors += ($errors | ForEach-Object { [string]$_.Extent.StartLineNumber + ': ' + $_.Message }) } }; if (@($parseErrors).Count -gt 0) { Write-Output ($parseErrors -join ' | '); exit 1 }")
-	output := strings.TrimSpace(runPowerShellCommand(t, builder.String()))
+	// Enumerate engine scripts INSIDE PowerShell instead of embedding every
+	// script path into the command line. Embedding the path of
+	// "Invoke-VgtHardening.ps1" made the live Killerdom sensor flag the test
+	// PowerShell as a LOLBin cradle (false positive).
+	script := fmt.Sprintf(
+		`$parseErrors = @(); $files = @(Get-ChildItem -LiteralPath %s -Recurse -File -ErrorAction Stop | Where-Object { $_.Extension -eq '.ps1' -or $_.Extension -eq '.psm1' } | ForEach-Object { $_.FullName }); if (@($files).Count -eq 0) { Write-Output 'no engine scripts found'; exit 1 }; foreach ($file in $files) { $tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($file,[ref]$tokens,[ref]$errors); if (@($errors).Count -gt 0) { $parseErrors += ($errors | ForEach-Object { [string]$_.Extent.StartLineNumber + ': ' + $_.Message }) } }; if (@($parseErrors).Count -gt 0) { Write-Output ($parseErrors -join ' | '); exit 1 }`,
+		quotePowerShellPath(root),
+	)
+	output := strings.TrimSpace(runPowerShellCommand(t, script))
 	if output != "" {
 		t.Fatalf("PowerShell parse failures: %s", output)
 	}

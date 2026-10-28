@@ -92,7 +92,7 @@ func TestTitanStatusRequiresAuthAndReportsHonestState(t *testing.T) {
 func TestTitanPolicyMutationAndAuditEvent(t *testing.T) {
 	handler, engine := newTitanTestServer(t)
 	request, response := titanRequest(http.MethodPost, "/api/v1/titan/policy",
-		`{"mode":"CONTAIN","autoQuarantine":true,"reason":"Operator aktiviert Titan Containment fuer neue Ingest-Objekte"}`, true)
+		`{"mode":"CONTAIN","autoQuarantine":true,"reason":"Operator aktiviert Titan Containment fuer neue Ingest-Objekte","confirmation":"CHANGE TITAN POLICY"}`, true)
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("policy status=%d body=%s", response.Code, response.Body.String())

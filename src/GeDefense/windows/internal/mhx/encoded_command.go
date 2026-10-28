@@ -20,16 +20,51 @@ const maxEncodedCommandBytes = 1 << 20
 const encodedCommandParameter = "encodedcommand"
 const encodedCommandShortAlias = "ec"
 
-func isEncodedCommandSwitch(argument string) bool {
+// encodedCommandArgument is the parsed form of one raw command-line token.
+// PowerShell's parameter binder (about_Parameters) accepts a parameter value
+// either as the next argument or attached to the switch with a ':' or '='
+// separator, so "-EncodedCommand:<value>" and "-EncodedCommand=<value>" are
+// both one token while the value itself is separated from the switch name.
+type encodedCommandArgument struct {
+	switchPart     string
+	inlineValue    string
+	hasInlineValue bool
+}
+
+// parseEncodedCommandArgument splits a switch token at its first ':' or '='
+// separator. Only tokens with the PowerShell switch prefixes '-' and '/' are
+// split; everything else is returned unchanged. The value of an attached
+// parameter may contain further ':' or '=' characters (base64 padding, for
+// example), so only the first separator is significant.
+func parseEncodedCommandArgument(argument string) encodedCommandArgument {
 	if len(argument) < 2 {
-		return false
+		return encodedCommandArgument{switchPart: argument}
 	}
 	switch argument[0] {
 	case '-', '/':
 	default:
+		return encodedCommandArgument{switchPart: argument}
+	}
+	for index := 1; index < len(argument); index++ {
+		if argument[index] != ':' && argument[index] != '=' {
+			continue
+		}
+		return encodedCommandArgument{switchPart: argument[:index], inlineValue: argument[index+1:], hasInlineValue: true}
+	}
+	return encodedCommandArgument{switchPart: argument}
+}
+
+func isEncodedCommandSwitch(argument string) bool {
+	parsed := parseEncodedCommandArgument(argument)
+	if len(parsed.switchPart) < 2 {
 		return false
 	}
-	candidate := strings.ToLower(argument[1:])
+	switch parsed.switchPart[0] {
+	case '-', '/':
+	default:
+		return false
+	}
+	candidate := strings.ToLower(parsed.switchPart[1:])
 	if candidate == encodedCommandShortAlias {
 		return true
 	}
@@ -48,10 +83,22 @@ func DecodePowerShellCommand(commandLine string) (string, string, bool, error) {
 		if !isEncodedCommandSwitch(args[index]) {
 			continue
 		}
-		if index+1 >= len(args) {
-			return "", "", true, errors.New("encoded command value is missing")
+		parsed := parseEncodedCommandArgument(args[index])
+		value := ""
+		if parsed.hasInlineValue {
+			// An attached value that normalizes to nothing is a broken
+			// invocation, not a request to fall back to the next argument:
+			// PowerShell also fails such a command line, so fail closed.
+			value = normalizeEncodedCommandValue(parsed.inlineValue)
+			if value == "" {
+				return "", "", true, errors.New("encoded command value is missing")
+			}
+		} else {
+			if index+1 >= len(args) {
+				return "", "", true, errors.New("encoded command value is missing")
+			}
+			value = strings.TrimSpace(args[index+1])
 		}
-		value := strings.TrimSpace(args[index+1])
 		if len(value) == 0 || len(value) > maxEncodedCommandBytes*2 {
 			return "", "", true, errors.New("encoded command boundary violation")
 		}
@@ -63,12 +110,27 @@ func DecodePowerShellCommand(commandLine string) (string, string, bool, error) {
 			text, conversionErr := decodeUTF16LE(raw)
 			return text, "UTF-16LE", true, conversionErr
 		}
-		if !utf8Valid(raw) {
+		if !isValidUTF8(raw) {
 			return "", "", true, errors.New("encoded command character encoding is invalid")
 		}
 		return string(raw), "UTF-8", true, nil
 	}
 	return "", "", false, nil
+}
+
+// normalizeEncodedCommandValue trims an attached EncodedCommand value and
+// removes one pair of surrounding single or double quotes. The command-line
+// splitter already removes Windows double-quote grouping; the remaining pair
+// can come from a shell string literal such as -EncodedCommand:'BASE64'.
+func normalizeEncodedCommandValue(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 {
+		quote := value[0]
+		if (quote == '"' || quote == '\'') && value[len(value)-1] == quote {
+			value = strings.TrimSpace(value[1 : len(value)-1])
+		}
+	}
+	return value
 }
 
 func looksUTF16LE(raw []byte) bool {
@@ -98,7 +160,10 @@ func decodeUTF16LE(raw []byte) (string, error) {
 	return string(utf16.Decode(units)), nil
 }
 
-func utf8Valid(raw []byte) bool {
+// isValidUTF8 reports whether raw is valid UTF-8. The helper is intentionally
+// named apart from other package validators because a decoded payload and a
+// Windows event-log string need different validation semantics.
+func isValidUTF8(raw []byte) bool {
 	return utf8.Valid(raw)
 }
 

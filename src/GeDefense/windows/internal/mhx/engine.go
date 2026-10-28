@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,6 +85,10 @@ type Engine struct {
 	defenderCacheAt            time.Time
 	defenderProbe              defenderProbeFunc
 	terminate                  func(ProcessEvent) error
+	sentinelStore              *SentinelStore
+	amsiOffset                 uintptr
+	sentinelLogMu              sync.Mutex
+	sentinelLogAt              map[string]time.Time
 }
 
 func NewEngine(root, protectionScript, firewallScript, allowScript, denyScript, appControlScript, operationRoot string, ledger *evidence.Ledger) (*Engine, error) {
@@ -97,7 +103,15 @@ func NewEngine(root, protectionScript, firewallScript, allowScript, denyScript, 
 	if err != nil {
 		return nil, err
 	}
-	engine := &Engine{root: root, ledger: ledger, feeds: feeds, protection: protection, evaluator: Evaluator{}, kineticMonitor: kinetic.NewMonitor(), trafficMonitor: traffic.NewSampler(), analyses: make([]Analysis, 0, maximumAnalyses), networkFindings: make([]NetworkFinding, 0, maximumNetworkFindings), attackStories: make([]AttackStory, 0, maximumAttackStories), recentProcesses: make(map[uint32]recentProcess, 256), mode: "guarded", telemetry: "STARTING", protectionHealth: "STARTING", threatEnforcement: ThreatEnforcementStatus{State: "UNVERIFIED"}, intelligenceWake: make(chan struct{}, 1)}
+	sentinelStore, sentinelErr := OpenSentinelStore(root)
+	if sentinelErr != nil {
+		// Never disable Killerdom/Paranoia/Ghost Mode silently (fail-open).
+		// The API will report Sentinel as unavailable and the evidence ledger
+		// keeps a high-visibility record for the operator/forensics.
+		_ = ledger.Append("sentinel.unavailable", "Sentinel store could not be opened; Killerdom, Paranoia, strict lineage, AMSI shield and Ghost Mode are DISABLED until repaired", sentinelErr.Error())
+	}
+	amsiOffset := getAmsiScanBufferOffset()
+	engine := &Engine{root: root, ledger: ledger, feeds: feeds, protection: protection, evaluator: Evaluator{}, kineticMonitor: kinetic.NewMonitor(), trafficMonitor: traffic.NewSampler(), analyses: make([]Analysis, 0, maximumAnalyses), networkFindings: make([]NetworkFinding, 0, maximumNetworkFindings), attackStories: make([]AttackStory, 0, maximumAttackStories), recentProcesses: make(map[uint32]recentProcess, 256), mode: "guarded", telemetry: "STARTING", protectionHealth: "STARTING", threatEnforcement: ThreatEnforcementStatus{State: "UNVERIFIED"}, intelligenceWake: make(chan struct{}, 1), sentinelStore: sentinelStore, amsiOffset: amsiOffset}
 	_ = engine.loadMode()
 	engine.loadKineticState()
 	engine.loadPolicySettings()
@@ -106,6 +120,13 @@ func NewEngine(root, protectionScript, firewallScript, allowScript, denyScript, 
 
 func (e *Engine) Run(stop <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
+	// Boot reconciliation: Ghost Mode must re-prove its OS effects after every
+	// restart instead of trusting a persisted flag.
+	if e.sentinelStore != nil {
+		if err := e.sentinelStore.ReconcileGhostMode(); err != nil {
+			_ = e.ledger.Append("sentinel.ghostmode", "reconcile-failed", err.Error())
+		}
+	}
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait() }()
 	go func() { <-stop; cancel() }()
@@ -162,7 +183,7 @@ func (e *Engine) Run(stop <-chan struct{}) {
 			e.mu.Lock()
 			e.lastTelemetryUTC = timestamp
 			e.realtime = true
-			e.telemetry = "WIN32_PROCESS_START_TRACE"
+			e.telemetry = "SECURITY_4688_PROCESS_CREATION"
 			e.mu.Unlock()
 		case <-healthTicker.C:
 			e.mu.Lock()
@@ -262,6 +283,83 @@ func (e *Engine) evaluateDefender(event defenderEvent) {
 }
 
 func (e *Engine) evaluate(event ProcessEvent) {
+	// --- VGT 5.3.0 SELF-PROTECTION / SOVEREIGN EXEMPTION ---
+	// GeDefense core services, management UI, installers, and any child processes
+	// spawned directly or indirectly by GeDefense (e.g. self-healing routines,
+	// posture audits, hardening scripts, rollback engines) must NEVER be struck
+	// down by Paranoia, Lineage, AMSI, Killerdom signature checks, or auto-terminators.
+	if isGeDefenseSelfOrChild(event) {
+		return
+	}
+
+	// --- VGT 5.3.0 SENTINEL & KILLERDOM EVALUATION PIPELINE ---
+	if e.sentinelStore != nil {
+		cfg := e.sentinelStore.Config()
+		isAllowed, appName, systemApp, allowReason := e.sentinelStore.IsAppAllowedEvent(event)
+
+		// 0. System-app integrity: a curated Windows binary whose live PE
+		// provenance contradicts its canonical path is a masquerade, not an app.
+		if systemApp && !isAllowed {
+			detection := fmt.Sprintf("SYSTEM APP INTEGRITY: %s (%s)", event.Image, allowReason)
+			e.strikeAndRecord(event, "sentinel.system_integrity", detection, "System-App Manipulation", SeverityCritical)
+			return
+		}
+
+		// 1. Paranoia Mode Check: Default Deny for non-whitelisted processes
+		if cfg.ParanoiaMode && !isAllowed {
+			detection := fmt.Sprintf("PARANOIA STRIKE: %s nicht in Whitelist autorisiert", event.Image)
+			e.strikeAndRecord(event, "sentinel.paranoia", detection, "Paranoia Default-Deny", SeverityCritical)
+			return
+		}
+
+		// 2. Strict Lineage Check
+		if cfg.StrictLineageEnforced {
+			if breach, reason := CheckLineageBreachEvent(event); breach {
+				e.strikeAndRecord(event, "killerdom.lineage", reason, "Killerdom Lineage Breach", SeverityCritical)
+				return
+			}
+		}
+
+		// 3. Real-time AMSI Memory Inspection
+		amsiPatched := false
+		if cfg.AmsiShieldEnforced && IsTargetLotL(event.Image) {
+			patched, err := isAmsiPatched(event.PID, e.amsiOffset)
+			if err != nil {
+				e.logSentinelThrottled("killerdom.amsi", fmt.Sprintf("AMSI scan failed for %s", event.Image), "scan-error: "+err.Error())
+			} else if patched {
+				amsiPatched = true
+				detection := fmt.Sprintf("KILLERDOM AMSI SHIELD: %s (PID %d) hat manipulierten AMSI-Speicher", event.Image, event.PID)
+				e.strikeAndRecord(event, "killerdom.amsi", detection, "Killerdom Memory Evasion", SeverityCritical)
+				return
+			}
+		}
+
+		// 4. Killerdom CLI Signature Check
+		sigMatched, sigID, sigName := false, "", ""
+		if cfg.KillerdomEnabled {
+			sigMatched, sigID, sigName = EvaluateKillerdomCLI(event.CommandLine, cfg.ActiveSignatures)
+			if sigMatched && !isAllowed {
+				detection := fmt.Sprintf("KILLERDOM STRIKE [%s]: %s -> %s", sigID, sigName, event.Image)
+				e.strikeAndRecord(event, "killerdom.strike", detection, "Killerdom Strike", SeverityCritical)
+				return
+			}
+		}
+
+		// 5. Fair Behavioral Scoring for Whitelisted / Observed processes
+		if isAllowed {
+			scoreRes := CalculateFairScoreForEvent(event, isAllowed, appName, sigMatched, sigID, amsiPatched, false, false, false)
+			if scoreRes.StrikeEvent {
+				detection := fmt.Sprintf("FAIR SCORE ESCALATION [%d/100]: %s überschritt Sicherheitsgrenze", scoreRes.Score, appName)
+				e.strikeAndRecord(event, "sentinel.score_escalation", detection, "Sentinel Score Escalation", SeverityCritical)
+				return
+			} else if scoreRes.Level == "WARNING" {
+				detection := fmt.Sprintf("FAIR SCORE WARNUNG [%d/100]: %s (%s)", scoreRes.Score, appName, strings.Join(scoreRes.Factors, ", "))
+				_ = e.ledger.Append("sentinel.score_warning", detection, "recorded")
+				e.notifyEvent(notificationKindBlock, SeverityMedium, "Sentinel Whitelist Warnung", detection)
+			}
+		}
+	}
+
 	result := e.evaluator.Analyze(event)
 	e.evaluated.Add(1)
 	mode := e.Mode()
@@ -297,10 +395,59 @@ func (e *Engine) evaluate(event ProcessEvent) {
 // it to verify the auto-response policy gates without terminating a real
 // process; production engines always use the PID-reuse protected terminator.
 func (e *Engine) terminateObserved(event ProcessEvent) error {
+	if isGeDefenseSelfOrChild(event) {
+		return errors.New("self-protection: terminating GeDefense core or authorized child process is rejected")
+	}
 	if e.terminate != nil {
 		return e.terminate(event)
 	}
 	return terminateProcess(event)
+}
+
+func isGeDefenseSelfOrChild(event ProcessEvent) bool {
+	currentPID := uint32(os.Getpid())
+	if currentPID != 0 && (event.PID == currentPID || event.ParentPID == currentPID) {
+		return true
+	}
+	for _, ancestor := range event.Ancestry {
+		if currentPID != 0 && ancestor.PID == currentPID {
+			return true
+		}
+		if isGeDefenseBinary(ancestor.Image, ancestor.Path) {
+			return true
+		}
+	}
+	if isGeDefenseBinary(event.Image, event.ImagePath) {
+		return true
+	}
+	if isGeDefenseBinary(event.ParentImage, event.ParentPath) {
+		return true
+	}
+	// Last resort for the self-healing audit when Windows telemetry did not
+	// capture the parent PID: only the shipped hardening script invoked via
+	// -File is exempt. Inline/encoded/command execution and arbitrary cmdlines
+	// containing the marker string remain subject to all engines.
+	cmdLower := strings.ToLower(event.CommandLine)
+	if strings.Contains(cmdLower, `-file "c:\program files\vgt\gedefense\`) &&
+		strings.Contains(cmdLower, "invoke-vgthardening.ps1") &&
+		!strings.Contains(cmdLower, "-command") &&
+		!strings.Contains(cmdLower, "-encodedcommand") &&
+		!strings.Contains(cmdLower, "-c ") {
+		return true
+	}
+	return false
+}
+
+// isGeDefenseBinary authorizes only processes that demonstrably live inside the
+// installed GeDefense tree. A bare basename match is NOT sufficient: otherwise
+// any attacker could rename a payload to gedefense-windows.exe and inherit the
+// sovereign exemption from Paranoia, lineage, AMSI, Killerdom and fair scoring.
+func isGeDefenseBinary(image, path string) bool {
+	p := strings.ToLower(filepath.Clean(strings.TrimSpace(path)))
+	if p == "" || p == "." {
+		return false
+	}
+	return strings.Contains(p, `\vgt\gedefense\`) || strings.Contains(p, `\program files\vgt\gedefense\`)
 }
 
 // responsePolicyAllows applies the operator auto-response policy on top of the
@@ -393,4 +540,58 @@ func (e *Engine) Status() Status {
 	notificationCount := len(e.notifications)
 	e.mu.RUnlock()
 	return Status{KineticSources: e.kineticMonitor.SourceSnapshot(250), Traffic: e.trafficMonitor.Snapshot(), KineticArmed: kineticArmed, KineticIncidents: kineticIncidents, KineticThreatCorrelations: e.kineticThreatCorrelations.Load(), KineticBlockedCorrelations: e.kineticBlockedCorrelations.Load(), Kinetic: kineticSnap, KineticReadiness: readiness, UncorrelatedThreatHits: e.networkUncorrelated.Load(), Engine: "VGT MHX 7.1", Realtime: realtime, Telemetry: telemetry, TelemetryHeartbeatUTC: lastTelemetryUTC, Enforcement: enforcement, DefenderBridge: "AMSI + ASR + OPERATIONAL EVENT STREAM", AppControl: appControl, KernelEnforcement: e.kernelEnforcement.Load(), ProtectionMode: mode, ProtectionHealth: protectionHealth, ProtectionVerifiedUTC: protectionVerifiedUTC, EventsEvaluated: e.evaluated.Load(), EventsBlocked: e.blocked.Load(), KnownBenign: e.knownBenign.Load(), ThreatIntelligence: threatIntelligence, ThreatEnforcement: threatEnforcement, NetworkTelemetry: map[bool]string{true: "NATIVE_TCP_OWNER_PID", false: "DEGRADED"}[networkRealtime], NetworkConnections: e.networkObserved.Load(), WFPBlockTelemetry: map[bool]string{true: "POLLING_5157_AUDIT_UNVERIFIED", false: "DEGRADED"}[wfpRealtime], WFPBlockedEvents: e.wfpBlockedObserved.Load(), ThreatNetworkHits: e.networkThreatHits.Load(), AttackStories: uint64(attackStoryCount), KineticSettings: kineticSettings, PolicySettings: policySettings, ThreatIntelPolling: threatIntelPolling, DefenderTelemetry: defenderTelemetry, NotificationCount: notificationCount}
+}
+
+func (e *Engine) SentinelStore() *SentinelStore {
+	return e.sentinelStore
+}
+
+// logSentinelThrottled records diagnostic engine errors at most once per
+// image/kind per ten minutes. A short-lived process (cmd.exe, powershell.exe)
+// can otherwise produce an unbounded ledger flood of identical scan failures.
+func (e *Engine) logSentinelThrottled(kind, detail, result string) {
+	e.sentinelLogMu.Lock()
+	if e.sentinelLogAt == nil {
+		e.sentinelLogAt = make(map[string]time.Time)
+	}
+	key := kind + "|" + detail
+	now := time.Now()
+	if last, exists := e.sentinelLogAt[key]; exists && now.Sub(last) < 10*time.Minute {
+		e.sentinelLogMu.Unlock()
+		return
+	}
+	if len(e.sentinelLogAt) >= 256 {
+		for k := range e.sentinelLogAt {
+			delete(e.sentinelLogAt, k)
+		}
+	}
+	e.sentinelLogAt[key] = now
+	e.sentinelLogMu.Unlock()
+	_ = e.ledger.Append(kind, detail, result)
+}
+
+// strikeAndRecord performs the kinetic response and records the ACTUAL outcome.
+// The previous implementation counted a blocked event and wrote "terminated"
+// even when termination failed, producing false-response evidence.
+func (e *Engine) strikeAndRecord(event ProcessEvent, ledgerKind, detection, title string, severity Severity) bool {
+	if err := e.terminateObserved(event); err != nil {
+		_ = e.ledger.Append(ledgerKind, detection, "response-failed: "+err.Error())
+		e.notifyEvent(notificationKindBlock, SeverityHigh, title+" (Antwort fehlgeschlagen)", detection)
+		return false
+	}
+	e.blocked.Add(1)
+	_ = e.ledger.Append(ledgerKind, detection, "terminated")
+	e.notifyEvent(notificationKindBlock, severity, title, detection)
+	return true
+}
+
+func (e *Engine) TerminatePID(pid uint32, reason string) error {
+	reason = trimSentinelText(reason)
+	if err := terminatePIDVerified(pid, reason); err != nil {
+		_ = e.ledger.Append("sentinel.terminate_pid", reason, fmt.Sprintf("pid-%d-failed: %v", pid, err))
+		return err
+	}
+	e.blocked.Add(1)
+	_ = e.ledger.Append("sentinel.terminate_pid", reason, fmt.Sprintf("pid-%d", pid))
+	return nil
 }

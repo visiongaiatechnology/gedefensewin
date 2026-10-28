@@ -16,4 +16,4 @@
 | Windows PowerShell 5.1 (Laufzeit) | Plattformkomponente | Microsoft-EULA, nicht redistribuiert |
 | Build-/Supply-Chain-Tools | `tools/New-VgtSbom.ps1`, `tools/Test-VgtSbom.ps1`, `tools/New-VgtProvenance.ps1`, `tools/Test-VgtProvenance.ps1`, `build/PublishVerification.psm1` | AGPL-3.0-only |
 
-GeDefense Windows 5.2.0 besitzt keine externen Go-Module. Die maschinenlesbare Komponenten-/Lizenzzuordnung wird im Build als CycloneDX-SBOM (`sbom/gedefense-windows.cdx.json`, gitignoriert) erzeugt.
+GeDefense Windows 5.3.0 besitzt keine externen Go-Module. Die maschinenlesbare Komponenten-/Lizenzzuordnung wird im Build als CycloneDX-SBOM (`sbom/gedefense-windows.cdx.json`, gitignoriert) erzeugt.

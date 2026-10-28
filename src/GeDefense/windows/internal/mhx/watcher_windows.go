@@ -1,187 +1,204 @@
 // STATUS: DIAMANT VGT SUPREME
+//go:build windows
+
 package mhx
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os/exec"
-	"strings"
 	"time"
 
-	"github.com/visiongaiatechnology/gedefense/windows/internal/winexec"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 )
 
-const processTraceScript = `$ErrorActionPreference='Stop'
-$ProgressPreference='SilentlyContinue'
-function Write-VgtWireMessage {
-  param([Parameter(Mandatory=$true)][object]$Message)
-  $json = $Message | ConvertTo-Json -Compress -Depth 8 -WarningAction SilentlyContinue
-  [Console]::Out.WriteLine($json)
-  [Console]::Out.Flush()
-}
-function Test-VgtLocalImagePath {
-  param([string]$Path)
-  if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-  if ($Path.Length -gt 4096) { return $false }
-  $candidate = $Path.Trim()
-  if ($candidate.IndexOfAny([char[]]@([char]0,[char]10,[char]13)) -ge 0) { return $false }
-  $candidate = $candidate -replace '/','\'
-  if ($candidate -notmatch '^[A-Za-z]:\\') { return $false }
-  if ($candidate.IndexOf(':',2) -ge 0) { return $false }
-  try { $full = [IO.Path]::GetFullPath($candidate) } catch { return $false }
-  if ($full -notmatch '^[A-Za-z]:\\' -or $full.IndexOf(':',2) -ge 0) { return $false }
-  try {
-    $drive = [IO.DriveInfo]::new($full.Substring(0,3))
-    if ($drive.DriveType -ne [IO.DriveType]::Fixed) { return $false }
-  } catch { return $false }
-  try {
-    $root = [IO.Path]::GetPathRoot($full)
-    $cursor = $root
-    foreach ($segment in @($full.Substring($root.Length) -split '\\')) {
-      if ([string]::IsNullOrEmpty($segment)) { continue }
-      $cursor = Join-Path $cursor $segment
-      $item = Get-Item -LiteralPath $cursor -Force -ErrorAction SilentlyContinue
-      if ($null -eq $item) { return $false }
-      if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
-    }
-    return (Test-Path -LiteralPath $full -PathType Leaf)
-  } catch { return $false }
-}
-$targets = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-@('powershell.exe','pwsh.exe','cmd.exe','cscript.exe','wscript.exe','mshta.exe','rundll32.exe','regsvr32.exe','wmic.exe','certutil.exe','bitsadmin.exe','vssadmin.exe','schtasks.exe','reg.exe','sc.exe','msiexec.exe','installutil.exe','msbuild.exe','regsvcs.exe','regasm.exe','forfiles.exe') | ForEach-Object { [void]$targets.Add($_) }
-Register-CimIndicationEvent -Namespace 'root/cimv2' -ClassName Win32_ProcessStartTrace -SourceIdentifier 'VGT_MHX_ProcessTrace' | Out-Null
-Write-VgtWireMessage ([ordered]@{ kind='ready'; timestampUtc=[DateTime]::UtcNow.ToString('o') })
-$lastHeartbeat = [DateTime]::UtcNow
-try {
-  while ($true) {
-    $now = [DateTime]::UtcNow
-    if (($now - $lastHeartbeat).TotalSeconds -ge 2) {
-      Write-VgtWireMessage ([ordered]@{ kind='heartbeat'; timestampUtc=$now.ToString('o') })
-      $lastHeartbeat = $now
-    }
-    $event = Wait-Event -SourceIdentifier 'VGT_MHX_ProcessTrace' -Timeout 2
-    if ($null -eq $event) { Write-VgtWireMessage ([ordered]@{ kind='heartbeat'; timestampUtc=[DateTime]::UtcNow.ToString('o') }); $lastHeartbeat = [DateTime]::UtcNow; continue }
-    try {
-      $trace = $event.SourceEventArgs.NewEvent
-      $name = [string]$trace.ProcessName
-      if (-not $targets.Contains($name)) { continue }
-      $pidValue = [uint32]$trace.ProcessID
-      $process = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $pidValue) -ErrorAction Stop
-      $parent = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f [uint32]$process.ParentProcessId) -ErrorAction SilentlyContinue
-      $commandLine = [string]$process.CommandLine
-      $encodedFastPath = $commandLine -match '(?i)(?:^|\s)-(?:ec|e|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)(?:\s|:|=)'
-      $localImage = Test-VgtLocalImagePath ([string]$process.ExecutablePath)
-      $signature = if ($localImage -and $process.ExecutablePath) { Get-AuthenticodeSignature -LiteralPath $process.ExecutablePath -ErrorAction SilentlyContinue } else { $null }
-      $parentLocal = Test-VgtLocalImagePath ([string]$parent.ExecutablePath)
-      $parentSignature = if ($parentLocal -and $parent -and $parent.ExecutablePath) { Get-AuthenticodeSignature -LiteralPath $parent.ExecutablePath -ErrorAction SilentlyContinue } else { $null }
-      $sha = if (-not $encodedFastPath -and $localImage -and $process.ExecutablePath) { (Get-FileHash -LiteralPath $process.ExecutablePath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash } else { '' }
-      $parentSha = if (-not $encodedFastPath -and $parentLocal -and $parent -and $parent.ExecutablePath) { (Get-FileHash -LiteralPath $parent.ExecutablePath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash } else { '' }
-      $ancestry = @()
-      $cursor = $parent
-      $seen = [Collections.Generic.HashSet[uint32]]::new()
-      $ancestryDepth = if ($encodedFastPath) { 1 } else { 6 }
-      for ($depth = 0; $depth -lt $ancestryDepth -and $cursor; $depth++) {
-        $cursorPid = [uint32]$cursor.ProcessId
-        if (-not $seen.Add($cursorPid)) { break }
-        $cursorLocal = Test-VgtLocalImagePath ([string]$cursor.ExecutablePath)
-        $cursorSignature = if ($depth -eq 0) { $parentSignature } elseif ($cursorLocal -and $cursor.ExecutablePath) { Get-AuthenticodeSignature -LiteralPath $cursor.ExecutablePath -ErrorAction SilentlyContinue } else { $null }
-        $cursorHash = if ($depth -eq 0) { $parentSha } elseif ($cursorLocal -and $cursor.ExecutablePath) { (Get-FileHash -LiteralPath $cursor.ExecutablePath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash } else { '' }
-        $ancestry += [ordered]@{ pid=$cursorPid; image=[string]$cursor.Name; path=[string]$cursor.ExecutablePath; signerStatus=if($cursorSignature){[string]$cursorSignature.Status}else{'Unknown'}; signer=if($cursorSignature -and $cursorSignature.SignerCertificate){[string]$cursorSignature.SignerCertificate.Subject}else{''}; sha256=[string]$cursorHash }
-        if ([uint32]$cursor.ParentProcessId -le 4) { break }
-        $cursor = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f [uint32]$cursor.ParentProcessId) -ErrorAction SilentlyContinue
-      }
-      Write-VgtWireMessage ([ordered]@{ kind='event'; timestampUtc=[DateTime]::UtcNow.ToString('o'); event=[ordered]@{
-        timestampUtc=[DateTime]::UtcNow.ToString('o'); creationUtc=if($process.CreationDate){$process.CreationDate.ToUniversalTime().ToString('o')}else{[DateTime]::UtcNow.ToString('o')}; pid=$pidValue; parentPid=[uint32]$process.ParentProcessId
-        image=$name; imagePath=[string]$process.ExecutablePath; commandLine=$commandLine
-        signerStatus=if($signature){[string]$signature.Status}else{'Unknown'}
-        signerSubject=if($signature -and $signature.SignerCertificate){[string]$signature.SignerCertificate.Subject}else{''}
-        sha256=[string]$sha; parentImage=if($parent){[string]$parent.Name}else{''}; parentPath=if($parent){[string]$parent.ExecutablePath}else{''}
-        parentSigner=if($parentSignature -and $parentSignature.SignerCertificate){[string]$parentSignature.SignerCertificate.Subject}else{''}
-        parentSignerStatus=if($parentSignature){[string]$parentSignature.Status}else{'Unknown'}; parentSha256=[string]$parentSha; ancestry=@($ancestry)
-      }
-      })
-    } catch { [Console]::Error.WriteLine(('MHX event enrichment failed: {0}' -f $_.Exception.Message)) }
-    finally { Remove-Event -EventIdentifier $event.EventIdentifier -ErrorAction SilentlyContinue }
-  }
-} finally { Unregister-Event -SourceIdentifier 'VGT_MHX_ProcessTrace' -ErrorAction SilentlyContinue }
-`
+const (
+	// processSensorHeartbeat is the receipt-time health cadence. It is well
+	// below the engine's 45s stale-heartbeat threshold and satisfies the
+	// ">= every 2s" contract even on an idle Security log.
+	processSensorHeartbeat = time.Second
+	// processSensorInitialBackoff/processSensorMaximumBackoff bound the
+	// supervisor retry loop for a failing Security 4688 subscription.
+	processSensorInitialBackoff = time.Second
+	processSensorMaximumBackoff = 30 * time.Second
+)
+
+// processEventLogStream is the injectable wevtapi seam. Production uses
+// winapi.StreamEventLog; tests substitute a deterministic record stream to
+// prove cursor resume and restart handling without touching the live Security
+// log.
+type processEventLogStream func(ctx context.Context, channel, xpath string, startAfterRecordID int64) (<-chan winapi.EventLogRecord, <-chan error, error)
 
 type processWatcher struct{}
 
-type watcherMessage struct {
-	Kind         string        `json:"kind"`
-	TimestampUTC string        `json:"timestampUtc"`
-	Event        *ProcessEvent `json:"event,omitempty"`
+// Run owns the native process-creation sensor. It spawns no child process: the
+// sensor subscribes to Security event ID 4688 (process creation with command
+// line) through wevtapi and recovers from stream failures through the shared
+// supervisor. The cursor lives in this closure, so a restarted attempt resumes
+// after the last handled record instead of replaying history.
+func (processWatcher) Run(ctx context.Context, output chan<- ProcessEvent, health chan<- time.Time, faults chan<- error) {
+	probe := &processImageProbe{}
+	var cursor int64
+	superviseSensor(ctx, "process telemetry", func(attempt context.Context) error {
+		return runProcessEventLog(attempt, &cursor, probe, output, health, faults, processAuditAvailability, winapi.StreamEventLog)
+	}, faults, processSensorInitialBackoff, processSensorMaximumBackoff)
 }
 
-func (processWatcher) Run(ctx context.Context, output chan<- ProcessEvent, health chan<- time.Time, faults chan<- error) {
-	path, err := windowsPowerShell()
+// runProcessEventLog opens one 4688 subscription attempt and drains it until a
+// fatal stream error, a context cancellation or a closed stream. Health
+// heartbeats carry the receipt time (never the historical event time) and are
+// emitted at least once per processSensorHeartbeat even when no record arrives.
+func runProcessEventLog(
+	ctx context.Context,
+	cursor *int64,
+	probe *processImageProbe,
+	output chan<- ProcessEvent,
+	health chan<- time.Time,
+	faults chan<- error,
+	auditCheck func() error,
+	stream processEventLogStream,
+) error {
+	if ctx == nil || cursor == nil || probe == nil || output == nil || health == nil || auditCheck == nil || stream == nil {
+		return errors.New("process telemetry configuration rejected")
+	}
+	// Fail honestly when command-line process auditing is not configured: a
+	// name-only 4688 stream would silently lose the evidence this sensor exists
+	// for, so each attempt reports the configuration fault to the supervisor.
+	if err := auditCheck(); err != nil {
+		return err
+	}
+	startAfter := *cursor
+	xpath, err := winapi.EventLogXPath([]int{securityProcessCreationEventID}, startAfter)
 	if err != nil {
-		deliverFault(faults, err)
-		return
+		return fmt.Errorf("process telemetry query rejected: %w", err)
 	}
-	command := exec.CommandContext(ctx, path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", processTraceScript)
-	command.WaitDelay = 3 * time.Second
-	command.Cancel = func() error {
-		if command.Process != nil && command.Process.Pid > 0 {
-			_ = winexec.KillProcessTree(command.Process.Pid)
-		}
-		return command.Process.Kill()
-	}
-	stdout, err := command.StdoutPipe()
+	records, failures, err := stream(ctx, securityChannelName, xpath, startAfter)
 	if err != nil {
-		deliverFault(faults, err)
-		return
+		return fmt.Errorf("process telemetry subscription unavailable: %w", err)
 	}
-	stderr, err := command.StderrPipe()
-	if err != nil {
-		deliverFault(faults, err)
-		return
+	if records == nil {
+		return errors.New("process telemetry subscription returned no records")
 	}
-	if err := winexec.StartTracked(command); err != nil {
-		deliverFault(faults, err)
-		return
-	}
-	defer winexec.ReleaseTrackedProcess(command.Process.Pid)
-	go consumeErrors(ctx, stderr, faults)
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64<<10), 2<<20)
-	for scanner.Scan() {
-		var message watcherMessage
-		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
-			deliverFault(faults, fmt.Errorf("MHX process telemetry validation failed (%v): %q", err, truncate(scanner.Text(), 512)))
-			continue
-		}
-		timestamp, err := time.Parse(time.RFC3339Nano, message.TimestampUTC)
-		if err != nil || (message.Kind != "ready" && message.Kind != "heartbeat" && message.Kind != "event") {
-			deliverFault(faults, errors.New("MHX process telemetry protocol rejected"))
-			continue
-		}
-		deliverHealth(health, timestamp.UTC())
-		if message.Kind == "event" {
-			if message.Event == nil || message.Event.PID == 0 || message.Event.CreationUTC.IsZero() {
-				deliverFault(faults, errors.New("MHX process event validation failed"))
+	deliverHealth(health, time.Now().UTC())
+	heartbeat := time.NewTicker(processSensorHeartbeat)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-heartbeat.C:
+			deliverHealth(health, time.Now().UTC())
+		case streamErr, ok := <-failures:
+			if !ok {
+				failures = nil
 				continue
 			}
-			select {
-			case output <- *message.Event:
-			case <-ctx.Done():
-				return
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
+			if streamErr == nil {
+				streamErr = errors.New("process telemetry stream failed")
+			}
+			return streamErr
+		case record, ok := <-records:
+			if !ok {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				// Records are closed before the error channel, so the fatal
+				// reason (if any) is already buffered.
+				if streamErr := drainProcessStreamFailure(failures); streamErr != nil {
+					return streamErr
+				}
+				return errors.New("process telemetry event stream ended unexpectedly")
+			}
+			handleErr := handleProcessCreationRecord(ctx, record, probe, output)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if handleErr != nil {
+				deliverFault(faults, handleErr)
+			}
+			// Cursor advances only after a record was handled - either delivered
+			// or explicitly rejected. A malformed record must be skipped instead
+			// of being replayed forever by the restarting supervisor.
+			if record.RecordID > *cursor {
+				*cursor = record.RecordID
+			}
+			deliverHealth(health, time.Now().UTC())
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		deliverFault(faults, err)
-	}
-	if err := command.Wait(); err != nil && ctx.Err() == nil {
-		deliverFault(faults, fmt.Errorf("MHX process watcher stopped: %w", err))
 	}
 }
 
+// handleProcessCreationRecord validates one stream record, triages it and
+// forwards an observed event. Delivery is the commit point: the caller only
+// advances the cursor after this function returns, so an event interrupted by
+// cancellation is replayed after a restart.
+func handleProcessCreationRecord(ctx context.Context, record winapi.EventLogRecord, probe *processImageProbe, output chan<- ProcessEvent) error {
+	if record.RecordID <= 0 {
+		return errors.New("process telemetry record id rejected")
+	}
+	if record.Channel != "" && !equalFoldASCII(record.Channel, securityChannelName) {
+		return errors.New("process telemetry channel rejected")
+	}
+	event, parsedRecordID, err := parseProcessCreationEvent(record.XML)
+	if err != nil {
+		return fmt.Errorf("process telemetry record rejected: %w", err)
+	}
+	if parsedRecordID != record.RecordID {
+		return errors.New("process telemetry record cursor mismatch")
+	}
+	if !probe.triageProcessCreation(&event) {
+		return nil
+	}
+	select {
+	case output <- event:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// drainProcessStreamFailure performs the final non-blocking read of the stream
+// error channel after the records channel closed.
+func drainProcessStreamFailure(failures <-chan error) error {
+	if failures == nil {
+		return nil
+	}
+	select {
+	case streamErr, ok := <-failures:
+		if !ok || streamErr == nil {
+			return nil
+		}
+		return streamErr
+	default:
+		return nil
+	}
+}
+
+// equalFoldASCII compares two short ASCII tokens without allocating.
+func equalFoldASCII(left, right string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := 0; index < len(left); index++ {
+		character := left[index]
+		if character >= 'A' && character <= 'Z' {
+			character += 'a' - 'A'
+		}
+		expected := right[index]
+		if expected >= 'A' && expected <= 'Z' {
+			expected += 'a' - 'A'
+		}
+		if character != expected {
+			return false
+		}
+	}
+	return true
+}
+
+// deliverHealth publishes a receipt-time heartbeat without ever blocking the
+// stream loop.
 func deliverHealth(health chan<- time.Time, timestamp time.Time) {
 	select {
 	case health <- timestamp:
@@ -189,20 +206,11 @@ func deliverHealth(health chan<- time.Time, timestamp time.Time) {
 	}
 }
 
-func windowsPowerShell() (string, error) {
-	return winexec.PowerShell()
-}
-
-func consumeErrors(ctx context.Context, reader io.Reader, faults chan<- error) {
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		if line := strings.TrimSpace(scanner.Text()); line != "" {
-			deliverFault(faults, fmt.Errorf("MHX telemetry provider: %s", truncate(line, 512)))
-		}
-	}
-}
-
+// deliverFault publishes a bounded fault without ever blocking the stream loop.
 func deliverFault(faults chan<- error, err error) {
+	if err == nil {
+		return
+	}
 	select {
 	case faults <- err:
 	default:

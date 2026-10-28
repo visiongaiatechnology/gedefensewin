@@ -9,7 +9,7 @@
 [English](README.md) · [Deutsch](README.de.md) · [Русский](README.ru.md) · **中文**
 
 [![许可证](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=for-the-badge)](LICENSE)
-[![版本](https://img.shields.io/badge/Version-5.2.0-orange?style=for-the-badge)](#release-history-v5)
+[![版本](https://img.shields.io/badge/Version-5.3.0-orange?style=for-the-badge)](#release-history-v5)
 [![状态](https://img.shields.io/badge/Status-Public_Beta-yellow?style=for-the-badge)](#public-beta-advisory)
 [![平台](https://img.shields.io/badge/Platform-Windows_11_x64-lightgrey?style=for-the-badge&logo=windows)](#system-requirements)
 [![控制平面](https://img.shields.io/badge/Control_Plane-Local%2FSovereign-brightgreen?style=for-the-badge)](#local-sovereignty-and-privacy)
@@ -28,18 +28,20 @@
 
 ---
 
+<img width="1536" height="1024" alt="GeDefense_ Real Security, Many Feathers" src="https://github.com/user-attachments/assets/68406427-a185-4fa5-b06a-af874a747dcb" />
+
 <a id="public-beta-advisory"></a>
 
 ## ⚠️ 公开测试版公告
 
 > [!IMPORTANT]
-> **状态：公开测试版——GeDefense Windows 5.2.0。**
+> **状态：公开测试版——GeDefense Windows 5.3.0。**
 >
 > GeDefense Titan 正在积极开发中。**此测试版可能包含错误，包括安全缺陷。**我们持续进行加固、测试和修复，并欢迎每一份可复现的报告。
 >
 > - 请先在测试系统上使用测试版，保留备份，不要将其作为生产环境中唯一的安全控制措施。
 > - 请通过 [GitHub Issues](https://github.com/visiongaiatechnology/gedefensewin/issues) 报告错误、安全问题和功能请求，或按照 [SECURITY.md](SECURITY.md) 负责任地进行披露。
-> - 此版本为**自签名**，**没有公共 CA 信任**；目前尚无 RFC 3161 时间戳、CRL/OCSP 撤销路径或外部锚定的防回滚通道。因此，5.2.0 **不是可公开信任的发布版本**。参见[验证与信任](#verification-and-trust)。
+> - 此版本为**自签名**，**没有公共 CA 信任**；目前尚无 RFC 3161 时间戳、CRL/OCSP 撤销路径或外部锚定的防回滚通道。因此，5.3.0 **不是可公开信任的发布版本**。参见[验证与信任](#verification-and-trust)。
 > - 核心架构由自动化发布门禁验证（Go race、Go vet、govulncheck、SBOM、来源证明、安装程序和发布门禁）。实际安装和安全策略变更仍应在隔离的测试虚拟机上执行。
 
 ---
@@ -77,7 +79,30 @@ Titan 结合了以下内容：
 
 <a id="release-history-v5"></a>
 
+## 5.3.0 新增内容
+
+- **Sentinel / Killerdom 执行平面：**实时签名与行为响应、严格父子谱系、规范 System32 路径检查、AMSI 扫描缓冲区完整性监控以及默认拒绝的偏执门限。
+- **以执行来源取代免检通行：**精选系统应用和允许列表条目通过路径、PE OriginalFilename、Authenticode 签名者/发布者以及可选的 SHA-256 固定值进行校验；允许列表绝不会压制高置信度的终止操作。
+- **Titan → Killerdom 桥接：**Titan 完整性违规可通过经验证的 PID 终止来消除恶意持久化；每个操作和失败都会记录到 HMAC 链式证据中。
+- **真正生效的 Ghost Mode：**通过基于 WFP 的 Windows 防火墙规则阻止出站遥测程序和服务，将 Microsoft 遥测主机重定向到 sinkhole，在启动时核对状态并如实报告（`applied` / `lastError`）。
+- **误报加固：**收窄了 PowerShell 混淆、base64 数据块和破坏性 `cmd /c` 模式的签名；encoded-command 解析器现在仅适用于 PowerShell 主机。正常管理/测试命令和 `govulncheck` 不再被终止。
+- **加固与供应链：**作用域会话、降低保护时的类型化确认和原因、SHA-256/签名者固定的允许列表条目、不可变自我保护、v5 API 别名、签名安装程序、SBOM/provenance、零第三方 Go 依赖以及 `govulncheck` 0。
+- **UI 与本地化：**Sentinel/Killerdom 表格独立渲染并支持空状态；所有四种 UI 语言（德语、英语、俄语、简体中文）均覆盖新页面；间距和 Glass 2100 布局已修正。
+
+## 为关键场景而构建
+
+GeDefense Windows 5.3.0 面向需要在隔离、受监管或离线环境中保持控制权的 Windows 11 终端：仅本地控制平面、无云依赖、可验证证据、受限资源和明确响应边界。这**并非**完整保护的声明：内核/固件失陷、恶意本地管理员和完整供应链失陷仍超出产品边界；该构建为自签名，仍属公开测试版。
+
 ## V5 发布历史
+
+### 5.3.0 — Sentinel 执行平面、来源加固与关键场景就绪
+
+- Sentinel/Killerdom 控制台，包含签名开关、系统应用隔离、允许列表固定、强制 Ghost Mode 与 Titan 关联。
+- VGT-100 安全审计：81/81 适用控制项 PASS，0 FAIL，无未解决的 CRITICAL/HIGH；发布门禁 `ELIGIBLE_FOR_REVIEW`。
+- 实际验证：Ghost Mode 9 条防火墙规则、hosts sinkhole 与回滚；Sentinel 渲染 6/9/14 行；`govulncheck` 0；签名安装程序。
+- 已记录限制：公开测试版、自签名、本地 admin/SYSTEM 失陷在产品边界之外。
+
+**完整变更日志：** [CHANGELOG.md](CHANGELOG.md)
 
 ### 5.2.0 — 国际化与整洁源码发布
 
@@ -194,18 +219,29 @@ VGTGeDefense Windows Service (LocalSystem)     sovereign control plane
 
 ## 安装
 
-1. 从[发布页面](https://github.com/visiongaiatechnology/gedefensewin/releases)下载 `GeDefense-Setup-x64-v5.2.0.exe`。
+1. 从[发布页面](https://github.com/visiongaiatechnology/gedefensewin/releases)下载 `GeDefense-Setup-x64-v5.3.0.exe`。
 2. 测量并检查工件：
 
    ```powershell
-   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-x64-v5.2.0.exe
-   Get-AuthenticodeSignature .\GeDefense-Setup-x64-v5.2.0.exe
+   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-x64-v5.3.0.exe
+   Get-AuthenticodeSignature .\GeDefense-Setup-x64-v5.3.0.exe
    ```
 
    当前安装程序为**自签名**。只有在已经信任 VGT 证书的主机上，`Get-AuthenticodeSignature` 才会报告 `Valid`；对于其他所有主机，预期状态为 `NotTrusted`/`UnknownError`。测得的 SHA-256 必须与 `SHA256SUMS.txt` 以及发布版本的 `.sha256` sidecar 一致。
 3. 以管理员身份运行安装程序。它会安装服务、Center、Tray、加固/XDR 资产以及证据/Titan 运行时数据根目录。
 4. 启动 Center。Center 和 Tray 通过回环代理获取短期操作员会话；长期有效的主令牌是仅限 SYSTEM/Administrators 使用的紧急访问凭据。
 5. 打开**保护中心**并遵循就绪指引。防御性默认值为 `OBSERVE_ONLY`；高强度的 Kinetic 关联（`ARMED_TI_CORRELATION`）需要操作员明确确认。
+
+### 首次运行设置
+
+安装或更新后首次启动 Center 时，会打开**首次运行助手**，直到服务器端完成设置。它引导操作员完成四个步骤：使用场景、建议、激活和验证：
+
+1. **使用场景：**个人电脑、企业/办公、服务器/高风险或开发/构建。
+2. **建议：****Enterprise Balanced** 是个人和企业用途的默认值；**Isolation** 还会禁用 USB 存储和 RDP，仅适用于相应的服务器/高风险环境。保护级别表说明 `OBSERVE`、`BALANCED` 和 `ISOLATION` 的含义。
+3. **激活：**通过现有操作员 API 应用加固配置文件、完整性监控、Titan 策略和 MHX 策略协调。助手会显示错误和被拒绝的前提条件；绝不会假装应用成功。
+4. **验证：**只有在 Defender、ASR（11/11 blocking）、受控文件夹访问、防火墙、保护策略和完整性监控均经过实际验证后，才能完成设置。
+
+完成标记存储在服务器端并经过身份验证。其他浏览器、机器或会话不会重置它；新的程序版本可能要求重新设置。该向导不是授权绕过：变更仍绑定到本地操作员会话和服务器端确认短语。
 
 ### 重要操作说明
 

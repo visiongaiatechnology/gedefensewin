@@ -22,6 +22,8 @@ import (
 	"github.com/visiongaiatechnology/gedefense/windows/internal/cleanup"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/product"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/userlaunch"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 )
 
 // The 52 px mark is pre-composited on the installer tile colour, so it can be
@@ -762,7 +764,7 @@ func (w *setupWizard) drawSceneV5(hdc uintptr, width, height int32) {
 		textLeft("TITAN · SOVEREIGN INTEGRITY · DEINSTALLATION", w.fontSmall, rgb(137, 177, 201), 97, 48, width-170, 66)
 	} else {
 		textLeft("GeDefense", w.fontBrand, rgb(241, 248, 255), 96, 20, width-170, 48)
-		textLeft("TITAN · SOVEREIGN ENDPOINT INTEGRITY · SETUP", w.fontSmall, rgb(137, 177, 201), 97, 48, width-170, 66)
+		textLeft("TITAN // KILLERDOM · SOVEREIGN ENDPOINT DEFENSE · SETUP", w.fontSmall, rgb(137, 177, 201), 97, 48, width-170, 66)
 	}
 	textLeft("Lokale Installation · keine Cloud-Abhängigkeit", w.fontSmall, rgb(104, 143, 166), 97, 67, width-170, 84)
 
@@ -896,9 +898,9 @@ func (w *setupWizard) drawSceneV5(hdc uintptr, width, height int32) {
 		textLeft("INSTALLATIONSRAHMEN", w.fontStep, rgb(105, 151, 174), sidecarX, cardY+22, sidecarX+sidecarW, cardY+38)
 		facts := [][2]string{
 			{"VERSION", "v" + product.Version},
-			{"ZIEL", "Windows x64"},
-			{"MODUS", "Lokal / Offline"},
-			{"DIENST", "GeDefense Titan"},
+			{"ZIEL", "Windows 11 / 10 x64"},
+			{"ENGINES", "Titan + Killerdom 4.1"},
+			{"DEFENSE", "Zero-Trust & AMSI Guard"},
 		}
 		for index, fact := range facts {
 			rowY := cardY + 54 + int32(index)*40
@@ -1010,8 +1012,20 @@ func (w *setupWizard) onActionClicked() {
 	w.mu.Unlock()
 
 	if launch {
-		centerPath := filepath.Join(os.Getenv("ProgramFiles"), "VGT", "GeDefense", "bin", "GeDefenseCenter.exe")
+		programFiles := os.Getenv("ProgramFiles")
+		if !filepath.IsAbs(programFiles) {
+			return
+		}
+		centerPath := filepath.Join(filepath.Clean(programFiles), "VGT", "GeDefense", "bin", "GeDefenseCenter.exe")
 		if _, err := os.Stat(centerPath); err == nil {
+			// The auto-elevated Setup must not start the Center with the
+			// administrator token: the Center is an unprivileged UI process.
+			if isElevated() {
+				if launchErr := userlaunch.LaunchAsShellUser(centerPath, nil); launchErr != nil {
+					winapi.ReportError("setup security center launch", launchErr)
+				}
+				return
+			}
 			centerPtr, _ := syscall.UTF16PtrFromString(centerPath)
 			openPtr, _ := syscall.UTF16PtrFromString("open")
 			_, _, _ = procShellExecuteW.Call(0, uintptr(unsafe.Pointer(openPtr)), uintptr(unsafe.Pointer(centerPtr)), 0, 0, 1)

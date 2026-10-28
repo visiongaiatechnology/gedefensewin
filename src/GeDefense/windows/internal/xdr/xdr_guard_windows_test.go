@@ -264,6 +264,10 @@ func TestXdrSignatureStatusRejectsNonLocalAndReparse(t *testing.T) {
 		t.Fatalf("cannot write test file: %v", err)
 	}
 	// A junction on a fixed drive must be rejected before any signature read.
+	// The fixture deliberately uses a non-executable name and extension: the
+	// reparse rejection is decided on the path before any content/type check, and
+	// malware-looking executable names in %TEMP% would raise false alarms in
+	// endpoint monitoring during the test run.
 	junctionParent := filepath.Join(temp, "junction-parent")
 	realTarget := filepath.Join(temp, "real-target")
 	if err := os.MkdirAll(junctionParent, 0o700); err != nil {
@@ -276,9 +280,9 @@ func TestXdrSignatureStatusRejectsNonLocalAndReparse(t *testing.T) {
 	mklink := exec.Command("cmd.exe", "/c", "mklink", "/J", junction, realTarget)
 	mklink.Stdout, mklink.Stderr = &bytes.Buffer{}, &bytes.Buffer{}
 	junctionUsable := mklink.Run() == nil
-	reparsePath := filepath.Join(junction, "evil.exe")
+	reparsePath := filepath.Join(junction, "vgt-reparse-probe.bin")
 	if junctionUsable {
-		if err := os.WriteFile(filepath.Join(realTarget, "evil.exe"), []byte("x"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(realTarget, "vgt-reparse-probe.bin"), []byte("x"), 0o600); err != nil {
 			t.Fatalf("write target file: %v", err)
 		}
 	}

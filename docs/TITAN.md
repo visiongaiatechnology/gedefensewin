@@ -1,6 +1,6 @@
 # GeDefense Titan — Sovereign Endpoint Integrity & Ingress Defense
 
-**Version:** 5.2.0 · **Platform scope:** Windows 11 x64 (Linux adapter follows separately)  
+**Version:** 5.3.0 · **Platform scope:** Windows 11 x64 (Linux adapter follows separately)  
 **Product promise:** Detect. Verify. Contain. Preserve.
 
 ## 1. Positionierung
@@ -180,6 +180,16 @@ Die Titan-Seite ist in die bestehende Glass-2100-Shell integriert. Seit 5.1.2 nu
 - **Evidenz:** Checkpoints, Verifikation und Export
 
 Keine dekorativen Hintergrundgitter, keine erfundenen KPIs, keine Attribution.
+
+**Live-Aktualisierung und Lesbarkeit:** Die Titan-Listen — insbesondere die
+Ingress-Timeline — werden alle 6 Sekunden aktualisiert, ohne die Ansicht nach oben zu
+reißen. Eine offene Belegzeile bleibt an derselben Bildschirmposition, eine am Anfang
+stehende Liste bleibt am Anfang, und unveränderte Listen werden nicht neu aufgebaut;
+Filter-, Tab- und Seitenwechsel springen weiterhin bewusst an den Anfang. Geöffnete
+Belege (`<details>`) und der Fokus überstehen die Aktualisierung. Neue Ereignisse werden
+gebündelt über die bestehende Live-Region gemeldet; die große Ereignisliste ist keine
+Live-Region mehr und wird nicht alle 6 Sekunden vorgelesen. Ungespeicherte
+Owner-Policy-Änderungen werden durch den Live-Refresh nicht überschrieben.
 
 ## 9. Bewusste Grenzen
 

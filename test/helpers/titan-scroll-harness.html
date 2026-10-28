@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VGT Titan scroll-stability harness</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0b1016; color: #e6edf5; font: 14px/1.35 "Segoe UI", Arial, sans-serif; }
+  #titanTabs { display: flex; gap: 6px; padding: 8px 10px; background: #101a24; border-bottom: 1px solid #22303d; }
+  #titanTabs button { padding: 4px 10px; background: #16222e; color: #cfdbe6; border: 1px solid #2d4a5e; border-radius: 4px; font: inherit; }
+  #titanTabs button.active { background: #1d3a52; color: #ffffff; }
+  /* The real scroll container: 400px high, internal scrolling. */
+  #mainContent { height: 400px; overflow-y: auto; overflow-x: hidden; width: 1000px; margin: 8px; border: 1px solid #2d4a5e; background: #0e1620; }
+  [data-titan-panel][hidden] { display: none; }
+  .titan-event-row { display: block; min-height: 120px; padding: 12px 14px; border-bottom: 1px solid #22303d; }
+  .titan-event-row > div { min-height: 18px; }
+  .titan-event-row strong, .titan-event-row small, .titan-event-row b, .titan-event-row span { display: inline-block; margin-right: 8px; vertical-align: top; }
+  .titan-event-row details { margin-top: 6px; }
+  .titan-event-row summary { cursor: pointer; color: #8fd8e8; }
+  .titan-event-row dl { margin: 6px 0 0 0; }
+  .titan-event-row dl div { display: flex; gap: 10px; }
+  .titan-event-row dt { color: #93a1b0; min-width: 160px; }
+  .titan-event-row dd { margin: 0; }
+  .empty-state { min-height: 100px; padding: 20px; }
+  #vgt-test-result { white-space: pre-wrap; margin: 12px; padding: 10px; border: 1px solid #2d4a5e; background: #0a0f14; color: #bfe8c8; font: 12px/1.45 Consolas, "Courier New", monospace; }
+</style>
+</head>
+<body>
+<nav id="titanTabs" role="tablist" aria-label="Titan Bereiche">
+  <button type="button" role="tab" data-titan-tab="lage" aria-selected="true" class="active">Lage</button>
+  <button type="button" role="tab" data-titan-tab="ingress" aria-selected="false">Ingress-Timeline</button>
+  <button type="button" role="tab" data-titan-tab="quarantine" aria-selected="false">Quarantäne</button>
+  <button type="button" role="tab" data-titan-tab="policy" aria-selected="false">Owner Policy</button>
+  <button type="button" role="tab" data-titan-tab="evidence" aria-selected="false">Evidenz</button>
+</nav>
+
+<main id="mainContent" tabindex="-1">
+  <div class="titan-view" data-page="titan">
+    <section data-titan-panel="lage" role="tabpanel" class="active">
+      <span id="titanEventCount">0 EREIGNISSE</span>
+      <span id="titanStatePill" class="status-pill warn">STARTET</span>
+      <div id="titanSensors" role="list"></div>
+    </section>
+
+    <section data-titan-panel="ingress" role="tabpanel" hidden>
+      <span id="titanIngressTotal">—</span>
+      <div class="titan-filter-row" role="group" aria-label="Ereignisfilter">
+        <button type="button" class="titan-filter active" data-titan-filter="all" aria-pressed="true">Alle</button>
+      </div>
+      <div id="titanEventList" class="titan-event-list"></div>
+      <div id="titanEventEmpty" class="titan-empty" hidden></div>
+      <div id="titanEventState" class="titan-inline-state" role="status"></div>
+      <nav class="titan-pager">
+        <span id="titanEventPageInfo">Noch keine Ereignisse geladen</span>
+        <button type="button" id="titanEventPrev" disabled>Zurück</button>
+        <button type="button" id="titanEventNext" disabled>Weiter</button>
+      </nav>
+    </section>
+
+    <section data-titan-panel="quarantine" role="tabpanel" hidden>
+      <span id="titanQuarantineSummary">0 OBJEKTE</span>
+      <div id="titanQuarantineList" class="titan-quarantine-list"></div>
+      <div id="titanQuarantineEmpty" class="titan-empty" hidden></div>
+      <div id="titanQuarantineStatus" class="titan-inline-state" role="status"></div>
+    </section>
+
+    <section data-titan-panel="policy" role="tabpanel" hidden>
+      <span id="titanPolicyBadge">OBSERVE</span>
+      <select id="titanPolicyMode"><option>OBSERVE</option><option>CONTAIN</option><option>STRICT</option></select>
+      <input type="checkbox" id="titanAutoQuarantine">
+      <div id="titanPolicyRules"></div>
+      <div id="titanPermitsList"></div>
+      <span id="titanPermitsCount">0 AKTIV</span>
+      <div id="titanDevRootsList"></div>
+      <span id="titanDevRootsCount">0 BÄUME</span>
+    </section>
+
+    <section data-titan-panel="evidence" role="tabpanel" hidden>
+      <span id="titanEvidenceBadge">PRÜFUNG OFFEN</span>
+      <div id="titanEvidenceStatus"></div>
+      <div id="titanCheckpoints"></div>
+    </section>
+  </div>
+</main>
+
+<pre id="vgt-test-result">PENDING</pre>
+
+<script type="module">
+'use strict';
+/* Real-DOM regression harness for the Titan 6 s refresh scroll bug.
+ * Loads the REAL /web/titan.js module (served from the --web-root parameter),
+ * mocks globalThis.fetch for /api/v1/titan/* before the module import, drives
+ * the exported loadTitan()/selectTitanTab() and writes PASS/FAIL lines into
+ * #vgt-test-result so the Node runner can read them from `chrome --dump-dom`.
+ */
+
+/* ------------------------------------------------------------------ */
+/* Result plumbing                                                     */
+/* ------------------------------------------------------------------ */
+const resultLines = [];
+let finished = false;
+
+function render() {
+  const failures = resultLines.filter((line) => line.startsWith('FAIL ')).length;
+  const ok = failures === 0;
+  const pre = document.getElementById('vgt-test-result');
+  if (pre) {
+    pre.textContent = 'RESULT: ' + (ok ? 'PASS' : 'FAIL') + '\n' + resultLines.join('\n');
+    pre.dataset.failures = String(failures);
+  }
+  document.documentElement.dataset.vgtResult = ok ? 'PASS' : 'FAIL';
+  document.title = ok ? 'VGT-TITAN-SCROLL PASS' : 'VGT-TITAN-SCROLL FAIL';
+}
+
+function addLine(kind, name, detail) {
+  resultLines.push(kind + ' ' + name + (detail ? ': ' + detail : ''));
+  if (finished) render();
+}
+
+const pass = (name, detail) => addLine('PASS', name, detail);
+const fail = (name, detail) => addLine('FAIL', name, detail);
+const info = (name, detail) => addLine('INFO', name, detail);
+const finish = () => { if (!finished) { finished = true; render(); } };
+
+window.addEventListener('unhandledrejection', (event) => {
+  fail('harness', 'unhandled rejection: ' + String((event.reason && event.reason.message) || event.reason));
+  finish();
+});
+window.addEventListener('error', (event) => {
+  fail('harness', 'uncaught error: ' + String(event.message || event.error));
+  finish();
+});
+
+/* ------------------------------------------------------------------ */
+/* Synthetic Titan fixture (newest first, 44 events, stable ids)       */
+/* ------------------------------------------------------------------ */
+const HARNESS = { generation: 0, eventStore: [] };
+const HARNESS_EPOCH = Date.UTC(2026, 9, 25, 12, 0, 0);
+
+function pad2(value) { return String(value).padStart(2, '0'); }
+function pad4(value) { return String(value).padStart(4, '0'); }
+
+function makeEvent(index) {
+  const token = 'vgt-scroll-' + pad4(index) + '.exe';
+  return {
+    sequence: 44 - index,
+    id: 'evt-' + pad4(index),
+    bootId: 'boot-harness',
+    timestampUtc: new Date(HARNESS_EPOCH - index * 60000).toISOString(),
+    timeSource: 'SYSTEM_UTC',
+    eventType: index % 3 === 0 ? 'FILE_CREATED' : 'FILE_MODIFIED',
+    severity: ['LOW', 'MEDIUM', 'HIGH'][index % 3],
+    object: {
+      kind: 'FILE',
+      path: 'C:\\Ingress\\' + token,
+      name: token,
+      sha256: 'a'.repeat(64),
+      size: 245760 + index,
+      fileType: 'EXECUTABLE',
+    },
+    actor: {
+      pid: 4000 + index,
+      image: token,
+      correlationQuality: 'TEMPORAL',
+      correlationNote: 'Prozessstart zeitlich nahe; nicht als Urheber bewiesen.',
+    },
+    network: { correlationQuality: 'NONE', detail: 'Keine Netzwerkzuordnung im Harness.' },
+    authorization: {
+      status: ['AUTHORIZED', 'TOLERATED', 'UNEXPECTED'][index % 3],
+      riskClass: 'INGRESS',
+      policyMode: 'CONTAIN',
+      reason: 'Harness-Fixture-Ereignis für den Scroll-Verhaltenstest.',
+      riskScore: 10 + (index % 80),
+      needsReview: index % 2 === 0,
+      autoQuarantine: false,
+    },
+    response: { action: 'ALERT', state: 'RECORDED' },
+    collection: { source: 'titan-harness', telemetryHealth: 'HEALTHY' },
+    previousHash: '',
+    hash: 'b'.repeat(64),
+  };
+}
+
+function liveToken(generation) { return 'vgt-scroll-live-' + pad2(generation) + '.exe'; }
+
+function prependGeneration() {
+  HARNESS.generation += 1;
+  const generation = HARNESS.generation;
+  const token = liveToken(generation);
+  const event = makeEvent(999 + generation);
+  event.id = 'evt-live-' + pad2(generation);
+  event.timestampUtc = new Date(HARNESS_EPOCH + generation * 1000).toISOString();
+  event.eventType = 'FILE_CREATED';
+  event.severity = 'HIGH';
+  event.object = { kind: 'FILE', path: 'C:\\Ingress\\live\\' + token, name: token, sha256: 'c'.repeat(64), size: 524288, fileType: 'EXECUTABLE' };
+  event.actor = { pid: 9000 + generation, image: token, correlationQuality: 'TEMPORAL', correlationNote: 'Neues Live-Ereignis aus dem Harness.' };
+  event.authorization = { status: 'UNEXPECTED', riskClass: 'INGRESS', policyMode: 'CONTAIN', reason: 'Neues unerwartetes Live-Ereignis im Harness.', riskScore: 88, needsReview: true, autoQuarantine: false };
+  HARNESS.eventStore.unshift(event);
+  return token;
+}
+
+for (let index = 43; index >= 0; index -= 1) HARNESS.eventStore.push(makeEvent(index));
+
+function makeStatus() {
+  return {
+    version: '5.2.3-harness',
+    state: 'PROTECTING',
+    trustPosture: 'TOLERATED',
+    mode: 'CONTAIN',
+    startedUtc: new Date(HARNESS_EPOCH).toISOString(),
+    uptimeSeconds: 3600,
+    sensors: [{ id: 'files', label: 'Datei- und Ingress-Sensoren', state: 'HEALTHY', detail: 'Harness-Sensor.', events: HARNESS.eventStore.length, errors: 0 }],
+    eventCount: HARNESS.eventStore.length,
+    openFindings: 3,
+    quarantineCount: 0,
+    lastCheckpoint: { sequence: 44, createdUtc: new Date(HARNESS_EPOCH - 60000).toISOString(), publicKeySha256: 'd'.repeat(64), verified: true, detail: '' },
+    journalVerified: true,
+    journalError: '',
+    policy: { schemaVersion: 1, mode: 'CONTAIN', autoQuarantine: false, permits: [], developmentRoots: [], updatedUtc: new Date(HARNESS_EPOCH).toISOString() },
+    watchRoots: [{ path: 'C:\\Ingress', class: 'INGRESS', active: true }],
+    securityControls: [{ id: 'firewall-domain', label: 'Windows Firewall Domainprofil aktiv', value: '1', expected: '1', secure: true }],
+    boot: { secureBoot: true, detail: 'Harness' },
+    witness: { configured: false, reachable: false, detail: 'Kein unabhängiger Witness im Harness.' },
+    eventsDropped: 0,
+    watcherOverflows: 0,
+    quarantineBytes: 0,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* fetch mock: installed BEFORE importing the real titan.js module     */
+/* ------------------------------------------------------------------ */
+const realFetch = globalThis.fetch.bind(globalThis);
+
+function jsonResponse(payload, status = 200) {
+  return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+globalThis.fetch = async function harnessFetch(input, init) {
+  const raw = typeof input === 'string' ? input : (input && input.url) || '';
+  const url = new URL(raw, window.location.href);
+  if (!url.pathname.startsWith('/api/')) return realFetch(input, init);
+  if (url.pathname === '/api/v1/titan/status') return jsonResponse(makeStatus());
+  if (url.pathname === '/api/v1/titan/events') {
+    const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit')) || 20));
+    const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
+    const filter = url.searchParams.get('filter') || 'all';
+    const events = HARNESS.eventStore.slice(offset, offset + limit);
+    return jsonResponse({ events, total: HARNESS.eventStore.length, limit, offset, filter });
+  }
+  if (url.pathname === '/api/v1/titan/quarantine') return jsonResponse({ entries: [], total: 0, bytes: 0 });
+  if (url.pathname === '/api/v1/titan/checkpoints') return jsonResponse({ checkpoints: [] });
+  return jsonResponse({ error: 'not mocked: ' + url.pathname }, 404);
+};
+
+/* ------------------------------------------------------------------ */
+/* DOM helpers                                                         */
+/* ------------------------------------------------------------------ */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function settle() { await sleep(0); await sleep(16); await sleep(0); }
+
+async function waitFor(predicate, label, timeoutMs = 5000) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error('timeout waiting for ' + label);
+    await sleep(10);
+  }
+}
+
+function rowsOf(host) {
+  const tagged = [...host.children].filter((child) => child.dataset && child.dataset.titanRow);
+  if (tagged.length) return tagged;
+  const articles = [...host.querySelectorAll('.titan-event-row')];
+  if (articles.length) return articles;
+  return [...host.children].filter((child) => child.nodeType === 1 && !child.classList.contains('empty-state'));
+}
+
+const TOKEN_PATTERN = /vgt-scroll-(?:live-\d+|\d{4})\.exe/;
+
+function tokenOf(row) {
+  const match = TOKEN_PATTERN.exec(row.textContent || '');
+  return match ? match[0] : '';
+}
+
+function findRowByToken(host, token) {
+  return rowsOf(host).find((row) => (row.textContent || '').includes(token)) || null;
+}
+
+function findScrollElement(host) {
+  let current = host.parentElement;
+  while (current && current !== document.body && current !== document.documentElement) {
+    const style = globalThis.getComputedStyle(current);
+    if (style && (style.overflowY === 'auto' || style.overflowY === 'scroll')) return current;
+    current = current.parentElement;
+  }
+  return document.scrollingElement || document.documentElement;
+}
+
+function containerTop(scrollElement) {
+  return scrollElement === document.scrollingElement ? 0 : scrollElement.getBoundingClientRect().top;
+}
+
+function firstVisibleRow(host, scrollElement) {
+  const top = containerTop(scrollElement);
+  for (const row of rowsOf(host)) {
+    const rect = row.getBoundingClientRect();
+    if (rect.bottom > top + 1) return { row, token: tokenOf(row), top: rect.top };
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Scenarios                                                           */
+/* ------------------------------------------------------------------ */
+const controller = { titan: null, host: null, scrollElement: null };
+
+async function scenarioA() {
+  const { host, scrollElement, titan } = controller;
+  scrollElement.scrollTop = 600;
+  await settle();
+  const startTop = scrollElement.scrollTop;
+  if (Math.abs(startTop - 600) > 0.5) {
+    fail('setup (a)', 'scroll container cannot reach scrollTop=600 (got ' + startTop + ')');
+    return;
+  }
+  const anchor = firstVisibleRow(host, scrollElement);
+  if (!anchor) { fail('(a) anchor row keeps its viewport position', 'no visible row before refresh'); return; }
+  info('(a) anchor', anchor.token + ' viewportTop=' + anchor.top.toFixed(1) + ' scrollTop=' + startTop);
+  prependGeneration();
+  await titan.loadTitan({ refresh: true });
+  await settle();
+  const rowAfter = findRowByToken(host, anchor.token);
+  if (!rowAfter) {
+    fail('(a) anchor row keeps its viewport position', 'anchor row ' + anchor.token + ' disappeared after refresh');
+    return;
+  }
+  const topAfter = rowAfter.getBoundingClientRect().top;
+  const delta = topAfter - anchor.top;
+  const scrollAfter = scrollElement.scrollTop;
+  if (Math.abs(delta) <= 2 && scrollAfter > 0) {
+    pass('(a) anchor row keeps its viewport position', 'delta=' + delta.toFixed(1) + 'px scrollTop=' + scrollAfter);
+  } else {
+    fail('(a) anchor row keeps its viewport position',
+      'anchor ' + anchor.token + ' moved ' + delta.toFixed(1) + 'px (' + anchor.top.toFixed(1) + ' -> ' + topAfter.toFixed(1) + '), scrollTop ' + startTop + ' -> ' + scrollAfter);
+  }
+}
+
+async function scenarioB() {
+  const { host, scrollElement, titan } = controller;
+  const rowsBefore = rowsOf(host);
+  const firstBefore = rowsBefore[0];
+  const midIndex = Math.min(5, rowsBefore.length - 1);
+  const midBefore = rowsBefore[midIndex];
+  const scrollBefore = scrollElement.scrollTop;
+  if (!firstBefore) { fail('(b) unchanged refresh keeps DOM elements and scroll position', 'no rows before refresh'); return; }
+  await titan.loadTitan({ refresh: true });
+  await settle();
+  const rowsAfter = rowsOf(host);
+  const sameFirst = rowsAfter[0] === firstBefore;
+  const sameMid = rowsAfter[midIndex] === midBefore;
+  const sameCount = rowsAfter.length === rowsBefore.length;
+  const allSame = sameCount && rowsBefore.every((row, index) => row === rowsAfter[index]);
+  const scrollSame = Math.abs(scrollElement.scrollTop - scrollBefore) < 0.5;
+  if (allSame && sameFirst && sameMid && scrollSame) {
+    pass('(b) unchanged refresh keeps DOM elements and scroll position', 'rows=' + rowsAfter.length + ' sameElements=true scrollTop=' + scrollBefore);
+  } else {
+    fail('(b) unchanged refresh keeps DOM elements and scroll position',
+      'rowsReplaced=' + (!allSame) + ' firstSame=' + sameFirst + ' midSame=' + sameMid + ' count ' + rowsBefore.length + '->' + rowsAfter.length + ' scrollTop ' + scrollBefore + '->' + scrollElement.scrollTop);
+  }
+}
+
+async function scenarioC() {
+  const { host, scrollElement, titan } = controller;
+  scrollElement.scrollTop = 0;
+  await settle();
+  const expectedToken = prependGeneration();
+  await titan.loadTitan({ refresh: true });
+  await settle();
+  const scrollAfter = scrollElement.scrollTop;
+  const rowsAfter = rowsOf(host);
+  const firstToken = rowsAfter.length ? tokenOf(rowsAfter[0]) : '';
+  if (Math.abs(scrollAfter) < 0.5 && firstToken === expectedToken) {
+    pass('(c) live-feed refresh at top keeps scrollTop 0', 'newest=' + firstToken);
+  } else {
+    fail('(c) live-feed refresh at top keeps scrollTop 0',
+      'scrollTop 0 -> ' + scrollAfter + ', firstRow=' + (firstToken || '(none)') + ' expected=' + expectedToken);
+  }
+}
+
+async function scenarioD() {
+  const { host, scrollElement, titan } = controller;
+  scrollElement.scrollTop = 600;
+  await settle();
+  const visible = firstVisibleRow(host, scrollElement);
+  const target = visible ? visible.row : rowsOf(host)[0];
+  const details = target && target.querySelector('details');
+  if (!details) { fail('(d) open details evidence row stays open after refresh', 'no <details> found in a row'); return; }
+  details.open = true;
+  await settle();
+  const token = tokenOf(target);
+  info('(d) open row', token);
+  prependGeneration();
+  await titan.loadTitan({ refresh: true });
+  await settle();
+  const rowAfter = findRowByToken(host, token);
+  const detailsAfter = rowAfter && rowAfter.querySelector('details');
+  if (rowAfter && detailsAfter && detailsAfter.open === true) {
+    pass('(d) open details evidence row stays open after refresh');
+  } else {
+    fail('(d) open details evidence row stays open after refresh',
+      rowAfter ? 'details.open=' + String(detailsAfter && detailsAfter.open) + ' after refresh' : 'row ' + token + ' disappeared');
+  }
+}
+
+async function scenarioE() {
+  let html;
+  try {
+    const response = await realFetch('/web/index.html');
+    html = await response.text();
+  } catch (error) {
+    fail('(e) #titanEventList has no aria-live="polite" in index.html', 'index.html fetch failed: ' + error.message);
+    return;
+  }
+  const parsed = new DOMParser().parseFromString(html, 'text/html');
+  const list = parsed.getElementById('titanEventList');
+  if (!list) { fail('(e) #titanEventList has no aria-live="polite" in index.html', '#titanEventList not found in served index.html'); return; }
+  const ariaLive = list.getAttribute('aria-live');
+  if (ariaLive === null || ariaLive === '' || ariaLive === 'off') {
+    pass('(e) #titanEventList has no aria-live="polite" in index.html', 'aria-live=' + (ariaLive === null ? '(absent)' : JSON.stringify(ariaLive)));
+  } else {
+    fail('(e) #titanEventList has no aria-live="polite" in index.html', 'aria-live=' + JSON.stringify(ariaLive));
+  }
+}
+
+/**
+ * Acceptance scenario (f): deep-scroll anchor stability. Regression guard for
+ * the viewport-vs-content mismatch in the anchor selection: at a deep scroll
+ * offset (where the old viewport-relative measurement resolved to a null anchor
+ * and the refresh jumped by one row) the previously first visible row must keep
+ * its viewport position (+/- 2 px) after a prepend refresh. The probe stays
+ * clear of the very bottom on purpose: with a fixed 20-row page window the
+ * bottom clamp makes perfect position preservation physically impossible, so
+ * that is not part of the acceptance assertion.
+ */
+async function scenarioF() {
+  const { host, scrollElement, titan } = controller;
+  /* Isolate from scenario (d): its restored open <details> changes row layout. */
+  for (const details of host.querySelectorAll('details[open]')) details.open = false;
+  await settle();
+  const maxScroll = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+  scrollElement.scrollTop = Math.max(0, maxScroll - 1000);
+  await settle();
+  const probeScrollTop = scrollElement.scrollTop;
+  const anchor = firstVisibleRow(host, scrollElement);
+  if (!anchor) {
+    fail('(f) deep-scroll anchor row keeps its viewport position', 'no visible row at scrollTop=' + probeScrollTop);
+    return;
+  }
+  info('(f) deep-scroll anchor', anchor.token + ' viewportTop=' + anchor.top.toFixed(1) + ' scrollTop=' + probeScrollTop + ' (max ' + maxScroll + ')');
+  prependGeneration();
+  await titan.loadTitan({ refresh: true });
+  await settle();
+  const rowAfter = findRowByToken(host, anchor.token);
+  if (!rowAfter) {
+    fail('(f) deep-scroll anchor row keeps its viewport position', 'anchor row ' + anchor.token + ' disappeared after refresh');
+    return;
+  }
+  const topAfter = rowAfter.getBoundingClientRect().top;
+  const delta = topAfter - anchor.top;
+  if (Math.abs(delta) <= 2) {
+    pass('(f) deep-scroll anchor row keeps its viewport position', 'delta=' + delta.toFixed(1) + 'px scrollTop=' + probeScrollTop + '->' + scrollElement.scrollTop);
+  } else {
+    fail('(f) deep-scroll anchor row keeps its viewport position',
+      'anchor ' + anchor.token + ' moved ' + delta.toFixed(1) + 'px (' + anchor.top.toFixed(1) + ' -> ' + topAfter.toFixed(1) + '), scrollTop ' + probeScrollTop + ' -> ' + scrollElement.scrollTop);
+  }
+}
+
+/**
+ * Informational probe (g), not an acceptance assertion: documents a residual
+ * ordering risk in restoreListRenderState - open <details> elements are reopened
+ * AFTER the scroll position is restored, so an expanded evidence block above the
+ * anchor is still collapsed while the rows are measured. The probe records how
+ * far the anchor row moves on a refresh while such a <details> is open.
+ */
+async function openDetailsRefreshProbe() {
+  const { host, scrollElement, titan } = controller;
+  scrollElement.scrollTop = 600;
+  await settle();
+  const rows = rowsOf(host);
+  const detailsRow = rows[1] || rows[0];
+  const details = detailsRow && detailsRow.querySelector('details');
+  if (!details) { info('(g) open-details refresh probe (informational)', 'no <details> available'); return; }
+  details.open = true;
+  await settle();
+  const anchor = firstVisibleRow(host, scrollElement);
+  if (!anchor) { info('(g) open-details refresh probe (informational)', 'no visible anchor row'); return; }
+  prependGeneration();
+  await titan.loadTitan({ refresh: true });
+  await settle();
+  const rowAfter = findRowByToken(host, anchor.token);
+  const delta = rowAfter ? rowAfter.getBoundingClientRect().top - anchor.top : Number.NaN;
+  info('(g) open-details refresh probe (informational, not an acceptance assertion)',
+    'anchor ' + anchor.token + ' moved ' + delta.toFixed(1) + 'px with an open <details> above it');
+}
+
+async function main() {
+  let meta = {};
+  try { meta = await (await realFetch('/__meta.json')).json(); } catch (error) { /* metadata is optional */ }
+  info('web-root', meta.webRoot || '(unknown)');
+
+  let titan;
+  try {
+    titan = await import('/web/titan.js');
+  } catch (error) {
+    fail('setup', 'import of /web/titan.js failed: ' + String(error && error.message || error));
+    return;
+  }
+  if (typeof titan.loadTitan !== 'function') { fail('setup', 'titan.js does not export loadTitan()'); return; }
+  if (typeof titan.selectTitanTab !== 'function') { fail('setup', 'titan.js does not export selectTitanTab()'); return; }
+  info('exports', 'loadTitan() + selectTitanTab() present');
+
+  const host = document.getElementById('titanEventList');
+  if (!host) { fail('setup', '#titanEventList container missing in harness DOM'); return; }
+  controller.titan = titan;
+  controller.host = host;
+
+  await titan.loadTitan();
+  titan.selectTitanTab('ingress');
+  await waitFor(() => rowsOf(host).length >= 10, 'initial ingress timeline rows');
+  await settle();
+
+  const initialRows = rowsOf(host);
+  controller.scrollElement = findScrollElement(host);
+  const scrollElement = controller.scrollElement;
+  info('scroll-container', scrollElement === document.scrollingElement ? 'document.scrollingElement' : '#' + (scrollElement.id || scrollElement.tagName.toLowerCase()) + ' (height=' + scrollElement.clientHeight + 'px, scrollHeight=' + scrollElement.scrollHeight + 'px)');
+  info('rows-rendered', initialRows.length + ' of ' + HARNESS.eventStore.length + ' dataset events');
+  info('row-id-attribute', initialRows[0] && initialRows[0].dataset && initialRows[0].dataset.titanRow ? 'data-titan-row="' + initialRows[0].dataset.titanRow + '"' : '(absent)');
+  if (HARNESS.eventStore.length < 40) fail('setup', 'synthetic dataset must contain >=40 events (has ' + HARNESS.eventStore.length + ')');
+  if (initialRows.length < 10) fail('setup', 'fewer than 10 event rows rendered (' + initialRows.length + ')');
+
+  const guarded = async (label, fn) => {
+    try { await fn(); } catch (error) { fail(label, 'harness exception: ' + String(error && error.stack || error)); }
+  };
+  await guarded('(a)', scenarioA);
+  await guarded('(b)', scenarioB);
+  await guarded('(c)', scenarioC);
+  await guarded('(d)', scenarioD);
+  await guarded('(e)', scenarioE);
+  await guarded('(f)', scenarioF);
+  await guarded('(g)', openDetailsRefreshProbe);
+
+  const passCount = resultLines.filter((line) => line.startsWith('PASS ')).length;
+  const failCount = resultLines.filter((line) => line.startsWith('FAIL ')).length;
+  info('assertions', passCount + ' passed, ' + failCount + ' failed');
+}
+
+(async () => {
+  try {
+    await main();
+  } catch (error) {
+    fail('harness', 'fatal: ' + String(error && error.stack || error));
+  } finally {
+    finish();
+  }
+})();
+</script>
+</body>
+</html>

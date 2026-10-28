@@ -131,10 +131,13 @@ func TestVerifyAuthenticodeRejectsJunctionPath(t *testing.T) {
 	}
 	content := make([]byte, 4096)
 	content[0], content[1] = 'M', 'Z'
-	if err := os.WriteFile(filepath.Join(targetDirectory, "unsigned.exe"), content, 0o600); err != nil {
+	// Non-executable fixture name: the reparse rejection happens before any
+	// content/signature evaluation, and an unsigned executable-looking file in
+	// %TEMP% would raise false alarms in endpoint monitoring during the test run.
+	if err := os.WriteFile(filepath.Join(targetDirectory, "vgt-unsigned-probe.bin"), content, 0o600); err != nil {
 		t.Fatalf("write file through junction target: %v", err)
 	}
-	err := VerifyAuthenticode(filepath.Join(junction, "unsigned.exe"))
+	err := VerifyAuthenticode(filepath.Join(junction, "vgt-unsigned-probe.bin"))
 	if err == nil {
 		t.Fatal("path through a junction was accepted as Authenticode-valid")
 	}

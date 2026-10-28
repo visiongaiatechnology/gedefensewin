@@ -13,6 +13,19 @@ import (
 
 var suspiciousTokens = []string{"invoke-expression", " iex ", "downloadstring", "downloadfile", "system.net.webclient", "invoke-webrequest", "start-bitstransfer", "frombase64string", "virtualalloc", "writeprocessmemory", "createremotethread", "amsiutils", "amsiscanbuffer", "reflection.assembly", "dllimport", "minidumpwritedump", "sekurlsa", "rundll32", "regsvr32", "mshta"}
 
+const (
+	// encodedCommandSignal marks a process whose command line carries an
+	// -EncodedCommand payload. It is authoritative on its own: the block is
+	// caused by a first-class execution indicator, not a contextual
+	// annotation, so host response is authorized even when the payload cannot
+	// be classified (malformed or unresolved).
+	encodedCommandSignal = "powershell.encoded-command"
+	// renamedLolbinSignal marks a PE whose OriginalFilename version resource
+	// names a tracked living-off-the-land binary while the running image
+	// basename differs: a renamed or masqueraded system binary.
+	renamedLolbinSignal = "provenance.renamed-lolbin"
+)
+
 type Evaluator struct{}
 
 func (Evaluator) Analyze(event ProcessEvent) (result Analysis) {
@@ -28,7 +41,13 @@ func (Evaluator) Analyze(event ProcessEvent) (result Analysis) {
 	}()
 	rawSignals := rawBehaviorSignals(event)
 	result.Signals = append(result.Signals, rawSignals...)
-	payload, encoding, encoded, decodeErr := DecodePowerShellCommand(event.CommandLine)
+	// -EncodedCommand is a PowerShell parameter. Applying the parser to every
+	// process command line misclassified legitimate flags such as `go list -e`
+	// or `node -e` as malformed encoded payloads and terminated them.
+	payload, encoding, encoded, decodeErr := "", "", false, error(nil)
+	if isPowerShellHost(event.Image) {
+		payload, encoding, encoded, decodeErr = DecodePowerShellCommand(event.CommandLine)
+	}
 	if !encoded {
 		if len(rawSignals) > 0 {
 			strong := hasStrongBehaviorSignal(rawSignals)
@@ -63,7 +82,7 @@ func (Evaluator) Analyze(event ProcessEvent) (result Analysis) {
 	result.EffectiveSeverity = SeverityHigh
 	result.Disposition = DispositionBlock
 	result.Detection = "Suspicious encoded or in-memory command line"
-	result.Signals = append(result.Signals, "powershell.encoded-command")
+	result.Signals = append(result.Signals, encodedCommandSignal)
 	if decodeErr != nil {
 		result.Classification = "MALFORMED ENCODED COMMAND"
 		result.ConfidenceBasis = 9000
@@ -91,12 +110,31 @@ func (Evaluator) Analyze(event ProcessEvent) (result Analysis) {
 	return result
 }
 
+// isPowerShellHost reports whether the image is a PowerShell host that can
+// actually interpret -EncodedCommand. Other binaries (go, node, grep, ...) also
+// accept a bare -e flag and must not be parsed with PowerShell semantics.
+func isPowerShellHost(image string) bool {
+	switch strings.ToLower(filepath.Base(strings.TrimSpace(image))) {
+	case "powershell", "powershell.exe", "pwsh", "pwsh.exe":
+		return true
+	default:
+		return false
+	}
+}
+
 func rawBehaviorSignals(event ProcessEvent) []string {
 	image := strings.ToLower(filepath.Base(event.Image))
-	command := " " + strings.ToLower(strings.Join(strings.Fields(event.CommandLine), " ")) + " "
-	signals := make([]string, 0, 6)
-	trustedNames := map[string]struct{}{"powershell.exe": {}, "pwsh.exe": {}, "cmd.exe": {}, "cscript.exe": {}, "wscript.exe": {}, "mshta.exe": {}, "rundll32.exe": {}, "regsvr32.exe": {}, "wmic.exe": {}, "certutil.exe": {}, "bitsadmin.exe": {}, "vssadmin.exe": {}, "schtasks.exe": {}, "reg.exe": {}, "sc.exe": {}, "msiexec.exe": {}, "installutil.exe": {}, "msbuild.exe": {}, "regsvcs.exe": {}, "regasm.exe": {}, "forfiles.exe": {}}
-	if _, target := trustedNames[image]; target {
+	command := normalizeBehaviorText(normalizeCommandLineText(event.CommandLine))
+	signals := make([]string, 0, 7)
+	// The PE OriginalFilename resource survives a file rename. When it names a
+	// tracked LOLBin but the image basename does not, the running file is a
+	// renamed or masqueraded system binary; that provenance evidence is
+	// actionable regardless of the command line it was started with.
+	original := strings.ToLower(filepath.Base(strings.TrimSpace(event.OriginalImageName)))
+	if original != "" && original != image && isKnownLolbinImage(original) {
+		signals = appendUnique(signals, renamedLolbinSignal)
+	}
+	if isKnownLolbinImage(image) {
 		path := strings.ToLower(event.ImagePath)
 		if path != "" && (strings.Contains(path, `\temp\`) || strings.Contains(path, `\appdata\`)) {
 			signals = append(signals, "provenance.user-writable-lolbin")
@@ -170,7 +208,10 @@ func appendUnique(values []string, value string) []string {
 }
 
 func contentSignals(payload string) []string {
-	normalized := " " + strings.ToLower(strings.Join(strings.Fields(payload), " ")) + " "
+	normalized := normalizeBehaviorText(payload)
+	if normalized == "" {
+		return nil
+	}
 	signals := make([]string, 0, 4)
 	for _, token := range suspiciousTokens {
 		if strings.Contains(normalized, token) {
@@ -178,6 +219,140 @@ func contentSignals(payload string) []string {
 		}
 	}
 	return signals
+}
+
+// normalizeCommandLineText turns a raw Windows command line into the argument
+// line the started process receives. Windows command-line grouping is resolved
+// with the same splitter as the encoded-command decoder, so embedded code such
+// as -Command "& \"ie\"+\"x\"" is exposed without its transport quoting. A
+// malformed command line (unterminated quote, embedded NUL) falls back to the
+// raw text so obfuscation analysis still sees every byte.
+func normalizeCommandLineText(commandLine string) string {
+	args, err := splitWindowsCommandLine(commandLine)
+	if err != nil || len(args) == 0 {
+		return commandLine
+	}
+	return strings.Join(args, " ")
+}
+
+// behaviorTokenSeparators turns command separators and grouping punctuation
+// into token boundaries. Characters that can belong to a legitimate token
+// (letters, digits, '.', '-', '_', ':', '\', '/') are deliberately preserved so
+// paths and URLs in benign administration command lines keep their shape.
+var behaviorTokenSeparators = strings.NewReplacer(
+	`"`, " ", `'`, " ",
+	"(", " ", ")", " ", "{", " ", "}", " ", "[", " ", "]", " ",
+	";", " ", "|", " ", "&", " ", ",", " ", "+", " ", "=", " ",
+)
+
+// normalizeBehaviorText produces the canonical space-delimited form used for
+// behavior-token matching. It defeats the common command-line obfuscation
+// primitives without inventing tokens:
+//
+//   - PowerShell backtick escapes and cmd caret escapes are removed, so
+//     "Invoke-Ex`pression" and "Invoke-Ex^pression" read as
+//     "invoke-expression";
+//   - adjacent quoted string literals joined by '+' are concatenated, so
+//     `"Invoke-"+"Expression"` reads as "invoke-expression" and
+//     `& ("ie"+"x")` reads as "& iex";
+//   - quote characters are stripped;
+//   - punctuation is rewritten to token boundaries, so "iex(...)" exposes the
+//     standalone " iex " token;
+//   - whitespace is collapsed and the result is padded with single spaces.
+//
+// The input is lowercased first, so mixed-case obfuscation is folded as well.
+func normalizeBehaviorText(value string) string {
+	text := strings.ToLower(value)
+	text = strings.ReplaceAll(text, `\"`, `"`)
+	text = strings.NewReplacer("`", "", "^", "").Replace(text)
+	text = joinQuotedLiterals(text)
+	text = behaviorTokenSeparators.Replace(text)
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return ""
+	}
+	return " " + text + " "
+}
+
+// joinQuotedLiterals removes string-literal quotes and concatenates quoted
+// segments that are joined by '+'. A quoted segment is consumed together with
+// its delimiters; if the following non-space character is '+' and the next
+// non-space character starts another quoted segment, both segments are emitted
+// contiguously. Non-quoted '+' operators are left in place for the token
+// separator pass. Content of an outer literal is normalized recursively, so
+// PowerShell code nested inside a command-line argument ("...'ie'+'x'...") is
+// resolved as well.
+func joinQuotedLiterals(text string) string {
+	var out strings.Builder
+	out.Grow(len(text))
+	for index := 0; index < len(text); {
+		if text[index] != '\'' && text[index] != '"' {
+			out.WriteByte(text[index])
+			index++
+			continue
+		}
+		content, next, ok := readQuotedLiteral(text, index)
+		if !ok {
+			// Unterminated literal: drop the stray delimiter and keep scanning.
+			index++
+			continue
+		}
+		out.WriteString(normalizeQuotedContent(content))
+		index = next
+		for {
+			probe := index
+			for probe < len(text) && (text[probe] == ' ' || text[probe] == '\t') {
+				probe++
+			}
+			if probe >= len(text) || text[probe] != '+' {
+				break
+			}
+			probe++
+			for probe < len(text) && (text[probe] == ' ' || text[probe] == '\t') {
+				probe++
+			}
+			if probe >= len(text) || (text[probe] != '\'' && text[probe] != '"') {
+				break
+			}
+			content, next, ok = readQuotedLiteral(text, probe)
+			if !ok {
+				break
+			}
+			out.WriteString(normalizeQuotedContent(content))
+			index = next
+		}
+	}
+	return out.String()
+}
+
+// normalizeQuotedContent resolves quoting and concatenation inside the content
+// of a quoted segment. Plain content is returned unchanged.
+func normalizeQuotedContent(content string) string {
+	if !strings.ContainsAny(content, `'"`) {
+		return content
+	}
+	return joinQuotedLiterals(content)
+}
+
+// readQuotedLiteral reads one single- or double-quoted segment starting at
+// start. A doubled delimiter inside the literal is treated as an escaped
+// literal character, matching PowerShell's quoting rules.
+func readQuotedLiteral(text string, start int) (string, int, bool) {
+	quote := text[start]
+	var out strings.Builder
+	for index := start + 1; index < len(text); index++ {
+		if text[index] != quote {
+			out.WriteByte(text[index])
+			continue
+		}
+		if index+1 < len(text) && text[index+1] == quote {
+			out.WriteByte(quote)
+			index++
+			continue
+		}
+		return out.String(), index + 1, true
+	}
+	return "", 0, false
 }
 
 func signalCategories(signals []string) []string {
@@ -202,6 +377,16 @@ func responseAuthority(disposition Disposition, signals, categories []string) bo
 	if disposition != DispositionBlock {
 		return false
 	}
+	// An encoded-command block is direct execution evidence rather than a
+	// contextual annotation: the attempt to run a hidden payload itself
+	// justifies host response, even when the payload is malformed or carries
+	// no recognizable content signals. All other block classes still need a
+	// critical signal or two independent signal categories.
+	for _, signal := range signals {
+		if signal == encodedCommandSignal {
+			return true
+		}
+	}
 	if containsCritical(signals) {
 		return true
 	}
@@ -219,7 +404,7 @@ func responseAuthority(disposition Disposition, signals, categories []string) bo
 
 func containsCritical(signals []string) bool {
 	for _, signal := range signals {
-		if strings.Contains(signal, "amsi") || strings.Contains(signal, "writeprocessmemory") || strings.Contains(signal, "createremotethread") || strings.Contains(signal, "minidump") || strings.Contains(signal, "sekurlsa") {
+		if strings.Contains(signal, "amsi") || strings.Contains(signal, "writeprocessmemory") || strings.Contains(signal, "createremotethread") || strings.Contains(signal, "minidump") || strings.Contains(signal, "sekurlsa") || strings.Contains(signal, "renamed-lolbin") {
 			return true
 		}
 	}

@@ -234,7 +234,12 @@ func feedAuthorityDocumentMessage(document feedAuthorityDocument) []byte {
 	return raw
 }
 
-func (m *Manager) verifyFeedAuthorityDocument(document *feedAuthorityDocument) error {
+// verifyFeedAuthorityDocument verifies the detached Ed25519 signature against
+// the supplied pinned public keys. keys MUST be a snapshot obtained under
+// authorityMu (loadFeedAuthority replaces the map under a write lock and never
+// mutates a published map); the verification itself therefore never touches
+// Manager state and cannot race with a key-ring reload.
+func (m *Manager) verifyFeedAuthorityDocument(document *feedAuthorityDocument, keys map[string]ed25519.PublicKey) error {
 	if document == nil {
 		return errors.New("signed feed authority document is missing")
 	}
@@ -247,7 +252,7 @@ func (m *Manager) verifyFeedAuthorityDocument(document *feedAuthorityDocument) e
 	if err != nil || len(signature) != ed25519.SignatureSize {
 		return errors.New("signed feed authority signature encoding rejected")
 	}
-	for _, key := range m.authorityKeys {
+	for _, key := range keys {
 		if ed25519.Verify(key, feedAuthorityDocumentMessage(*document), signature) {
 			return nil
 		}
@@ -276,7 +281,7 @@ func (m *Manager) verifyFetchedAuthority(source Source, indicators []string, pre
 	if err != nil {
 		return nil, err
 	}
-	if err := m.verifyFeedAuthorityDocumentWithKeys(document, keys); err != nil {
+	if err := m.verifyFeedAuthorityDocument(document, keys); err != nil {
 		return nil, err
 	}
 	if document.Sequence < state.LastSequence {
@@ -301,17 +306,6 @@ func (m *Manager) verifyFetchedAuthority(source Source, indicators []string, pre
 		}
 	}
 	return document, nil
-}
-
-func (m *Manager) verifyFeedAuthorityDocumentWithKeys(document *feedAuthorityDocument, keys map[string]ed25519.PublicKey) error {
-	if document == nil {
-		return errors.New("signed feed authority document is missing")
-	}
-	saved := m.authorityKeys
-	m.authorityKeys = keys
-	err := m.verifyFeedAuthorityDocument(document)
-	m.authorityKeys = saved
-	return err
 }
 
 func loadFeedAuthorityDocument(root string) (*feedAuthorityDocument, error) {
@@ -404,6 +398,7 @@ func (m *Manager) verifyCachedAuthority(snapshot *sourceSnapshot) error {
 	configured := m.authorityConfigured
 	authorityErr := m.authorityError
 	state := m.authorityState
+	keys := m.authorityKeys
 	m.authorityMu.RUnlock()
 	if !configured {
 		return nil
@@ -417,7 +412,7 @@ func (m *Manager) verifyCachedAuthority(snapshot *sourceSnapshot) error {
 	if snapshot.Authority.SchemaVersion != feedAuthoritySchemaVersion || snapshot.Authority.Sequence < state.LastSequence {
 		return errors.New("cached feed authority sequence rejected")
 	}
-	if err := m.verifyFeedAuthorityDocument(snapshot.Authority); err != nil {
+	if err := m.verifyFeedAuthorityDocument(snapshot.Authority, keys); err != nil {
 		return err
 	}
 	attestation, err := matchFeedAuthorityAttestation(snapshot.Authority, Source{Key: snapshot.Key, Action: snapshot.Action}, snapshot.Indicators, m.effectiveNowUTC())

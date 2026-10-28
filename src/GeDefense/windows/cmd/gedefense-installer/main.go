@@ -18,6 +18,7 @@ import (
 	"github.com/visiongaiatechnology/gedefense/windows/internal/cleanup"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/product"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/userlaunch"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/winexec"
 )
@@ -66,6 +67,9 @@ func execute(uninstall, elevated bool, progress ProgressCallback) (err error) {
 	}
 
 	report(5, "Vorbereitung...", "Initialisiere Installer-Cache...")
+	if err := enforceNoDowngrade(uninstall); err != nil {
+		return err
+	}
 	staging, err := createInstallerStaging(elevated)
 	if err != nil {
 		return err
@@ -128,15 +132,25 @@ func execute(uninstall, elevated bool, progress ProgressCallback) (err error) {
 
 // startInstalledTray is deliberately detached from the installer's stdio. The
 // tray is a long-running process; inheriting the setup pipe would keep the
-// installer alive after it has already reported success.
+// installer alive after it has already reported success. The Setup EXE is
+// auto-elevated by the UAC installer detection, so an elevated installer must
+// never spawn the tray directly: the tray is handed to the unprivileged desktop
+// shell instead. No tray at all is better than an elevated tray that would later
+// start an elevated Center/Chromium (UI-FIND-002 design boundary).
 func startInstalledTray() {
 	programFiles := os.Getenv("ProgramFiles")
 	if !filepath.IsAbs(programFiles) {
 		return
 	}
-	tray := filepath.Join(programFiles, "VGT", "GeDefense", "bin", "GeDefenseTray.exe")
+	tray := filepath.Join(filepath.Clean(programFiles), "VGT", "GeDefense", "bin", "GeDefenseTray.exe")
 	info, err := os.Lstat(tray)
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return
+	}
+	if isElevated() {
+		if launchErr := userlaunch.LaunchAsShellUser(tray, nil); launchErr != nil {
+			winapi.ReportError("setup tray launch", launchErr)
+		}
 		return
 	}
 	command := exec.Command(tray, "--tray")

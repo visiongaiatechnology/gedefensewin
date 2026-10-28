@@ -59,6 +59,9 @@ func newServer(version, token string, engine HardeningEngine, auditEngine AuditE
 		rates:                make(map[string]*rateBucket),
 		windowCommands:       make(chan string, 1), windowStateVal: "normal",
 	}
+	if titanEngine != nil && mhxEngine != nil {
+		titanEngine.SetKillerdomBridge(mhxEngine.TerminatePID)
+	}
 	return s, s.routes()
 }
 
@@ -202,5 +205,26 @@ func (s *Server) routes() http.Handler {
 	read("/api/v1/titan/checkpoints", s.titanCheckpoints)
 	operate("/api/v1/titan/verify", s.titanVerify)
 	read("/api/v1/titan/export", s.titanExport)
+
+	// Sentinel & Killerdom routes (5.3.0)
+	read("/api/v1/sentinel/status", s.sentinelStatus)
+	policy("/api/v1/sentinel/config", s.sentinelUpdateConfig)
+	policy("/api/v1/sentinel/signatures/toggle", s.sentinelToggleSignature)
+	policy("/api/v1/sentinel/system-apps/toggle", s.sentinelToggleSystemApp)
+	policy("/api/v1/sentinel/systemapps/toggle", s.sentinelToggleSystemApp)
+	policy("/api/v1/sentinel/whitelist/toggle", s.sentinelToggleWhitelist)
+	policy("/api/v1/sentinel/whitelist/add", s.sentinelAddWhitelist)
+	policy("/api/v1/sentinel/whitelist/remove", s.sentinelRemoveWhitelist)
+
+	// Plan-compatible v5 aliases (5.3.0 architecture plan §8.2). They are the
+	// exact same handlers under the same auth/policy/rate gates, so no second
+	// security path exists.
+	read("/api/v5/sentinel/status", s.sentinelStatus)
+	policy("/api/v5/sentinel/config", s.sentinelUpdateConfig)
+	policy("/api/v5/sentinel/signatures/toggle", s.sentinelToggleSignature)
+	policy("/api/v5/sentinel/system-apps/toggle", s.sentinelToggleSystemApp)
+	policy("/api/v5/sentinel/whitelist/toggle", s.sentinelToggleWhitelist)
+	policy("/api/v5/sentinel/whitelist/add", s.sentinelAddWhitelist)
+	policy("/api/v5/sentinel/whitelist/remove", s.sentinelRemoveWhitelist)
 	return s.headers(mux)
 }

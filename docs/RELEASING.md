@@ -48,7 +48,7 @@ Der Source-Builder leitet den ZIP-Zeitstempel aus dem `SOURCE_DATE_EPOCH`-Metada
 
 Der Publish-Pfad enthält keine fest eingetragenen Signatur-/Thumbprint-Behauptungen mehr; alle Werte werden gemessen. Ohne `.git`/clean Tag bricht er fail-closed ab (explizite, dokumentierte Ausnahme: `-AllowMissingVcs` nur für nicht-offizielle Dry-Runs).
 
-## Publikationsstand 4.1.3
+## Publikationsstand 5.3.0
 
 Repository: https://github.com/visiongaiatechnology/gedefensewin . Das Release dokumentiert die tatsächlich bestandenen Build-, Analyse-, Fenster- und Fixture-Prüfungen. Die separate vollständige VM-Neuinstallation/Upgrade-Qualifikation und eine unabhängige Vier-Augen-Freigabe sind damit nicht nachgewiesen; die README dokumentiert den Verifikationsstand und die Grenzen des Release-Gates. Die Veröffentlichung behauptet keine darüber hinausgehende Qualifikation.
 

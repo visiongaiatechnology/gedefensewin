@@ -4,93 +4,39 @@
 package mhx
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/xml"
 	"errors"
-	"fmt"
-	"io"
+	"math"
 	"net/netip"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 )
 
-const wfpBlockTraceScript = `$ErrorActionPreference='Stop'
-$ProgressPreference='SilentlyContinue'
-function Write-VgtWireMessage {
-  param([Parameter(Mandatory=$true)][object]$Message)
-  $json = $Message | ConvertTo-Json -Compress -Depth 5 -WarningAction SilentlyContinue
-  [Console]::Out.WriteLine($json)
-  [Console]::Out.Flush()
-}
-function Read-VgtWfpEvents {
-  param([string]$XPath='', [switch]$Newest)
-  try {
-    if ($Newest) { Get-WinEvent -FilterHashtable @{LogName='Security'; Id=5157} -MaxEvents 1 -ErrorAction Stop }
-    else { Get-WinEvent -LogName 'Security' -FilterXPath $XPath -Oldest -MaxEvents 512 -ErrorAction Stop }
-  } catch {
-    if ($_.FullyQualifiedErrorId.Split(',')[0] -eq 'NoMatchingEventsFound') { return }
-    throw
-  }
-}
-$latest = @(Read-VgtWfpEvents -Newest)
-$latestRecord = if ($latest.Count) { [long]$latest[0].RecordId } else { 0L }
-$resume = 0L
-[void][long]::TryParse($env:GEDEFENSE_WFP_CURSOR,[ref]$resume)
-$last = if ($resume -gt 0 -and $latestRecord -ge $resume) { $resume } else { $latestRecord }
-Write-VgtWireMessage ([ordered]@{ kind='ready'; recordId=$last; timestampUtc=[DateTime]::UtcNow.ToString('o') })
-while ($true) {
-  Start-Sleep -Milliseconds 900
-  $query = "*[System[EventRecordID > $last and EventID=5157]]"
-  $events = @(Read-VgtWfpEvents -XPath $query)
-  if ($events.Count -eq 0) {
-    Write-VgtWireMessage ([ordered]@{ kind='heartbeat'; timestampUtc=[DateTime]::UtcNow.ToString('o') })
-    continue
-  }
-  foreach ($item in $events) {
-    $last = [Math]::Max($last,[long]$item.RecordId)
-    try {
-      [xml]$xml = $item.ToXml()
-      $fields = @{}
-      foreach ($entry in @($xml.Event.EventData.Data)) {
-        $fields[[string]$entry.Name] = [string]$entry.'#text'
-      }
-      $pidValue = 0L
-      $remotePortValue = 0
-      $localPortValue = 0
-      $protocolValue = 0
-      $filterValue = 0L
-      if (-not [long]::TryParse([string]$fields.ProcessID,[ref]$pidValue)) { continue }
-      if (-not [int]::TryParse([string]$fields.Protocol,[ref]$protocolValue)) { continue }
-      if (-not [long]::TryParse([string]$fields.FilterRTID,[ref]$filterValue)) { $filterValue = 0L }
-      $directionToken = [string]$fields.Direction
-      if ($directionToken -eq '%%14593' -or $directionToken -match '(?i)outbound|ausgehend') {
-        $direction = 'Outbound'
-        $remoteAddress = [string]$fields.DestAddress
-        [void][int]::TryParse([string]$fields.DestPort,[ref]$remotePortValue)
-        [void][int]::TryParse([string]$fields.SourcePort,[ref]$localPortValue)
-      } elseif ($directionToken -eq '%%14592' -or $directionToken -match '(?i)inbound|eingehend') {
-        $direction = 'Inbound'
-        $remoteAddress = [string]$fields.SourceAddress
-        [void][int]::TryParse([string]$fields.SourcePort,[ref]$remotePortValue)
-        [void][int]::TryParse([string]$fields.DestPort,[ref]$localPortValue)
-      } else { continue }
-      $application = [string]$fields.Application
-      if ($application.Length -gt 2048) { $application = $application.Substring(0,2048) }
-      Write-VgtWireMessage ([ordered]@{ kind='event'; timestampUtc=$item.TimeCreated.ToUniversalTime().ToString('o'); event=[ordered]@{
-        recordId=[long]$item.RecordId; pid=[uint32]$pidValue; application=$application; direction=$direction; localPort=[int]$localPortValue
-        remoteIp=$remoteAddress; remotePort=[int]$remotePortValue; protocol=[int]$protocolValue; filterRuntimeId=[long]$filterValue; filterOrigin=[string]$fields.FilterOrigin
-      } })
-    } catch {
-      [Console]::Error.WriteLine('WFP block event normalization failed.')
-    }
-  }
-}
-`
+// The WFP sensor is a native wevtapi pull subscription to Security event 5157.
+// The previous PowerShell bridge injected a cursor through the environment and
+// parsed a JSON wire protocol; the native path keeps the same event contract and
+// the same validation semantics with a committed EventRecordID cursor.
+const (
+	wfpSecurityChannel          = "Security"
+	wfpSensorName               = "WFP block telemetry"
+	wfpBlockEventID             = 5157
+	wfpMaximumApplicationChars  = 2048
+	wfpMaximumFilterOriginChars = 256
+	wfpMaximumXMLBytes          = 1 << 20
+	wfpMaximumFields            = 64
+	wfpMaximumFieldNameChars    = 64
+	wfpMaximumFieldValueChars   = 4096
+	wfpHealthInterval           = 2 * time.Second
+	wfpRestartInitialBackoff    = time.Second
+	wfpRestartMaximumBackoff    = 30 * time.Second
+)
+
+var wfpBlockEventIDs = []int{wfpBlockEventID}
 
 type wfpBlockEvent struct {
 	TimestampUTC    time.Time `json:"-"`
@@ -107,176 +53,100 @@ type wfpBlockEvent struct {
 	GeDefenseOrigin bool      `json:"-"`
 }
 
-type wfpWireMessage struct {
-	Kind         string         `json:"kind"`
-	RecordID     int64          `json:"recordId,omitempty"`
-	TimestampUTC string         `json:"timestampUtc"`
-	Event        *wfpBlockEvent `json:"event,omitempty"`
-}
-
 type wfpBlockWatcher struct{}
 
-const wfpBridgeTimeout = 30 * time.Second
-
 // Run owns recovery for this independent sensor; failures cannot permanently
-// disable it until the next service restart. Cursor state survives each attempt.
+// disable it until the next service restart. The EventRecordID cursor survives
+// each supervised attempt because it lives in this closure, never in the
+// supervisor. Health is delivered from receipt time, never from event time.
 func (wfpBlockWatcher) Run(ctx context.Context, output chan<- wfpBlockEvent, health chan<- time.Time, faults chan<- error) {
 	var cursor int64
-	superviseWFP(ctx, func(attempt context.Context) error {
-		path, err := windowsPowerShell()
+	superviseSensor(ctx, wfpSensorName, func(attempt context.Context) error {
+		xpath, err := winapi.EventLogXPath(wfpBlockEventIDs, cursor)
 		if err != nil {
 			return err
 		}
-		return runWFPCommand(attempt, func(bridge context.Context) *exec.Cmd {
-			command := exec.CommandContext(bridge, path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", wfpBlockTraceScript)
-			command.Env = append(os.Environ(), "GEDEFENSE_WFP_CURSOR="+strconv.FormatInt(cursor, 10))
-			return command
-		}, &cursor, output, health, wfpBridgeTimeout)
-	}, faults, time.Second, 30*time.Second)
+		records, streamFaults, err := winapi.StreamEventLog(attempt, wfpSecurityChannel, xpath, cursor)
+		if err != nil {
+			return err
+		}
+		deliverHealth(health, time.Now().UTC())
+		ticker := time.NewTicker(wfpHealthInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-attempt.Done():
+				return attempt.Err()
+			case now := <-ticker.C:
+				deliverHealth(health, now.UTC())
+			case fault, ok := <-streamFaults:
+				if !ok {
+					streamFaults = nil
+					continue
+				}
+				if fault != nil {
+					return fault
+				}
+			case record, ok := <-records:
+				if !ok {
+					return eventLogStreamEnded(attempt, streamFaults)
+				}
+				normalizeErr := normalizeWFPRecord(attempt, record, &cursor, output, health, time.Now().UTC())
+				if normalizeErr == nil {
+					continue
+				}
+				if attempt.Err() != nil {
+					return attempt.Err()
+				}
+				deliverFault(faults, normalizeErr)
+			}
+		}
+	}, faults, wfpRestartInitialBackoff, wfpRestartMaximumBackoff)
 }
 
-func superviseWFP(ctx context.Context, run func(context.Context) error, faults chan<- error, initial, maximum time.Duration) {
-	delay := initial
-	for ctx.Err() == nil {
-		started := time.Now()
-		err := run(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		if err == nil {
-			err = errors.New("WFP telemetry bridge ended unexpectedly")
-		}
-		deliverFault(faults, err)
-		if time.Since(started) >= maximum {
-			delay = initial
-		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-		if delay < maximum/2 {
-			delay *= 2
-		} else {
-			delay = maximum
-		}
+// normalizeWFPRecord is the pure, unit-testable event gate. It parses one
+// native record, rejects malformed records without refreshing sensor health and
+// commits the EventRecordID cursor for every structurally valid record: after a
+// block event was delivered and also after a policy-filtered record (loopback,
+// unspecified, multicast or unparsable remote address), matching the previous
+// bridge's cursor semantics so filtered noise is not replayed on every restart.
+// The cursor is never committed for malformed records or an interrupted
+// delivery, so those records are retried after a supervisor restart.
+func normalizeWFPRecord(ctx context.Context, record winapi.EventLogRecord, cursor *int64, output chan<- wfpBlockEvent, health chan<- time.Time, received time.Time) error {
+	if cursor == nil {
+		return errors.New("WFP cursor boundary rejected")
 	}
-}
-
-// WFP PowerShell performs no child-process execution. Killing this owned
-// process cancels event-log reads; Wait joins its stderr copier and releases pipes.
-func runWFPCommand(parent context.Context, newCommand func(context.Context) *exec.Cmd, cursor *int64, output chan<- wfpBlockEvent, health chan<- time.Time, timeout time.Duration) (result error) {
-	ctx, cancel := context.WithCancelCause(parent)
-	defer cancel(nil)
-	command := newCommand(ctx)
-	command.WaitDelay = 3 * time.Second
-	stdout, err := command.StdoutPipe()
+	fields, err := parseWFPRecord(record)
 	if err != nil {
 		return err
 	}
-	diagnostics := &wfpDiagnostics{}
-	command.Stderr = diagnostics
-	if err := command.Start(); err != nil {
-		return err
-	}
-	activity := make(chan struct{}, 1)
-	watchdogDone := make(chan struct{})
-	go func() {
-		defer close(watchdogDone)
-		timer := time.NewTimer(timeout)
-		defer timer.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-activity:
-				timer.Reset(timeout)
-			case <-timer.C:
-				cancel(errors.New("WFP telemetry bridge heartbeat timed out"))
-
-				return
-			}
-		}
-	}()
-	defer func() {
-		cancel(nil)
-		<-watchdogDone
-
-		if err := command.Wait(); err != nil && parent.Err() == nil {
-			result = errors.Join(result, fmt.Errorf("WFP bridge stopped: %w; %s", err, diagnostics.String()))
-		}
-		if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) && parent.Err() == nil {
-			result = errors.Join(result, cause)
-		}
-	}()
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64<<10), 1<<20)
-	for scanner.Scan() {
-		if ctx.Err() != nil {
-			return context.Cause(ctx)
-		}
-		if err := forwardWFPMessage(ctx, scanner.Bytes(), cursor, output, health, time.Now().UTC()); err != nil {
-			return err
-		}
-		select {
-		case activity <- struct{}{}:
-		default:
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	return errors.New("WFP telemetry bridge output closed")
-}
-
-// Sensor health uses receipt time. Event time remains untouched for correlation.
-func forwardWFPMessage(ctx context.Context, raw []byte, cursor *int64, output chan<- wfpBlockEvent, health chan<- time.Time, received time.Time) error {
-	var message wfpWireMessage
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&message); err != nil {
-		return errors.New("WFP block telemetry validation failed")
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("WFP block telemetry trailing data rejected")
-	}
-	timestamp, err := time.Parse(time.RFC3339Nano, message.TimestampUTC)
-	if err != nil || (message.Kind != "ready" && message.Kind != "heartbeat" && message.Kind != "event") {
-		return errors.New("WFP block telemetry protocol rejected")
-	}
-	if message.Kind == "ready" {
-		if message.RecordID < 0 {
-			return errors.New("WFP record cursor rejected")
-		}
-		*cursor = message.RecordID
-	}
-	if message.Kind != "event" {
+	if fields.RecordID <= *cursor {
 		deliverHealth(health, received)
 		return nil
 	}
-	event := message.Event
-	if event == nil || event.RecordID <= 0 || len(event.Application) > 2048 || len(event.FilterOrigin) > 256 || (event.Direction != "Inbound" && event.Direction != "Outbound") || event.Protocol == 0 {
-		return errors.New("WFP block event boundary rejected")
-	}
-	if event.RecordID <= *cursor {
+	address, addressErr := netip.ParseAddr(fields.RemoteIP)
+	if addressErr != nil || !address.IsValid() || address.IsLoopback() || address.IsUnspecified() || address.IsMulticast() {
+		*cursor = fields.RecordID
 		deliverHealth(health, received)
 		return nil
 	}
-	address, parseErr := netip.ParseAddr(strings.TrimSpace(event.RemoteIP))
-	if parseErr != nil || !address.IsValid() || address.IsLoopback() || address.IsUnspecified() || address.IsMulticast() {
-		*cursor = event.RecordID
-		deliverHealth(health, received)
-		return nil
+	event := wfpBlockEvent{
+		TimestampUTC:    fields.EventTime,
+		RecordID:        fields.RecordID,
+		PID:             fields.PID,
+		Application:     fields.Application,
+		Direction:       fields.Direction,
+		LocalPort:       fields.LocalPort,
+		RemoteIP:        address.Unmap().String(),
+		RemotePort:      fields.RemotePort,
+		Protocol:        fields.Protocol,
+		FilterRuntimeID: fields.FilterRuntimeID,
+		FilterOrigin:    fields.FilterOrigin,
+		GeDefenseOrigin: strings.HasPrefix(fields.FilterOrigin, "VGT-GeDefense-TI-"),
 	}
-	event.RemoteIP = address.Unmap().String()
-	event.FilterOrigin = strings.TrimSpace(event.FilterOrigin)
-	event.GeDefenseOrigin = strings.HasPrefix(event.FilterOrigin, "VGT-GeDefense-TI-")
-	event.TimestampUTC = timestamp.UTC()
 	select {
-	case output <- *event:
-		*cursor = event.RecordID
+	case output <- event:
+		*cursor = fields.RecordID
 		deliverHealth(health, received)
 		return nil
 	case <-ctx.Done():
@@ -284,21 +154,163 @@ func forwardWFPMessage(ctx context.Context, raw []byte, cursor *int64, output ch
 	}
 }
 
-// stderr remains bounded even when PowerShell emits a multi-line CLIXML error.
-// exec.Cmd joins its writer before diagnostics are inspected.
-type wfpDiagnostics struct{ buffer bytes.Buffer }
-
-func (b *wfpDiagnostics) Write(p []byte) (int, error) {
-	count := len(p)
-	if remaining := 2048 - b.Len(); remaining > 0 {
-		if len(p) > remaining {
-			p = p[:remaining]
-		}
-		_, err := b.buffer.Write(p)
-		return count, err
-	}
-	return count, nil
+type wfpRecordFields struct {
+	RecordID        int64
+	PID             uint32
+	Application     string
+	Direction       string
+	LocalPort       uint16
+	RemoteIP        string
+	RemotePort      uint16
+	Protocol        uint8
+	FilterRuntimeID int64
+	FilterOrigin    string
+	EventTime       time.Time
 }
 
-func (b *wfpDiagnostics) Len() int       { return b.buffer.Len() }
-func (b *wfpDiagnostics) String() string { return b.buffer.String() }
+type wfpEventXML struct {
+	XMLName xml.Name `xml:"Event"`
+	System  struct {
+		EventID int `xml:"EventID"`
+	} `xml:"System"`
+	EventData struct {
+		Data []wfpDataField `xml:"Data"`
+	} `xml:"EventData"`
+}
+
+type wfpDataField struct {
+	Name  string `xml:"Name,attr"`
+	Value string `xml:",chardata"`
+}
+
+// parseWFPRecord converts the rendered XML and receipt metadata of one 5157
+// record into validated fields. Structural or numeric inconsistencies are
+// errors: such a record is not trustworthy telemetry and must not prove sensor
+// liveness.
+func parseWFPRecord(record winapi.EventLogRecord) (wfpRecordFields, error) {
+	if len(record.XML) == 0 || len(record.XML) > wfpMaximumXMLBytes || record.RecordID <= 0 {
+		return wfpRecordFields{}, errors.New("WFP record boundary rejected")
+	}
+	var document wfpEventXML
+	if err := xml.Unmarshal(record.XML, &document); err != nil {
+		return wfpRecordFields{}, errors.New("WFP record xml rejected")
+	}
+	if document.System.EventID != wfpBlockEventID {
+		return wfpRecordFields{}, errors.New("WFP record identity rejected")
+	}
+	values, err := wfpFieldValues(document.EventData.Data)
+	if err != nil {
+		return wfpRecordFields{}, err
+	}
+	processID, ok := wfpParseUnsigned(values["processid"], 32)
+	if !ok || processID == 0 {
+		return wfpRecordFields{}, errors.New("WFP record process id rejected")
+	}
+	protocolValue, ok := wfpParseUnsigned(values["protocol"], 8)
+	if !ok || protocolValue == 0 {
+		return wfpRecordFields{}, errors.New("WFP record protocol rejected")
+	}
+	direction, outbound, ok := wfpDirection(values["direction"])
+	if !ok {
+		return wfpRecordFields{}, errors.New("WFP record direction rejected")
+	}
+	var remoteAddressKey, remotePortKey, localPortKey string
+	if outbound {
+		remoteAddressKey, remotePortKey, localPortKey = "destaddress", "destport", "sourceport"
+	} else {
+		remoteAddressKey, remotePortKey, localPortKey = "sourceaddress", "sourceport", "destport"
+	}
+	// The remote address itself is a policy decision, not a structural one:
+	// an empty or unparseable address is a valid record the sensor rejects
+	// (it still proves subscription liveness), exactly like the previous
+	// bridge did. It is evaluated by normalizeWFPRecord.
+	remoteIP := strings.TrimSpace(values[remoteAddressKey])
+	remotePort, _ := wfpParseUnsigned(values[remotePortKey], 16)
+	localPort, _ := wfpParseUnsigned(values[localPortKey], 16)
+	filterRuntimeID := int64(0)
+	if parsed, ok := wfpParseUnsigned(values["filterrtid"], 64); ok {
+		if parsed > math.MaxInt64 {
+			return wfpRecordFields{}, errors.New("WFP record filter runtime id rejected")
+		}
+		filterRuntimeID = int64(parsed)
+	}
+	application := truncateEventLogText(values["application"], wfpMaximumApplicationChars)
+	filterOrigin := strings.TrimSpace(values["filterorigin"])
+	if len(filterOrigin) > wfpMaximumFilterOriginChars {
+		return wfpRecordFields{}, errors.New("WFP record filter origin rejected")
+	}
+	eventTime := record.TimeCreated
+	if eventTime.IsZero() {
+		return wfpRecordFields{}, errors.New("WFP record event time rejected")
+	}
+	return wfpRecordFields{
+		RecordID:        record.RecordID,
+		PID:             uint32(processID),
+		Application:     application,
+		Direction:       direction,
+		LocalPort:       uint16(localPort),
+		RemoteIP:        remoteIP,
+		RemotePort:      uint16(remotePort),
+		Protocol:        uint8(protocolValue),
+		FilterRuntimeID: filterRuntimeID,
+		FilterOrigin:    filterOrigin,
+		EventTime:       eventTime.UTC(),
+	}, nil
+}
+
+// wfpFieldValues bounds and case-folds the EventData fields. PowerShell's
+// hashtable was case-insensitive, so field lookup stays case-insensitive.
+func wfpFieldValues(fields []wfpDataField) (map[string]string, error) {
+	values := make(map[string]string, len(fields))
+	for index, field := range fields {
+		if index >= wfpMaximumFields {
+			return nil, errors.New("WFP record field boundary rejected")
+		}
+		name := strings.ToLower(strings.TrimSpace(field.Name))
+		if name == "" || len(name) > wfpMaximumFieldNameChars || strings.IndexByte(name, 0) >= 0 {
+			return nil, errors.New("WFP record field name rejected")
+		}
+		value := field.Value
+		if len(value) > wfpMaximumFieldValueChars || !wfpValidText(value) {
+			return nil, errors.New("WFP record field value rejected")
+		}
+		values[name] = truncateEventLogText(value, wfpMaximumFieldValueChars)
+	}
+	return values, nil
+}
+
+func wfpDirection(value string) (direction string, outbound bool, ok bool) {
+	token := strings.ToLower(strings.TrimSpace(value))
+	switch {
+	case token == "%%14593" || strings.Contains(token, "outbound") || strings.Contains(token, "ausgehend"):
+		return "Outbound", true, true
+	case token == "%%14592" || strings.Contains(token, "inbound") || strings.Contains(token, "eingehend"):
+		return "Inbound", false, true
+	default:
+		return "", false, false
+	}
+}
+
+func wfpParseUnsigned(value string, bits int) (uint64, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	base := 10
+	if len(value) > 2 && value[0] == '0' && (value[1] == 'x' || value[1] == 'X') {
+		base = 16
+		value = value[2:]
+		if value == "" {
+			return 0, false
+		}
+	}
+	parsed, err := strconv.ParseUint(value, base, bits)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func wfpValidText(value string) bool {
+	return utf8.ValidString(value)
+}

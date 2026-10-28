@@ -304,6 +304,8 @@ type MHXEngine interface {
 	Applications(context.Context) ([]mhx.ApplicationAllow, error)
 	SetApplication(context.Context, string, string) ([]mhx.ApplicationAllow, error)
 	ReconcilePolicy(context.Context) error
+	SentinelStore() *mhx.SentinelStore
+	TerminatePID(uint32, string) error
 }
 
 type IntegrityEngine interface {
@@ -324,6 +326,8 @@ type TitanEngine interface {
 	RestoreQuarantine(string, string) (titan.QuarantineEntry, error)
 	ReviewQuarantine(string, string) (titan.QuarantineEntry, error)
 	SetPolicy(string, bool, string) (titan.Policy, error)
+	SetCorrelationWithKillerdom(bool, string) (titan.Policy, error)
+	SetKillerdomBridge(func(uint32, string) error)
 	SetOwnerProcessImages([]string, string) (titan.Policy, error)
 	Permits() []titan.Permit
 	CreatePermit(string, string, string, time.Duration, bool, string) (titan.Permit, error)

@@ -28,22 +28,29 @@ const (
 )
 
 type ProcessEvent struct {
-	TimestampUTC   time.Time         `json:"timestampUtc"`
-	CreationUTC    time.Time         `json:"creationUtc"`
-	PID            uint32            `json:"pid"`
-	ParentPID      uint32            `json:"parentPid"`
-	Image          string            `json:"image"`
-	ImagePath      string            `json:"imagePath"`
-	CommandLine    string            `json:"commandLine"`
-	SignerStatus   string            `json:"signerStatus"`
-	SignerSubject  string            `json:"signerSubject"`
-	SHA256         string            `json:"sha256"`
-	ParentImage    string            `json:"parentImage"`
-	ParentPath     string            `json:"parentPath"`
-	ParentSigner   string            `json:"parentSigner"`
-	ParentSigState string            `json:"parentSignerStatus"`
-	ParentSHA256   string            `json:"parentSha256"`
-	Ancestry       []ProcessIdentity `json:"ancestry"`
+	TimestampUTC  time.Time `json:"timestampUtc"`
+	CreationUTC   time.Time `json:"creationUtc"`
+	PID           uint32    `json:"pid"`
+	ParentPID     uint32    `json:"parentPid"`
+	Image         string    `json:"image"`
+	ImagePath     string    `json:"imagePath"`
+	CommandLine   string    `json:"commandLine"`
+	SignerStatus  string    `json:"signerStatus"`
+	SignerSubject string    `json:"signerSubject"`
+	// OriginalImageName is the PE "OriginalFilename" version resource of the
+	// image (best effort). It lets the process sensor detect renamed system
+	// binaries without trusting the file name alone: a copy of
+	// powershell.exe as updater.exe still carries OriginalFilename
+	// "PowerShell.EXE". ImageVersionCompany is the PE CompanyName resource.
+	OriginalImageName   string            `json:"originalImageName,omitempty"`
+	ImageVersionCompany string            `json:"imageVersionCompany,omitempty"`
+	SHA256              string            `json:"sha256"`
+	ParentImage         string            `json:"parentImage"`
+	ParentPath          string            `json:"parentPath"`
+	ParentSigner        string            `json:"parentSigner"`
+	ParentSigState      string            `json:"parentSignerStatus"`
+	ParentSHA256        string            `json:"parentSha256"`
+	Ancestry            []ProcessIdentity `json:"ancestry"`
 }
 
 type ProcessIdentity struct {

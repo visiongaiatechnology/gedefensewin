@@ -278,7 +278,7 @@ export function reviewTitanQuarantine(id,reason){
 }
 
 export function saveTitanPolicy(payload){
-  return api('/api/v1/titan/policy',{method:'POST',json:payload,signal:AbortSignal.timeout(30000)});
+  return api('/api/v1/titan/policy',{method:'POST',json:{...payload,confirmation:'CHANGE TITAN POLICY'},signal:AbortSignal.timeout(30000)});
 }
 
 export function getTitanPermits(){
@@ -379,5 +379,58 @@ export function setIntegrityConfiguration(enabled,intervalHours,reason){
     method:'POST',
     json:{enabled,intervalHours,confirmation:'CHANGE INTEGRITY MONITORING',reason},
     signal:AbortSignal.timeout(30000),
+  });
+}
+
+/* VGT Sentinel & MHX 4.1 Killerdom (5.3.0) */
+export function getSentinelStatus(){
+  return api('/api/v1/sentinel/status',{signal:AbortSignal.timeout(15000)});
+}
+
+export function updateSentinelConfig(config){
+  return api('/api/v1/sentinel/config',{
+    method:'POST',
+    json:config,
+    signal:AbortSignal.timeout(15000),
+  });
+}
+
+export function toggleSentinelSignature(sigId,enabled,{reason='',confirmation=''}={}){
+  return api('/api/v1/sentinel/signatures/toggle',{
+    method:'POST',
+    json:{sigId,enabled,reason,confirmation},
+    signal:AbortSignal.timeout(15000),
+  });
+}
+
+export function toggleSentinelSystemApp(id,enabled,{reason='',confirmation=''}={}){
+  return api('/api/v1/sentinel/system-apps/toggle',{
+    method:'POST',
+    json:{id,enabled,reason,confirmation},
+    signal:AbortSignal.timeout(15000),
+  });
+}
+
+export function toggleSentinelWhitelist(id,enabled){
+  return api('/api/v1/sentinel/whitelist/toggle',{
+    method:'POST',
+    json:{id,enabled},
+    signal:AbortSignal.timeout(15000),
+  });
+}
+
+export function addSentinelWhitelist(name,pathPattern,{sha256='',signerMatch=''}={}){
+  return api('/api/v1/sentinel/whitelist/add',{
+    method:'POST',
+    json:{name,pathPattern,sha256,signerMatch},
+    signal:AbortSignal.timeout(15000),
+  });
+}
+
+export function removeSentinelWhitelist(id){
+  return api('/api/v1/sentinel/whitelist/remove',{
+    method:'POST',
+    json:{id},
+    signal:AbortSignal.timeout(15000),
   });
 }

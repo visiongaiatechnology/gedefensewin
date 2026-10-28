@@ -175,8 +175,10 @@ func (s *Server) titanSetPolicy(w http.ResponseWriter, r *http.Request) {
 		Mode           string `json:"mode"`
 		AutoQuarantine bool   `json:"autoQuarantine"`
 		Reason         string `json:"reason"`
+		Confirmation   string `json:"confirmation"`
 	}
-	if err := decodeJSON(w, r, &input); err != nil || validateReason(input.Reason) != nil {
+	if err := decodeJSON(w, r, &input); err != nil || validateReason(input.Reason) != nil ||
+		input.Confirmation != "CHANGE TITAN POLICY" {
 		s.writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}

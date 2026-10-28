@@ -6,6 +6,7 @@ package launcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -204,5 +205,159 @@ func TestWindowSessionFailsClosedWhenBrokerRejects(t *testing.T) {
 	defer session.close()
 	if _, err := session.authorization(context.Background()); err == nil {
 		t.Fatal("rejected broker was treated as an authenticated window session")
+	}
+}
+
+func TestDescribeMapsFailureKindsToSpecificGermanMessages(t *testing.T) {
+	tests := []struct {
+		kind            FailureKind
+		summaryFragment string
+		hintFragment    string
+	}{
+		{FailureBroker, "Dienst", "GeDefense-Dienst"},
+		{FailureBrowser, "Chromium-Browser", "Program Files"},
+		{FailureHost, "Fenster", "Center-Fenster"},
+		{FailureStartup, "Browserprozess", "Browserstart"},
+		{FailureProfile, "Profil", "Schreibrechte"},
+		{FailureElevation, "Administratorrechten", "Als Administrator"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.kind), func(t *testing.T) {
+			err := failure(test.kind, errors.New("underlying detail"))
+			summary, hint := Describe(err)
+			if !strings.Contains(summary, test.summaryFragment) {
+				t.Fatalf("summary for %s is not specific: %q", test.kind, summary)
+			}
+			if !strings.Contains(hint, test.hintFragment) {
+				t.Fatalf("hint for %s is not actionable: %q", test.kind, hint)
+			}
+			if KindOf(err) != test.kind {
+				t.Fatalf("KindOf() = %q, want %q", KindOf(err), test.kind)
+			}
+			if !errors.Is(err, err.(*Failure).Err) {
+				t.Fatalf("typed failure does not unwrap to its cause")
+			}
+		})
+	}
+}
+
+func TestDescribeHandlesUnknownAndJoinedErrors(t *testing.T) {
+	unknown := errors.New("raw internal condition")
+	summary, hint := Describe(unknown)
+	if summary == "" || hint == "" {
+		t.Fatal("unknown failure lost its generic summary or hint")
+	}
+	if strings.Contains(summary, "raw internal condition") {
+		t.Fatalf("internal error text leaked into the operator summary: %q", summary)
+	}
+	joined := errors.Join(errors.New("secondary"), failure(FailureBrowser, errors.New("no browser")))
+	if KindOf(joined) != FailureBrowser {
+		t.Fatalf("joined failure kind lost: %q", KindOf(joined))
+	}
+	if summary, _ := Describe(joined); !strings.Contains(summary, "Chromium-Browser") {
+		t.Fatalf("joined failure was not categorized: %q", summary)
+	}
+}
+
+func TestBrowserAttachDeadlineIsExtendedBeyondLegacyValue(t *testing.T) {
+	if browserAttachDeadline != 45*time.Second {
+		t.Fatalf("browser attach deadline = %v, want 45s", browserAttachDeadline)
+	}
+	if browserAttachDeadline <= 15*time.Second {
+		t.Fatalf("browser attach deadline regressed to the legacy 15s value: %v", browserAttachDeadline)
+	}
+}
+
+func TestDiagnosticLogPathUsesLocalAppData(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LocalAppData", root)
+	path, err := DiagnosticLogPath()
+	if err != nil {
+		t.Fatalf("diagnostic log path rejected a valid LocalAppData: %v", err)
+	}
+	expected := filepath.Join(root, "VGT", "GeDefense", "logs", "center-launch.log")
+	if path != expected {
+		t.Fatalf("DiagnosticLogPath() = %q, want %q", path, expected)
+	}
+	t.Setenv("LocalAppData", "relative")
+	if _, err := DiagnosticLogPath(); err == nil {
+		t.Fatal("relative LocalAppData was accepted")
+	}
+}
+
+func TestLaunchDiagnosticIsUTCBoundedAndRotated(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LocalAppData", root)
+	path, err := DiagnosticLogPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := launchDiagnostic{
+		Category: string(FailureStartup),
+		Elevated: true,
+		Browser:  `C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+		Detail:   strings.Repeat("x", 900),
+	}
+	for attempt := 0; attempt < 400; attempt++ {
+		if err := writeLaunchDiagnostic(entry); err != nil {
+			t.Fatalf("diagnostic write %d failed: %v", attempt, err)
+		}
+		if _, statErr := os.Stat(path + ".1"); statErr == nil {
+			break
+		}
+	}
+	rotatedInfo, err := os.Stat(path + ".1")
+	if err != nil {
+		t.Fatalf("diagnostic log was not rotated: %v", err)
+	}
+	if rotatedInfo.Size() > diagnosticLogMaxBytes {
+		t.Fatalf("rotated generation exceeds the 256 KiB bound: %d", rotatedInfo.Size())
+	}
+	currentInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("current diagnostic log missing after rotation: %v", err)
+	}
+	if currentInfo.Size() > diagnosticLogMaxBytes {
+		t.Fatalf("current generation exceeds the 256 KiB bound: %d", currentInfo.Size())
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(current)
+	if !strings.Contains(content, "kind=startup") || !strings.Contains(content, "elevated=true") {
+		t.Fatalf("diagnostic line lacks category/elevation: %q", content)
+	}
+	if !strings.Contains(content, "msedge.exe") {
+		t.Fatalf("diagnostic line lacks the browser path: %q", content)
+	}
+	if strings.Contains(content, "\r\n") {
+		t.Fatal("diagnostic line contains a Windows line break")
+	}
+	// The UTC timestamp is the first token of every line.
+	firstLine := strings.SplitN(strings.TrimSpace(content), "\n", 2)[0]
+	stamp := strings.SplitN(firstLine, " ", 2)[0]
+	if _, err := time.Parse(time.RFC3339, stamp); err != nil {
+		t.Fatalf("diagnostic timestamp is not RFC3339 UTC: %q (%v)", stamp, err)
+	}
+}
+
+func TestFormatLaunchDiagnosticSanitizesControlBytes(t *testing.T) {
+	line := formatLaunchDiagnostic(launchDiagnostic{
+		Category: "startup\r\ninjected",
+		Elevated: false,
+		Detail:   "line one\r\nline two\x00end",
+	}, time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC))
+	if strings.ContainsAny(line, "\r\x00") {
+		t.Fatalf("control bytes survived sanitation: %q", line)
+	}
+	if strings.Count(line, "\n") != 1 || !strings.HasSuffix(line, "\n") {
+		t.Fatalf("diagnostic line must be one newline-terminated record: %q", line)
+	}
+	if !strings.HasPrefix(line, "2026-10-25T12:00:00Z") {
+		t.Fatalf("diagnostic timestamp is not UTC RFC3339: %q", line)
+	}
+	if !strings.Contains(line, "kind=") || !strings.Contains(line, "injected") {
+		t.Fatalf("diagnostic category was dropped: %q", line)
 	}
 }

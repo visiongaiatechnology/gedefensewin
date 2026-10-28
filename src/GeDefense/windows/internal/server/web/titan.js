@@ -25,9 +25,12 @@ import {
   verifyTitanEvidence,
 } from './api.js';
 import {
-  byId, emptyState, formatBytes, formatNumber, formatTime, node, requestReason, severity,
+  byId, announce, emptyState, formatBytes, formatNumber, formatTime, node, requestReason, severity,
   setPill, setText, toast,
 } from './dom.js';
+import {
+  renderStable, resetListSignature, resetVisibleListPosition,
+} from './list-stability.js';
 
 const state={
   status:null,
@@ -112,6 +115,7 @@ function actionButton(label,action,id,variant='ghost'){
 
 function renderSensor(sensor){
   const row=node('div','titan-sensor-row');
+  row.dataset.titanRow=`sensor:${sensor.id||sensor.label||''}`;
   row.setAttribute('role','listitem');
   const main=node('div','titan-sensor-main');
   const dot=node('span','titan-sensor-dot');
@@ -159,10 +163,13 @@ function renderStatus(status){
 
   const sensors=byId('titanSensors');
   if(sensors){
-    sensors.replaceChildren();
     const list=Array.isArray(status.sensors)?status.sensors:[];
-    if(!list.length)sensors.append(emptyState('Keine Sensoren gemeldet','Titan liefert keine erfundene Abdeckung. Prüfe den Dienststatus.'));
-    for(const sensor of list)sensors.append(renderSensor(sensor));
+    renderStable(sensors,`sensors:${JSON.stringify(list)}`,()=>{
+      const fragment=document.createDocumentFragment();
+      if(!list.length)fragment.append(emptyState('Keine Sensoren gemeldet','Titan liefert keine erfundene Abdeckung. Prüfe den Dienststatus.'));
+      for(const sensor of list)fragment.append(renderSensor(sensor));
+      return fragment;
+    });
   }
   renderWatchRoots(status.watchRoots||[]);
   renderSecurityControls(status.securityControls||[]);
@@ -175,38 +182,49 @@ function renderStatus(status){
 function renderWatchRoots(roots){
   const host=byId('titanWatchRoots');
   if(!host)return;
-  host.replaceChildren();
   const list=roots.slice(0,12);
-  if(!list.length){host.append(node('p','titan-muted','Keine überwachten Pfade gemeldet.'));return}
-  for(const root of list){
-    const row=node('div','titan-watch-root');
-    const dot=node('i');
-    dot.dataset.active=String(root.active===true);
-    dot.setAttribute('aria-hidden','true');
-    const text=node('span');
-    text.append(node('strong','',riskLabels[root.class]||root.class||'Pfad'),node('em','',root.path));
-    if(root.error)text.append(node('em','',root.error));
-    row.append(dot,text);
-    host.append(row);
-  }
-  if(roots.length>list.length)host.append(node('p','titan-muted',`+ ${roots.length-list.length} weitere Pfade`));
+  renderStable(host,`watch:${JSON.stringify(list)}:${roots.length}`,()=>{
+    const fragment=document.createDocumentFragment();
+    if(!list.length){
+      fragment.append(node('p','titan-muted','Keine überwachten Pfade gemeldet.'));
+      return fragment;
+    }
+    for(const root of list){
+      const row=node('div','titan-watch-root');
+      row.dataset.titanRow=`watch:${root.path||''}`;
+      const dot=node('i');
+      dot.dataset.active=String(root.active===true);
+      dot.setAttribute('aria-hidden','true');
+      const text=node('span');
+      text.append(node('strong','',riskLabels[root.class]||root.class||'Pfad'),node('em','',root.path));
+      if(root.error)text.append(node('em','',root.error));
+      row.append(dot,text);
+      fragment.append(row);
+    }
+    if(roots.length>list.length)fragment.append(node('p','titan-muted',`+ ${roots.length-list.length} weitere Pfade`));
+    return fragment;
+  });
 }
 
 function renderSecurityControls(controls){
   const host=byId('titanSecurityRows');
   if(!host)return;
-  host.replaceChildren();
   let secure=0;
-  for(const control of controls){
-    if(control.secure)secure++;
-    const row=node('div','titan-control');
-    row.dataset.secure=String(control.secure===true);
-    const copy=node('div','titan-control-copy');
-    copy.append(node('strong','',control.label||control.id),node('small','',`Erwartet: ${control.expected||'—'} · Gemessen: ${control.value||'—'}`));
-    row.append(copy,node('span','titan-control-value',control.secure?'KONFORM':'ABWEICHEND'));
-    host.append(row);
-  }
-  if(!controls.length)host.append(emptyState('Sicherheitsmessung noch nicht verfügbar','Der Persistenz-Sensor liefert die gemessenen Kontrollwerte nach dem ersten Scan.'));
+  for(const control of controls)if(control.secure)secure++;
+  renderStable(host,`controls:${JSON.stringify(controls)}`,()=>{
+    const fragment=document.createDocumentFragment();
+    for(const control of controls){
+      const row=node('div','titan-control');
+      row.dataset.titanRow=`control:${control.id||control.label||''}`;
+      row.dataset.secure=String(control.secure===true);
+      const copy=node('div','titan-control-copy');
+      copy.append(node('strong','',control.label||control.id),node('small','',`Erwartet: ${control.expected||'—'} · Gemessen: ${control.value||'—'}`));
+      row.append(copy,node('span','titan-control-value',control.secure?'KONFORM':'ABWEICHEND'));
+      fragment.append(row);
+    }
+    if(!controls.length)fragment.append(emptyState('Sicherheitsmessung noch nicht verfügbar','Der Persistenz-Sensor liefert die gemessenen Kontrollwerte nach dem ersten Scan.'));
+    return fragment;
+  });
   setText('titanSecuritySummary',controls.length?`${secure} / ${controls.length} KONFORM`:'—');
   setPill('titanSecuritySummary',controls.length?`${secure} / ${controls.length} KONFORM`:'—',controls.length&&secure===controls.length?'good':controls.length?'warn':'info');
 }
@@ -223,7 +241,6 @@ function renderPolicy(policy){
   syncAutoQuarantineState();
   const rules=byId('titanPolicyRules');
   if(!rules)return;
-  rules.replaceChildren();
   const definitions=[
     ['PERSISTENZ','Neue Dienste, Autostarts, geplante Aufgaben und Startmechanismen sind hochriskant.'],
     ['SICHERHEIT','Abschwächung von Defender, Firewall, Audit oder LSA erzeugt ein kritisches Ereignis.'],
@@ -231,11 +248,16 @@ function renderPolicy(policy){
     ['SYSTEM','Änderungen an Treibern, Code-Integrität und Boot-Vertrauen bleiben sichtbar.'],
     ['BESITZER','Nur eine gültige, begrenzte Freigabe macht eine Änderung autorisiert — Adminrechte allein nicht.'],
   ];
-  for(const [label,detail] of definitions){
-    const row=node('div','titan-rule-row');
-    row.append(node('b','',label),node('span','',detail));
-    rules.append(row);
-  }
+  renderStable(rules,`rules:${definitions.length}`,()=>{
+    const fragment=document.createDocumentFragment();
+    for(const [label,detail] of definitions){
+      const row=node('div','titan-rule-row');
+      row.dataset.titanRow=`rule:${label}`;
+      row.append(node('b','',label),node('span','',detail));
+      fragment.append(row);
+    }
+    return fragment;
+  });
   renderPermits(Array.isArray(policy.permits)?policy.permits:[]);
   renderDevelopmentRoots(Array.isArray(policy.developmentRoots)?policy.developmentRoots:[]);
 }
@@ -243,28 +265,32 @@ function renderPolicy(policy){
 function renderDevelopmentRoots(roots){
   const host=byId('titanDevRootsList');
   if(!host)return;
-  host.replaceChildren();
   setText('titanDevRootsCount',`${formatNumber(roots.length)} BÄUME`);
   setPill('titanDevRootsCount',`${formatNumber(roots.length)} BÄUME`,roots.length?'info':'good');
-  if(!roots.length){
-    host.append(emptyState('Kein Entwicklungsbaum markiert','Ohne diese Markierung gilt jede neue ausführbare oder skriptfähige Datei im Ingress-Baum als unerwartet.'));
-    return;
-  }
-  for(const root of roots){
-    const row=node('div','titan-permit-row');
-    const main=node('div','titan-permit-main');
-    main.append(node('strong','',root),node('small','','Owner-markierter Source-/Build-Baum · keine automatische Quarantäne'));
-    const side=node('div','titan-permit-actions');
-    side.append(actionButton('Markierung entfernen','remove-dev-root',root));
-    row.append(main,side);
-    host.append(row);
-  }
+  const signature=`devroots:${roots.join('\u0000')}`;
+  renderStable(host,signature,()=>{
+    const fragment=document.createDocumentFragment();
+    if(!roots.length){
+      fragment.append(emptyState('Kein Entwicklungsbaum markiert','Ohne diese Markierung gilt jede neue ausführbare oder skriptfähige Datei im Ingress-Baum als unerwartet.'));
+      return fragment;
+    }
+    for(const root of roots){
+      const row=node('div','titan-permit-row');
+      row.dataset.titanRow=`devroot:${root}`;
+      const main=node('div','titan-permit-main');
+      main.append(node('strong','',root),node('small','','Owner-markierter Source-/Build-Baum · keine automatische Quarantäne'));
+      const side=node('div','titan-permit-actions');
+      side.append(actionButton('Markierung entfernen','remove-dev-root',root));
+      row.append(main,side);
+      fragment.append(row);
+    }
+    return fragment;
+  });
 }
 
 function renderPermits(permits){
   const host=byId('titanPermitsList');
   if(!host)return;
-  host.replaceChildren();
   const now=Date.now();
   let active=0;
   for(const permit of permits){
@@ -276,31 +302,36 @@ function renderPermits(permits){
   }
   setText('titanPermitsCount',`${formatNumber(active)} AKTIV`);
   setPill('titanPermitsCount',`${formatNumber(active)} AKTIV`,active?'good':'info');
-  if(!permits.length){
-    host.append(emptyState('Keine aktiven Owner-Freigaben','Neue Freigaben sind eng begrenzt, ablaufen automatisch und werden als Evidenzereignis protokolliert.'));
-    return;
-  }
-  for(const permit of permits){
-    const expires=Date.parse(permit.expiresUtc||'');
-    const expired=!Number.isFinite(expires)||expires<=now;
-    const row=node('div','titan-permit-row');
-    const main=node('div','titan-permit-main');
-    main.append(node('strong','',permit.path||'Pfad unbekannt'));
-    const meta=node('div','titan-permit-meta');
-    meta.append(node('span','',permitActionLabels[permit.action]||permit.action||'Freigabe'));
-    meta.append(node('span','',permit.singleUse?'einmalig':'mehrfach'));
-    meta.append(node('span','',expired?'abgelaufen':`bis ${formatTime(permit.expiresUtc)}`));
-    if(permit.sha256)meta.append(node('span','',`SHA ${String(permit.sha256).slice(0,12)}…`));
-    main.append(meta,node('small','',permit.reason||''));
-    const side=node('div','titan-permit-actions');
-    const state=node('span','titan-permit-state',permit.used?'VERBRAUCHT':expired?'ABGELAUFEN':'AKTIV');
-    state.dataset.used=String(permit.used===true);
-    state.dataset.expired=String(expired);
-    side.append(state);
-    if(!expired&&!permit.used)side.append(actionButton('Widerrufen','revoke-permit',permit.id));
-    row.append(main,side);
-    host.append(row);
-  }
+  renderStable(host,`permits:${JSON.stringify(permits)}`,()=>{
+    const fragment=document.createDocumentFragment();
+    if(!permits.length){
+      fragment.append(emptyState('Keine aktiven Owner-Freigaben','Neue Freigaben sind eng begrenzt, ablaufen automatisch und werden als Evidenzereignis protokolliert.'));
+      return fragment;
+    }
+    for(const permit of permits){
+      const expires=Date.parse(permit.expiresUtc||'');
+      const expired=!Number.isFinite(expires)||expires<=now;
+      const row=node('div','titan-permit-row');
+      row.dataset.titanRow=`permit:${permit.id||''}`;
+      const main=node('div','titan-permit-main');
+      main.append(node('strong','',permit.path||'Pfad unbekannt'));
+      const meta=node('div','titan-permit-meta');
+      meta.append(node('span','',permitActionLabels[permit.action]||permit.action||'Freigabe'));
+      meta.append(node('span','',permit.singleUse?'einmalig':'mehrfach'));
+      meta.append(node('span','',expired?'abgelaufen':`bis ${formatTime(permit.expiresUtc)}`));
+      if(permit.sha256)meta.append(node('span','',`SHA ${String(permit.sha256).slice(0,12)}…`));
+      main.append(meta,node('small','',permit.reason||''));
+      const side=node('div','titan-permit-actions');
+      const state=node('span','titan-permit-state',permit.used?'VERBRAUCHT':expired?'ABGELAUFEN':'AKTIV');
+      state.dataset.used=String(permit.used===true);
+      state.dataset.expired=String(expired);
+      side.append(state);
+      if(!expired&&!permit.used)side.append(actionButton('Widerrufen','revoke-permit',permit.id));
+      row.append(main,side);
+      fragment.append(row);
+    }
+    return fragment;
+  });
 }
 
 function syncAutoQuarantineState(){
@@ -323,6 +354,7 @@ function renderCheckpointSummary(status){
 
 function renderEvent(event){
   const row=node('article','titan-event-row');
+  row.dataset.titanRow=`event:${event.id||''}`;
   row.dataset.trust=event.authorization?.status||'TOLERATED';
   const time=node('div','titan-event-time');
   time.append(node('b','',eventTime(event)),node('span','',event.eventType||''));
@@ -365,37 +397,54 @@ function renderEvent(event){
   return row;
 }
 
-async function loadEvents(){
+async function loadEvents(options={}){
   const host=byId('titanEventList');
   if(!host)return;
-  host.replaceChildren();
+  const resetScroll=options.resetScroll===true;
+  if(resetScroll)resetListSignature(host);
   try{
+    // Fetch first: the list must never collapse while the request is in flight.
     const result=await getTitanEvents({limit:state.limit,offset:state.offset,filter:state.filter});
     const events=Array.isArray(result.events)?result.events:[];
+    const previousTotal=state.total;
     state.total=Number(result.total)||0;
     state.eventsLoaded=true;
     const empty=byId('titanEventEmpty');
     if(empty)empty.hidden=events.length>0;
-    for(const event of events)host.append(renderEvent(event));
-    if(!events.length){
-      host.append(emptyState('Keine Ereignisse in diesem Filter','Titan erfindet keine Beobachtungen. Wähle einen anderen Filter oder warte auf reale Sensorereignisse.'));
-    }
+    const signature=`events:${state.filter}:${state.offset}:${state.total}:`+events.map(event=>`${event.id}|${event.eventType}|${event.authorization?.status}|${event.response?.state}|${event.severity}`).join(';');
+    renderStable(host,signature,()=>{
+      const fragment=document.createDocumentFragment();
+      for(const event of events)fragment.append(renderEvent(event));
+      if(!events.length){
+        fragment.append(emptyState('Keine Ereignisse in diesem Filter','Titan erfindet keine Beobachtungen. Wähle einen anderen Filter oder warte auf reale Sensorereignisse.'));
+      }
+      return fragment;
+    });
+    if(resetScroll)resetVisibleListPosition(host);
     setText('titanIngressTotal',`${formatNumber(state.total)} BEOBACHTET`);
     setText('titanEventPageInfo',state.total?`${formatNumber(state.offset+1)}–${formatNumber(Math.min(state.offset+state.limit,state.total))} von ${formatNumber(state.total)}`:'Keine Ereignisse');
     setText('titanEventState',state.total?`Filter: ${state.filter} · neueste zuerst`:'Noch keine Ereignisse.');
+    if(previousTotal>0&&state.total>previousTotal){
+      announce(`${formatNumber(state.total-previousTotal)} neue Titan-Ereignisse geladen.`);
+    }
     const prev=byId('titanEventPrev');
     const next=byId('titanEventNext');
     if(prev)prev.disabled=state.offset<=0;
     if(next)next.disabled=state.offset+state.limit>=state.total;
   }catch(error){
     state.eventsLoaded=false;
-    host.append(emptyState('Evidenz-Timeline nicht erreichbar',error?.message||'Die Control Plane antwortet nicht.'));
+    renderStable(host,`events-error:${error?.message||''}`,()=>{
+      const fragment=document.createDocumentFragment();
+      fragment.append(emptyState('Evidenz-Timeline nicht erreichbar',error?.message||'Die Control Plane antwortet nicht.'));
+      return fragment;
+    });
     setToneText('titanEventState',`Nicht erreichbar: ${error?.message||'unbekannter Fehler'}`,'bad');
   }
 }
 
 function renderQuarantineEntry(entry){
   const row=node('div','titan-quarantine-row');
+  row.dataset.titanRow=`quarantine:${entry.id||''}`;
   const main=node('div','titan-quarantine-main');
   main.append(node('strong','',entry.originalName||entry.originalPath||entry.id),node('small','',entry.originalPath||''));
   const meta=node('div','titan-quarantine-meta');
@@ -412,54 +461,75 @@ function renderQuarantineEntry(entry){
   return row;
 }
 
-async function loadQuarantine(){
+async function loadQuarantine(options={}){
   const host=byId('titanQuarantineList');
   if(!host)return;
-  host.replaceChildren();
+  const resetScroll=options.resetScroll===true;
+  if(resetScroll)resetListSignature(host);
   try{
     const result=await getTitanQuarantine();
     const entries=Array.isArray(result.entries)?result.entries:[];
     state.quarantineLoaded=true;
     const empty=byId('titanQuarantineEmpty');
     if(empty)empty.hidden=entries.length>0;
-    for(const entry of entries)host.append(renderQuarantineEntry(entry));
-    if(!entries.length)host.append(emptyState('Quarantäne ist leer','Titan isoliert nur nach einer Richtlinie oder einer ausdrücklichen Besitzerentscheidung.'));
+    renderStable(host,`quarantine:${JSON.stringify(entries)}`,()=>{
+      const fragment=document.createDocumentFragment();
+      for(const entry of entries)fragment.append(renderQuarantineEntry(entry));
+      if(!entries.length)fragment.append(emptyState('Quarantäne ist leer','Titan isoliert nur nach einer Richtlinie oder einer ausdrücklichen Besitzerentscheidung.'));
+      return fragment;
+    });
+    if(resetScroll)resetVisibleListPosition(host);
     setText('titanQuarantineSummary',`${formatNumber(entries.length)} OBJEKTE · ${formatBytes(result.bytes||0)}`);
     setPill('titanQuarantineSummary',`${formatNumber(entries.length)} OBJEKTE · ${formatBytes(result.bytes||0)}`,entries.length?'warn':'good');
   }catch(error){
     state.quarantineLoaded=false;
-    host.append(emptyState('Quarantäne nicht erreichbar',error?.message||'Die Control Plane antwortet nicht.'));
+    renderStable(host,`quarantine-error:${error?.message||''}`,()=>{
+      const fragment=document.createDocumentFragment();
+      fragment.append(emptyState('Quarantäne nicht erreichbar',error?.message||'Die Control Plane antwortet nicht.'));
+      return fragment;
+    });
   }
 }
 
-async function loadEvidence(){
+async function loadEvidence(options={}){
   const host=byId('titanCheckpoints');
   if(!host)return;
-  host.replaceChildren();
+  const resetScroll=options.resetScroll===true;
+  if(resetScroll)resetListSignature(host);
   try{
     const result=await getTitanCheckpoints(50);
     const checkpoints=Array.isArray(result.checkpoints)?result.checkpoints:[];
     state.evidenceLoaded=true;
-    if(!checkpoints.length)host.append(emptyState('Noch kein signierter Checkpoint','Titan signiert die Evidenzkette automatisch nach den ersten Ereignissen oder beim nächsten Prüflauf.'));
-    for(const checkpoint of checkpoints){
-      const row=node('div','titan-checkpoint-row');
-      row.append(node('span','titan-checkpoint-seq',`#${formatNumber(checkpoint.sequence)}`));
-      const copy=node('div','titan-checkpoint-copy');
-      copy.append(node('strong','',checkpoint.lastHash?`Kette ${String(checkpoint.lastHash).slice(0,24)}…`:'Kettenhash nicht verfügbar'),node('small','',`${formatTime(checkpoint.createdUtc)} · Boot ${String(checkpoint.bootId||'').slice(0,12)}…`));
-      row.append(copy,node('span','titan-checkpoint-state','ED25519'));
-      host.append(row);
-    }
+    renderStable(host,`checkpoints:${JSON.stringify(checkpoints)}`,()=>{
+      const fragment=document.createDocumentFragment();
+      if(!checkpoints.length)fragment.append(emptyState('Noch kein signierter Checkpoint','Titan signiert die Evidenzkette automatisch nach den ersten Ereignissen oder beim nächsten Prüflauf.'));
+      for(const checkpoint of checkpoints){
+        const row=node('div','titan-checkpoint-row');
+        row.dataset.titanRow=`checkpoint:${checkpoint.sequence}`;
+        row.append(node('span','titan-checkpoint-seq',`#${formatNumber(checkpoint.sequence)}`));
+        const copy=node('div','titan-checkpoint-copy');
+        copy.append(node('strong','',checkpoint.lastHash?`Kette ${String(checkpoint.lastHash).slice(0,24)}…`:'Kettenhash nicht verfügbar'),node('small','',`${formatTime(checkpoint.createdUtc)} · Boot ${String(checkpoint.bootId||'').slice(0,12)}…`));
+        row.append(copy,node('span','titan-checkpoint-state','ED25519'));
+        fragment.append(row);
+      }
+      return fragment;
+    });
+    if(resetScroll)resetVisibleListPosition(host);
   }catch(error){
     state.evidenceLoaded=false;
-    host.append(emptyState('Checkpoints nicht erreichbar',error?.message||'Die Control Plane antwortet nicht.'));
+    renderStable(host,`checkpoints-error:${error?.message||''}`,()=>{
+      const fragment=document.createDocumentFragment();
+      fragment.append(emptyState('Checkpoints nicht erreichbar',error?.message||'Die Control Plane antwortet nicht.'));
+      return fragment;
+    });
   }
 }
 
 async function reloadCurrentTab(){
-  if(state.tab==='ingress')await loadEvents();
-  else if(state.tab==='quarantine')await loadQuarantine();
+  if(state.tab==='ingress')await loadEvents({resetScroll:true});
+  else if(state.tab==='quarantine')await loadQuarantine({resetScroll:true});
   else if(state.tab==='policy')renderPolicy(state.status?.policy||{});
-  else if(state.tab==='evidence')await loadEvidence();
+  else if(state.tab==='evidence')await loadEvidence({resetScroll:true});
 }
 
 export async function loadTitan(options={}){
@@ -805,14 +875,14 @@ export function bindTitan(){
         filterButton.classList.toggle('active',selected);
         filterButton.setAttribute('aria-pressed',String(selected));
       }
-      void loadEvents();
+      void loadEvents({resetScroll:true});
     });
   }
   byId('titanEventPrev')?.addEventListener('click',()=>{
-    state.offset=Math.max(0,state.offset-state.limit);void loadEvents();
+    state.offset=Math.max(0,state.offset-state.limit);void loadEvents({resetScroll:true});
   });
   byId('titanEventNext')?.addEventListener('click',()=>{
-    state.offset+=state.limit;void loadEvents();
+    state.offset+=state.limit;void loadEvents({resetScroll:true});
   });
   byId('titanRefresh')?.addEventListener('click',()=>{void loadTitan({force:true})});
   byId('titanVerifyButton')?.addEventListener('click',()=>{void verifyEvidence()});

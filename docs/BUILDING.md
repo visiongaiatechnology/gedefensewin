@@ -37,12 +37,12 @@ Vor dem Release-Gate regeneriert `Build-GeDefenseStandalone.ps1` die SBOM und `S
 & .\tools\Test-VgtSbom.ps1
 
 # Payload-vollständige SBOM als Release-Asset.
-& .\tools\New-VgtSbom.ps1 -ArtifactMode -PayloadRoot .\payload\VGT\GeDefense -OutputPath .\release\GeDefense-SBOM-v5.2.0.cdx.json
-& .\tools\Test-VgtSbom.ps1 -ArtifactMode -Path .\release\GeDefense-SBOM-v5.2.0.cdx.json
+& .\tools\New-VgtSbom.ps1 -ArtifactMode -PayloadRoot .\payload\VGT\GeDefense -OutputPath .\release\GeDefense-SBOM-v5.3.0.cdx.json
+& .\tools\Test-VgtSbom.ps1 -ArtifactMode -Path .\release\GeDefense-SBOM-v5.3.0.cdx.json
 
 # Offline verifizierbare, bewusst unsignierte Build-Provenance.
 & .\tools\New-VgtProvenance.ps1 -RequireSourceManifest
-& .\tools\Test-VgtProvenance.ps1 -Path .\release\GeDefense-Provenance-v5.2.0.json -RequireSourceManifest
+& .\tools\Test-VgtProvenance.ps1 -Path .\release\GeDefense-Provenance-v5.3.0.json -RequireSourceManifest
 
 # Verteilungs-/Key-Hygiene und Installer-Härtungsregressionen.
 & .\tools\Test-DistributionHygiene.ps1

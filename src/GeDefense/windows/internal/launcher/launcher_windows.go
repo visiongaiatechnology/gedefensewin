@@ -35,7 +35,98 @@ const (
 	controlPlaneURL     = controlPlaneBaseURL + "/"
 	centerClientName    = "center"
 	launcherClientName  = "center-launcher"
+
+	// browserAttachDeadline bounds how long the launcher waits for the
+	// Chromium browser to expose its own top-level window after process start.
+	// Cold starts with device attestation, antivirus scanning or a pending
+	// browser update regularly exceed the former 15 s on managed endpoints.
+	browserAttachDeadline = 45 * time.Second
 )
+
+// FailureKind classifies why the Center window could not be opened, so the
+// Center can present a specific German cause instead of one opaque error box.
+type FailureKind string
+
+const (
+	// FailureBroker means the local operator handshake was rejected or the
+	// control-plane service was unreachable.
+	FailureBroker FailureKind = "broker"
+	// FailureBrowser means no trusted, code-signed Chromium browser was found.
+	FailureBrowser FailureKind = "browser"
+	// FailureHost means the native window host could not be created or used.
+	FailureHost FailureKind = "host"
+	// FailureStartup means the browser process failed to start or failed to
+	// expose its window within the attach deadline.
+	FailureStartup FailureKind = "startup"
+	// FailureProfile means the throw-away browser profile could not be created.
+	FailureProfile FailureKind = "profile"
+	// FailureElevation documents that the unprivileged hand-over failed and the
+	// UI kept running elevated as a diagnostic fallback.
+	FailureElevation FailureKind = "elevation"
+)
+
+// Failure wraps a launch error with its diagnostic category while keeping the
+// original error available through errors.Is/errors.As.
+type Failure struct {
+	Kind FailureKind
+	Err  error
+}
+
+func (f *Failure) Error() string {
+	if f.Err == nil {
+		return string(f.Kind)
+	}
+	return string(f.Kind) + ": " + f.Err.Error()
+}
+
+// Unwrap exposes the underlying error to errors.Is/errors.As.
+func (f *Failure) Unwrap() error { return f.Err }
+
+func failure(kind FailureKind, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &Failure{Kind: kind, Err: err}
+}
+
+// KindOf reports the diagnostic category of err, or "" when err carries none.
+func KindOf(err error) FailureKind {
+	var target *Failure
+	if errors.As(err, &target) {
+		return target.Kind
+	}
+	return ""
+}
+
+// Describe maps a launch failure to a specific German cause summary and an
+// actionable remediation hint for the Center's error dialog. The texts are
+// deliberately bounded: they are shown in a native message box and never
+// contain credentials or server responses.
+func Describe(err error) (summary, hint string) {
+	switch KindOf(err) {
+	case FailureBroker:
+		return "Der lokale GeDefense-Dienst hat die Operator-Anmeldung abgelehnt oder war nicht erreichbar.",
+			"Prüfen Sie, ob der GeDefense-Dienst läuft, und starten Sie das Center erneut."
+	case FailureBrowser:
+		return "Es wurde kein signierter Chromium-Browser gefunden.",
+			"Installieren oder reparieren Sie Microsoft Edge, Google Chrome oder Brave unter Program Files."
+	case FailureHost:
+		return "Das native Center-Fenster konnte nicht erstellt werden.",
+			"Schließen Sie ein bereits geöffnetes Center-Fenster und starten Sie das Center erneut."
+	case FailureStartup:
+		return "Der Browserprozess für das Center wurde nicht rechtzeitig bereit.",
+			"Prüfen Sie, ob ein Browser-Update oder eine Sicherheitsrichtlinie den Browserstart blockiert."
+	case FailureProfile:
+		return "Das temporäre Center-Profil konnte nicht angelegt werden.",
+			"Prüfen Sie die Schreibrechte unter %LocalAppData%\\VGT\\GeDefense."
+	case FailureElevation:
+		return "Der unprivilegierte Start über die Desktop-Shell ist fehlgeschlagen; das Center läuft weiterhin mit Administratorrechten.",
+			"Starten Sie GeDefense Center ohne \"Als Administrator ausführen\" über Startmenü oder Taskleiste."
+	default:
+		return "Das Center konnte wegen eines unerwarteten Fehlers nicht geöffnet werden.",
+			"Starten Sie das Center erneut; bleibt der Fehler bestehen, prüfen Sie das Diagnoseprotokoll."
+	}
+}
 
 // SECURITY LIMITATION (UI-FIND-002, explicit, not an embedded-host claim):
 // The Center host is NOT an embedded native renderer application. It
@@ -59,32 +150,44 @@ func Open() error {
 	return openDedicatedWindow()
 }
 
-func openDedicatedWindow() error {
+func openDedicatedWindow() (err error) {
+	elevated := winapi.IsProcessElevated()
+	browserPath := ""
+	// One diagnostic record per launch attempt, including successful ones: the
+	// Center log is the evidence trail when an operator reports a launch problem.
+	defer func() {
+		recordLaunchDiagnostic(launchDiagnostic{
+			Category: diagnosticCategory(err),
+			Elevated: elevated,
+			Browser:  browserPath,
+			Detail:   diagnosticDetail(err),
+		})
+	}()
 	// The window host no longer reads the long-lived dashboard token file. It
 	// asks the service for a short-lived operator session; the service verifies
 	// this process's Windows token (operator group / Administrators) via the
 	// loopback peer (UI-FIND-001 / AN-FIND-004).
 	session, err := operatorclient.Acquire(context.Background(), controlPlaneBaseURL, operatorclient.CenterClient)
 	if err != nil {
-		return err
+		return failure(FailureBroker, err)
 	}
-	browserPath := findChromiumBrowser()
+	browserPath = findChromiumBrowser()
 	if browserPath == "" {
-		return errors.New("supported Chromium browser unavailable")
+		return failure(FailureBrowser, errors.New("supported Chromium browser unavailable"))
 	}
 	localData := os.Getenv("LocalAppData")
 	if !filepath.IsAbs(localData) {
-		return errors.New("LocalAppData unavailable")
+		return failure(FailureProfile, errors.New("LocalAppData unavailable"))
 	}
 	profileRoot := filepath.Join(localData, "VGT", "GeDefense", "WebWindow")
 	if err := os.MkdirAll(profileRoot, 0700); err != nil {
-		return err
+		return failure(FailureProfile, err)
 	}
 	// Each host owns its profile and process. No title search, stale lock deletion,
 	// interpolated PowerShell, or termination of another browser session.
 	profile, err := os.MkdirTemp(profileRoot, "center-")
 	if err != nil {
-		return err
+		return failure(FailureProfile, err)
 	}
 	defer func() {
 		if err := os.RemoveAll(profile); err != nil {
@@ -114,7 +217,7 @@ func openDedicatedWindow() error {
 	case err := <-workerErr:
 		return err
 	default:
-		return hostErr
+		return failure(FailureHost, hostErr)
 	}
 }
 
@@ -122,7 +225,7 @@ func runBrowser(ctx context.Context, host winapi.Handle, browserPath, profile, t
 	cmd := exec.CommandContext(ctx, browserPath, browserArguments(profile, target)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
 	if err := cmd.Start(); err != nil {
-		return err
+		return failure(FailureStartup, fmt.Errorf("browser process start: %w", err))
 	}
 	// The browser URL contains no credential. Instead the launcher registers the
 	// exact process it just started; the server accepts exactly one session
@@ -131,7 +234,7 @@ func runBrowser(ctx context.Context, host winapi.Handle, browserPath, profile, t
 	if err := registerBrowserProcess(controlPlaneBaseURL, masterToken, uint32(cmd.Process.Pid)); err != nil {
 		killErr := cmd.Process.Kill()
 		waitErr := cmd.Wait()
-		return errors.Join(fmt.Errorf("browser session registration: %w", err), killErr, waitErr)
+		return failure(FailureBroker, errors.Join(fmt.Errorf("browser session registration: %w", err), killErr, waitErr))
 	}
 	processDone := make(chan error, 1)
 	go func() { processDone <- cmd.Wait() }()
@@ -139,7 +242,7 @@ func runBrowser(ctx context.Context, host winapi.Handle, browserPath, profile, t
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	deadline := time.NewTimer(15 * time.Second)
+	deadline := time.NewTimer(browserAttachDeadline)
 	defer deadline.Stop()
 	var browser winapi.Handle
 	for browser == 0 {
@@ -150,11 +253,11 @@ func runBrowser(ctx context.Context, host winapi.Handle, browserPath, profile, t
 			if err == nil {
 				err = errors.New("browser exited before attachment")
 			}
-			return err
+			return failure(FailureStartup, err)
 		case <-deadline.C:
 			killErr := cmd.Process.Kill()
 			waitErr := <-processDone
-			return errors.Join(errors.New("browser window startup timed out"), killErr, waitErr)
+			return failure(FailureStartup, errors.Join(errors.New("browser window startup timed out"), killErr, waitErr))
 		case <-ticker.C:
 			// Only windows belonging to the process started above are eligible.
 			if found, err := winapi.FindWindowByPID(uint32(cmd.Process.Pid)); err == nil {
@@ -165,7 +268,7 @@ func runBrowser(ctx context.Context, host winapi.Handle, browserPath, profile, t
 	if err := winframe.Attach(host, browser); err != nil {
 		killErr := cmd.Process.Kill()
 		waitErr := <-processDone
-		return errors.Join(err, killErr, waitErr)
+		return failure(FailureHost, errors.Join(err, killErr, waitErr))
 	}
 	var workers sync.WaitGroup
 	workers.Add(1)
@@ -596,4 +699,133 @@ func randomRequestID() (string, error) {
 	}
 	hexValue := hex.EncodeToString(raw)
 	return hexValue[0:8] + "-" + hexValue[8:12] + "-" + hexValue[12:16] + "-" + hexValue[16:20] + "-" + hexValue[20:32], nil
+}
+
+// Diagnostic log contract for the Center launch. The file is the evidence trail
+// requested by operators when "the Center does not open". It contains only the
+// category, the elevated flag, the verified browser path and the bounded error
+// text: never a token, never a server response body.
+const (
+	diagnosticLogDirectory = "logs"
+	diagnosticLogFileName  = "center-launch.log"
+	diagnosticLogMaxBytes  = 256 << 10
+	diagnosticLogMaxLine   = 2048
+)
+
+var diagnosticLogMu sync.Mutex
+
+type launchDiagnostic struct {
+	Category string
+	Elevated bool
+	Browser  string
+	Detail   string
+}
+
+// DiagnosticLogPath returns the absolute Center launch log path below the
+// per-user local application data directory.
+func DiagnosticLogPath() (string, error) {
+	localData := os.Getenv("LocalAppData")
+	if !filepath.IsAbs(localData) {
+		return "", errors.New("LocalAppData unavailable")
+	}
+	return filepath.Join(filepath.Clean(localData), "VGT", "GeDefense", diagnosticLogDirectory, diagnosticLogFileName), nil
+}
+
+// RecordElevationFallback records that the elevated Center could not hand
+// itself over to the unprivileged desktop shell and kept running elevated as a
+// diagnostic fallback. Diagnostics are best effort and must never block the UI.
+func RecordElevationFallback(err error) {
+	recordLaunchDiagnostic(launchDiagnostic{
+		Category: string(FailureElevation),
+		Elevated: winapi.IsProcessElevated(),
+		Detail:   diagnosticDetail(err),
+	})
+}
+
+func diagnosticCategory(err error) string {
+	if err == nil {
+		return "success"
+	}
+	kind := KindOf(err)
+	if kind == "" {
+		return "unknown"
+	}
+	return string(kind)
+}
+
+func diagnosticDetail(err error) string {
+	if err == nil {
+		return "center window opened"
+	}
+	return err.Error()
+}
+
+func recordLaunchDiagnostic(entry launchDiagnostic) {
+	if err := writeLaunchDiagnostic(entry); err != nil {
+		log.Printf("center launch diagnostic unavailable: %v", err)
+	}
+}
+
+// writeLaunchDiagnostic appends one bounded UTC line and rotates the log to a
+// single .1 generation once the 256 KiB ceiling would be exceeded. Disk usage of
+// the diagnostic trail is therefore hard-bounded to roughly twice the ceiling.
+func writeLaunchDiagnostic(entry launchDiagnostic) error {
+	path, err := DiagnosticLogPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	line := formatLaunchDiagnostic(entry, time.Now().UTC())
+	diagnosticLogMu.Lock()
+	defer diagnosticLogMu.Unlock()
+	if info, statErr := os.Lstat(path); statErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("center launch diagnostic path is a reparse point")
+		}
+		if info.Size()+int64(len(line)) > diagnosticLogMaxBytes {
+			rotated := path + ".1"
+			_ = os.Remove(rotated)
+			if renameErr := os.Rename(path, rotated); renameErr != nil {
+				// Bounding disk usage is mandatory; if rotation is impossible the
+				// current generation is discarded instead of growing forever.
+				_ = os.Remove(path)
+			}
+		}
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.WriteString(line)
+	closeErr := file.Close()
+	return errors.Join(writeErr, closeErr)
+}
+
+func formatLaunchDiagnostic(entry launchDiagnostic, at time.Time) string {
+	category := sanitizeDiagnosticField(entry.Category, 32)
+	if category == "" {
+		category = "unknown"
+	}
+	line := fmt.Sprintf("%s kind=%s elevated=%t browser=%q detail=%q",
+		at.UTC().Format(time.RFC3339),
+		category,
+		entry.Elevated,
+		sanitizeDiagnosticField(entry.Browser, 512),
+		sanitizeDiagnosticField(entry.Detail, 1024),
+	)
+	if len(line) > diagnosticLogMaxLine {
+		line = line[:diagnosticLogMaxLine]
+	}
+	return line + "\n"
+}
+
+func sanitizeDiagnosticField(value string, maxRunes int) string {
+	value = strings.NewReplacer("\x00", " ", "\r", " ", "\n", " ", "\t", " ").Replace(value)
+	characters := []rune(value)
+	if len(characters) > maxRunes {
+		characters = characters[:maxRunes]
+	}
+	return string(characters)
 }

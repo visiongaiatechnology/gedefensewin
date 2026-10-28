@@ -75,6 +75,9 @@ type Engine struct {
 	remoteMu  sync.Mutex
 	remote    []remoteObservation
 	sensorWG  sync.WaitGroup
+
+	bridgeMu        sync.RWMutex
+	killerdomBridge func(pid uint32, reason string) error
 }
 
 func New(root, version string, ledger *evidence.Ledger) (*Engine, error) {
@@ -214,6 +217,22 @@ func (e *Engine) record(observation Observation) error {
 	policy := e.policy.Current()
 	recent := e.recentHighRiskCount(now)
 	observation.Authorization = Evaluate(policy, e.policy, observation, now, recent)
+
+	// VGT 5.3.0 Titan <-> Killerdom Correlation Bridge
+	if policy.CorrelateWithKillerdom && observation.Authorization.Status == TrustCompromised {
+		e.bridgeMu.RLock()
+		bridge := e.killerdomBridge
+		e.bridgeMu.RUnlock()
+		if bridge != nil && observation.Actor.PID > 4 {
+			go func(pid uint32, name, reason string) {
+				if err := bridge(pid, fmt.Sprintf("Titan Correlated Strike: %s (%s)", name, reason)); err != nil {
+					e.appendSelfIntegrity("KILLERDOM_BRIDGE_FAILED",
+						fmt.Sprintf("Titan-Korrelation konnte PID %d nicht terminieren: %v", pid, err),
+						SeverityHigh, TrustUnexpected)
+				}
+			}(observation.Actor.PID, observation.Object.Name, observation.Authorization.Reason)
+		}
+	}
 	if observation.Authorization.Status == TrustUnexpected || observation.Authorization.Status == TrustCompromised {
 		observation.Severity = defaultSeverity(observation.Authorization)
 	} else if observation.Severity == "" {
@@ -437,6 +456,21 @@ func (e *Engine) RevokePermit(id, reason string) (Policy, error) {
 		Object:        Object{Kind: ObjectSensor, Path: "titan://permit", Name: id},
 		Authorization: Authorization{Status: TrustAuthorized, RiskClass: RiskTitan, PolicyMode: policy.Mode, Reason: "Besitzer hat eine Titan-Freigabe widerrufen"},
 		Response:      Response{Action: "PERMIT_REVOKED", State: "RECORDED", Detail: id},
+		Source:        "titan-owner", Health: "HEALTHY", Detail: reason,
+	})
+	return policy, nil
+}
+
+func (e *Engine) SetCorrelationWithKillerdom(enabled bool, reason string) (Policy, error) {
+	policy, err := e.policy.SetCorrelationWithKillerdom(enabled, reason)
+	if err != nil {
+		return Policy{}, err
+	}
+	_, _ = e.journal.Append(Observation{
+		Type: EventSelfIntegrity, Severity: SeverityMedium,
+		Object:        Object{Kind: ObjectSensor, Path: "titan://killerdom-bridge", Name: "killerdom-correlation"},
+		Authorization: Authorization{Status: TrustAuthorized, RiskClass: RiskTitan, PolicyMode: policy.Mode, Reason: "Besitzer hat die Titan-Killerdom Fusionsbrücke aktualisiert"},
+		Response:      Response{Action: "KILLERDOM_CORRELATION_UPDATED", State: "RECORDED", Detail: reason},
 		Source:        "titan-owner", Health: "HEALTHY", Detail: reason,
 	})
 	return policy, nil
@@ -860,4 +894,12 @@ func sensorIDForSource(source string) string {
 	default:
 		return ""
 	}
+}
+
+// SetKillerdomBridge registers the kinetic callback used to terminate processes
+// identified by Titan as responsible for high-risk system compromise.
+func (e *Engine) SetKillerdomBridge(bridge func(pid uint32, reason string) error) {
+	e.bridgeMu.Lock()
+	defer e.bridgeMu.Unlock()
+	e.killerdomBridge = bridge
 }

@@ -3,7 +3,7 @@
 ```text
 // STATUS: DIAMANT VGT SUPREME
 // PLATFORM: Windows 11 x64
-// ARCHITECTURE MAP VERSION: 4.1.3
+// ARCHITECTURE MAP VERSION: 5.3.0
 // CONTROL PLANE: 127.0.0.1:17831
 ```
 
@@ -63,7 +63,7 @@
 3. **Loopback-Only Control Plane**: The control plane binds strictly to `127.0.0.1:17831`. Requests are validated by RemoteAddr, Host header, Origin header, Bearer master token, or short-lived, authenticated HttpOnly/SameSite session cookies.
 4. **Privilege Separation & Isolation**:
    - The UI runs inside a launcher-owned Win32 host with an unprivileged, PID-bound Chromium child renderer.
-   - The interactive tray (`GeDefenseTray.exe`) and center launcher (`GeDefenseCenter.exe`) run as the unprivileged desktop operator.
+   - The interactive tray (`GeDefenseTray.exe`) and center launcher (`GeDefenseCenter.exe`) run as the unprivileged desktop operator; elevated or installer-started instances re-launch themselves unelevated before any UI work (marker `VGT_UI_LAUNCHED_UNELEVATED`).
    - The core background service (`gedefense-windows.exe`) runs with `LocalSystem` privileges under the Windows Service Control Manager (SCM).
    - System state mutations are executed via cryptographically signed PowerShell transactions using `ExecutionPolicy AllSigned`.
 5. **No Independent Kernel Sensor / Delegated Enforcement**: GeDefense avoids proprietary, unstable kernel filter drivers. Low-level enforcement is delegated to verified Windows OS layers: Defender, ASR, Windows Firewall, and Windows App Control.
@@ -126,10 +126,10 @@ SYSTEM: VGT GeDefense Windows 4
 │
 ├── SECURITY SUBSYSTEMS & ENGINES (Domain Logic Tier)
 │   ├── MHX Realtime EDR Engine (mhx)
-│   │   ├── Process Start Telemetry Watcher (WMI Win32_ProcessStartTrace)
+│   │   ├── Process Creation Telemetry Watcher (native wevtapi EvtSubscribe, Security 4688)
 │   │   ├── Behavioral & LOLBin Evaluator (evaluator)
 │   │   ├── Bounded PowerShell EncodedCommand Decoder (encoded_command)
-│   │   ├── Defender Operational Event Tailer (EventLog 1116, 1117, 5001, etc.)
+│   │   ├── Defender Operational Event Subscriber (native wevtapi EvtSubscribe; 1116, 1117, 5001, etc.)
 │   │   ├── Native TCP Extended Table Poller (iphlpapi.dll GetExtendedTcpTable)
 │   │   ├── Multi-Signal Correlation & Attack Story Builder
 │   │   └── PID-Reuse Protected Process Terminator (terminate_windows)
@@ -206,7 +206,8 @@ The following mapping links each physical file relative to the project root to i
 ### Client Tier (Tray, Launcher, Web Dashboard)
 - `src/GeDefense/windows/cmd/gedefense-center/main.go` → Single-instance GUI launcher; requests bootstrap code and opens the native host and embeds its own Chromium process.
 - `src/GeDefense/windows/cmd/gedefense-tray/main.go` → System notification area background process; monitors status and triggers Center.
-- `src/GeDefense/windows/internal/launcher/launcher_windows.go` → operator-session broker client and window coordinator; starts the Authenticode-verified external Chromium with the plain loopback URL.
+- `src/GeDefense/windows/internal/launcher/launcher_windows.go` → operator-session broker client, typed launch-failure classifier and window coordinator; starts the Authenticode-verified external Chromium with the plain loopback URL.
+- `src/GeDefense/windows/internal/userlaunch/userlaunch_windows.go` → de-elevation helper: re-launches Center, Tray and the installer-started Tray with the shell user's primary token (`CreateProcessWithTokenW`, marker `VGT_UI_LAUNCHED_UNELEVATED`) and validates/bounds the child command line, so the operator UI never runs elevated.
 - `src/GeDefense/windows/internal/wintray/tray_windows.go` → Pure Win32 system tray implementation (window class, message loop, context menu).
 - `src/GeDefense/windows/internal/localhttp/client.go` → Loopback HTTP client with customized timeout and transport configuration.
 - `src/GeDefense/windows/internal/server/web/index.html` → Single-page application shell; semantic layout for all 9 views.
@@ -219,13 +220,13 @@ The following mapping links each physical file relative to the project root to i
 - `src/GeDefense/windows/internal/server/web/dom.js` → Pure DOM construction utilities strictly implementing textContent user-data sanitization.
 - `src/GeDefense/windows/internal/server/web/api.js` → Browser API client; adds `X-VGT-Request-ID`, bearer headers, handles errors and cookie exchange.
 - `src/GeDefense/windows/internal/server/web/views.js` → Data rendering engines for all 9 views; manages UI state and user interaction hooks.
-- `src/GeDefense/windows/internal/server/web/app.js` → Application router, hashchange/navigation event coordinator, auto-refresh interval (6s), dialog handlers.
+- `src/GeDefense/windows/internal/server/web/app.js` → Application router, hashchange/navigation event coordinator, auto-refresh interval (6s; Titan live refreshes use fetch-before-render and stable list rendering), dialog handlers.
 
 ### Local Control Plane Daemon Tier
 - `src/GeDefense/windows/cmd/gedefense-windows/main.go` → Service entrypoint; parses CLI flags (`--console`, `--launch`, `--version`) and invokes SCM.
 - `src/GeDefense/windows/internal/service/service_windows.go` → Pure Win32 Service Control Manager integration (`StartServiceCtrlDispatcherW`).
 - `src/GeDefense/windows/internal/app/app.go` → Main application composition root; instantiates engines, opens ledger, runs workers, starts HTTP server.
-- `src/GeDefense/windows/internal/product/version.go` → Embedded version constant (`Version = "4.1.3"`).
+- `src/GeDefense/windows/internal/product/version.go` → Embedded version constant (`Version = "5.3.0"`).
 - `src/GeDefense/windows/internal/server/router.go` → HTTP ServeMux configuration; asset file serving and API route registration.
 - `src/GeDefense/windows/internal/server/middleware.go` → Host, RemoteAddr, Origin, Rate-Limit, Replay Guard, and Security Header middleware.
 - `src/GeDefense/windows/internal/server/session.go` → One-time bootstrap code generation, exchange logic, session cookie management.
@@ -241,8 +242,8 @@ The following mapping links each physical file relative to the project root to i
 - `src/GeDefense/windows/internal/mhx/engine.go` → MHX orchestrator; coordinates telemetry channels, mode transitions, feed sync, network correlation.
 - `src/GeDefense/windows/internal/mhx/evaluator.go` → Heuristic and behavioral analysis engine; inspects LOLBins, parentage, arguments, decoded commands.
 - `src/GeDefense/windows/internal/mhx/encoded_command.go` → Bounded Base64 / UTF-16LE / ASCII decoder for PowerShell `-EncodedCommand`.
-- `src/GeDefense/windows/internal/mhx/watcher_windows.go` → Host process watcher; spawns PowerShell WMI indication listener (`Win32_ProcessStartTrace`).
-- `src/GeDefense/windows/internal/mhx/defender_watcher_windows.go` → Microsoft Defender event watcher; tails `Microsoft-Windows-Windows Defender/Operational`.
+- `src/GeDefense/windows/internal/mhx/watcher_windows.go` → Host process watcher; native Security 4688 subscription through wevtapi.dll EvtSubscribe (no persistent PowerShell telemetry child).
+- `src/GeDefense/windows/internal/mhx/defender_watcher_windows.go` → Microsoft Defender event watcher; native wevtapi EvtSubscribe subscription to `Microsoft-Windows-Windows Defender/Operational` (1116, 1117, 5001, etc.).
 - `src/GeDefense/windows/internal/mhx/network_watcher_windows.go` → Native TCP table poller; periodically queries Win32 extended TCP table for remote connections.
 - `src/GeDefense/windows/internal/mhx/terminate_windows.go` → PID-reuse protected process termination using `OpenProcess` and `TerminateProcess`.
 - `src/GeDefense/windows/internal/mhx/dedupe.go` → Bounded, sliding-window deduplication cache for connection events.
@@ -254,7 +255,7 @@ The following mapping links each physical file relative to the project root to i
 - `xdr/Set-VgtMhxApplicationAllow.ps1` → Script managing Authenticode-verified application exceptions for Sovereign mode.
 - `xdr/Set-VgtMhxAppControl.ps1` → Script compiling and enforcing Windows Defender Application Control (WDAC) via `CiTool.exe`.
 - `tools/Invoke-MhxAppControlDiagnostic.ps1` → Diagnostic tool for App Control policy generation and error logging.
-- `tools/Test-MhxProcessTrace.ps1` → Diagnostic verification tool for WMI process start trace indications.
+- `tools/Test-MhxProcessTrace.ps1` → Diagnostic verification tool for process-start trace indications (standalone Security 4688 event-log test helper; not part of the production telemetry path).
 - `tools/Test-MhxWatcherIntegration.ps1` → Integration test executing an actual probe process to verify end-to-end watcher enrichment.
 
 ### Hardening, Audit & Posture Management
@@ -333,7 +334,7 @@ Provides an embedded, zero-dependency, authenticated web server listening strict
 
 #### Associated Files
 - **Backend Router & Handlers**: `src/GeDefense/windows/internal/server/router.go`, `handlers_status.go`, `handlers_ops.go`, `handlers_mhx.go`, `handlers_evidence.go`, `middleware.go`, `session.go`, `response.go`, `types.go`
-- **Frontend SPA**: `src/GeDefense/windows/internal/server/web/index.html`, `app.js`, `views.js`, `api.js`, `dom.js`
+- **Frontend SPA**: `src/GeDefense/windows/internal/server/web/index.html`, `app.js`, `views.js`, `api.js`, `dom.js`, `titan.js`, `list-stability.js`
 - **Styles**: `src/GeDefense/windows/internal/server/web/tokens.css`, `app.css`, `components.css`, `views.css`, `responsive.css`
 - **Unit Tests**: `src/GeDefense/windows/internal/server/server_test.go`
 - **Dependencies**: Uses `internal/evidence`, `internal/security`, and domain engine interfaces.
@@ -347,18 +348,21 @@ Provides an embedded, zero-dependency, authenticated web server listening strict
 Acts as the user-facing entrypoint (`GeDefenseCenter.exe`) executed by the operator. It obtains a short-lived OS-identity-bound operator session from the local service and opens the external Chromium kiosk window in a native Win32 host.
 
 #### Capabilities
+- Starts as the standard user by design. An elevated instance re-launches itself with the shell user's primary token through `internal/userlaunch` (`CreateProcessWithTokenW`, marker `VGT_UI_LAUNCHED_UNELEVATED`); if de-elevation fails, the failure is classified and logged and the elevated continuation is a documented fallback, never a silent state.
 - Prevents concurrent instances using an identity-scoped Win32 single-instance object; foreign pre-created objects are not trusted and are taken over fail-closed (HP-FIND-005).
-- Never reads `dashboard.token`; requests a scoped operator session via `POST /api/v1/session/operator`. The service verifies the caller's Windows process token (operator group or Administrators), binds the session to that OS account, audits it and allows revocation.
+- Never reads `dashboard.token`; requests a scoped operator session via `POST /api/v1/session/operator`. The service verifies the caller's Windows process token (operator group or Administrators) and, when the operator group is absent from the token, falls back to the authoritative SAM membership of the peer user SID in `VGT GeDefense Operators` (exact SID comparison, bounded SAM query, fail closed on SAM errors; Administrator authority stays token-based). The session is bound to that OS account, audited and revocable; SAM revocations affect the next broker request while a token issued earlier can retain the old group until sign-out.
 - Registers the launched browser process id with the scoped session; the browser exchanges the registration into its own cookie session bound to the loopback peer process.
-- Launches a machine-wide, Authenticode-verified Chromium browser in kiosk mode. The host is an external Chromium kiosk, not an embedded renderer.
+- Launches a machine-wide, Authenticode-verified Chromium browser in kiosk mode. The host is an external Chromium kiosk, not an embedded renderer; the browser start deadline is 45 s and start/attachment failures are typed.
 - Polls window commands and acknowledges window state with the scoped session (`/api/v1/window/*`).
-- Displays native Win32 message boxes if the service is unreachable or errors occur.
+- Classifies launch failures (`broker`, `browser`, `host`, `startup`, `profile`, `elevation`), retries only transient broker errors (max 3 attempts, 300/600 ms backoff, no retry for 400/401/403/409) and shows the concrete cause plus the path of `%LocalAppData%\VGT\GeDefense\logs\center-launch.log` instead of one generic message.
 
 #### Associated Files
 - **Entrypoint**: `src/GeDefense/windows/cmd/gedefense-center/main.go`
 - **Launcher Engine**: `src/GeDefense/windows/internal/launcher/launcher_windows.go`
 - **HTTP Client**: `src/GeDefense/windows/internal/localhttp/client.go`
-- **Dependencies**: Uses `internal/winapi`, `internal/localhttp`, `internal/product`.
+- **Unprivileged launch**: `src/GeDefense/windows/internal/userlaunch/userlaunch_windows.go`
+- **Diagnostics**: `%LocalAppData%\VGT\GeDefense\logs\center-launch.log` (bounded, rotating, no secrets)
+- **Dependencies**: Uses `internal/winapi`, `internal/localhttp`, `internal/product`, `internal/operatorclient`, `internal/userlaunch`.
 - **Used by**: Desktop shortcuts, Start Menu, System Tray daemon.
 
 ---
@@ -370,8 +374,9 @@ Runs in the operator's user session as a lightweight tray notification icon (`Ge
 
 #### Capabilities
 - Ensures a single tray instance per user session using a named mutex (`Local\VGT.GeDefense.Tray.Instance.v4`) and named event (`Local\VGT.GeDefense.Tray.Open.v4`).
+- Starts as the standard user by design; an elevated or installer-started Tray re-launches itself with the shell user's primary token through `internal/userlaunch` (same marker-protected de-elevation as the Center).
 - Implements a pure Win32 notification icon using `Shell_NotifyIconW` and a dedicated window message loop.
-- Periodically queries `/api/v1/status` using the local master token to verify Defender, MHX, and Firewall health.
+- Periodically queries `/api/v1/status` with its own short-lived read-only operator session (the long-lived master token is never read) to verify Defender, MHX, and Firewall health.
 - Displays dynamic tooltip status: "Sovereign aktiv", "Guarded aktiv", "Nur Überwachung", or "Prüfung erforderlich".
 - Provides a context menu with actions to launch `GeDefenseCenter.exe` or exit the tray.
 
@@ -386,12 +391,13 @@ Runs in the operator's user session as a lightweight tray notification icon (`Ge
 ### 4.5 Standalone Installer & Release Packager Module
 
 #### Purpose
-Provides a self-contained, digitally signed Windows installation and uninstallation package (`GeDefense-Setup-x64-v4.1.3.exe`).
+Provides a self-contained, digitally signed Windows installation and uninstallation package (`GeDefense-Setup-x64-v5.3.0.exe`).
 
 #### Capabilities
 - Extracts embedded zip payloads (`payload.zip`) safely: guards against zip-slip attacks, symlink traversal, decompression bombs, and reserved device names.
 - Validates Microsoft Authenticode signatures against the official VGT release certificate thumbprint.
 - Elevates installation execution via `Bootstrap-GeDefense.ps1` with `Verb RunAs`.
+- Starts the installed Tray through the shell user's primary token (`internal/userlaunch`) instead of inheriting the elevated installer token; the "open Security Center" action uses the same de-elevation, so an elevated installer never leaves an elevated UI running.
 - Sets up NTFS Discretionary Access Control Lists (DACLs) on `%ProgramData%\VGT\GeDefense` granting exclusive control to Administrators and `NT AUTHORITY\SYSTEM`.
 - Registers the service using native `sc.exe create` with auto-start configuration.
 
@@ -410,9 +416,9 @@ Provides a self-contained, digitally signed Windows installation and uninstallat
 The core detection and response engine. Collects real-time telemetry from process launches, Microsoft Defender operational logs, and native network connections, identifies threats through heuristic evaluation, and orchestrates identity-safe remediation.
 
 #### Capabilities
-- **WMI Process Telemetry**: Spawns an internal PowerShell pipeline registering for `Win32_ProcessStartTrace` events; monitors 21 key Living-off-the-Land Binaries (LOLBins).
+- **Native Process Telemetry**: Subscribes to Security 4688 process-creation events through native `wevtapi.dll` `EvtSubscribe` sockets (no persistent PowerShell telemetry child process); monitors 21 key Living-off-the-Land Binaries (LOLBins) and applies the PE `OriginalFilename`/relocation check for renamed system binaries.
 - **PowerShell EncodedCommand Decoding**: Parses `-e`, `-enc`, `-encodedcommand` arguments; decodes UTF-16LE / Base64 payloads; extracts SHA-256 digests and length metrics without storing raw command lines in logs.
-- **Defender Operational Event Tailer**: Tails `Microsoft-Windows-Windows Defender/Operational` for malware detections (1116), remediations (1117), and tamper events (5001, 5010, 5012).
+- **Defender Operational Event Subscriber**: Native `wevtapi.dll` `EvtSubscribe` socket on `Microsoft-Windows-Windows Defender/Operational` for malware detections (1116), remediations (1117), and tamper events (5001, 5010, 5012).
 - **Attack Story Correlation**: Connects process execution context, LOLBin behavior signals, and Threat Intelligence network destinations into structured Attack Stories.
 - **Identity-Safe Process Termination**: In `Guarded` or `Sovereign` modes, terminates malicious processes only after revalidating that PID, process creation time (within 2s tolerance), and executable image path match the original observation.
 
@@ -618,7 +624,7 @@ Manages administrative authentication tokens and ensures cryptographic isolation
 - Stores the break-glass master token in `%ProgramData%\VGT\GeDefense\dashboard.token`; the installer restricts it to SYSTEM/Administrators. Center/Tray use the operator broker instead of the file.
 - Supports atomic rotation (`POST /api/v1/admin/token/rotate`) and reload; rotation revokes every session.
 - Performs constant-time token comparisons (`subtle.ConstantTimeCompare`) to prevent timing side-channel attacks.
-- Operator sessions are minted by `server/operator_broker.go` after Windows token verification, carry functional scopes and record the OS account in the evidence ledger.
+- Operator sessions are minted by `server/operator_broker.go` after Windows token verification with an authoritative SAM fallback for the operator group, carry functional scopes and record the OS account in the evidence ledger.
 
 #### Associated Files
 - **Source**: `src/GeDefense/windows/internal/security/token.go`
@@ -937,7 +943,7 @@ All endpoints are hosted exclusively on `127.0.0.1:17831`. Mutating requests req
 |---|---|---|---|---|---|---|
 | `/` | GET | Browser Navigation | `s.index` | `internal/server` | Embedded `web/index.html` | Public (Loopback) |
 | `/assets/*` | GET | Browser Asset Loader | FileServer | `internal/server` | Embedded `web/*` assets | Public (Loopback) |
-| `/api/v1/session/operator` | POST | `operatorclient` (launcher/tray) | `s.operatorBroker` | `internal/server` | Session store, OS-account attribution | Windows process token (Operator group/Administrators) |
+| `/api/v1/session/operator` | POST | `operatorclient` (launcher/tray) | `s.operatorBroker` | `internal/server` | Session store, OS-account attribution | Windows process token (Operators/Administrators) or authoritative SAM membership of the peer user SID for new requests |
 | `/api/v1/session/register-browser` | POST | `launcher` | `s.registerBrowser` | `internal/server` | In-memory registration | Operator session / Master |
 | `/api/v1/session/bootstrap` | POST | admin tooling (legacy) | `s.bootstrap` | `internal/server` | In-memory `bootstrapCodes` | Master Token (break-glass) |
 | `/api/v1/session/exchange` | POST | `api.js: exchangeBootstrap` | `s.exchange` | `internal/server` | In-memory `sessions` & cookie | Valid Bootstrap Code |
@@ -972,20 +978,26 @@ All endpoints are hosted exclusively on `127.0.0.1:17831`. Mutating requests req
 ### 8.1 Local Session Bootstrap & Token Exchange Flow
 
 ```text
-Operator launches GeDefenseCenter.exe
+Operator launches GeDefenseCenter.exe (normally unelevated; an elevated or installer-started
+  instance re-launches itself with the shell user's primary token through internal/userlaunch,
+  marker VGT_UI_LAUNCHED_UNELEVATED; de-elevation failure is logged and is a documented fallback)
         ->
 GeDefenseCenter claims an identity-scoped single-instance object (foreign objects are not trusted)
         ->
 launcher calls POST http://127.0.0.1:17831/api/v1/session/operator
   Headers: [X-VGT-Operator-Broker: 1, X-VGT-Request-ID: <uuid>, no Origin/Authorization]
+  Transient transport/HTTP 429/502/503/504 errors are retried (max 3 attempts, 300/600 ms backoff)
         ->
-server/operator_broker.go resolves the loopback peer process id,
-  inspects its Windows token (operator group / Administrators), fails closed otherwise
+server/operator_broker.go resolves the loopback peer process id, inspects its Windows token
+  (operator group / Administrators) and falls back to the authoritative SAM membership of the
+  peer user SID in the local "VGT GeDefense Operators" group when the token is stale (fresh
+  install); exact SID comparison, bounded SAM query, SAM errors fail closed, Administrator
+  authority stays token-based
         ->
 Returns JSON: {"token": "vgs.<scoped-session>", "subject": {"account": "<OS account>"}, ...}
         ->
 launcher starts the Authenticode-verified Chromium kiosk with the plain loopback URL
-  (no secret in the browser command line)
+  (no secret in the browser command line; 45 s start deadline, typed browser failures)
         ->
 launcher registers the browser pid: POST /api/v1/session/register-browser (scoped session + replay id)
         ->
@@ -996,6 +1008,10 @@ server/session.go issues a scoped HttpOnly/SameSite=Strict session cookie
         ->
 Subsequent dashboard requests are authenticated via the session cookie; the master token
   is never readable by the operator group and remains a local-administrator break-glass credential.
+        ->
+On a classified launch failure (broker/browser/host/startup/profile/elevation) the Center writes
+  %LocalAppData%\VGT\GeDefense\logs\center-launch.log (bounded, rotating, no secrets) and reports
+  the concrete cause plus the log path to the operator.
 ```
 
 ---
@@ -1005,17 +1021,18 @@ Subsequent dashboard requests are authenticated via the session cookie; the mast
 ```text
 Process launched on Windows (e.g. powershell.exe -enc ...)
         ↓
-WMI provider fires Win32_ProcessStartTrace indication
+Windows audit subsystem records Security Event 4688 (process creation)
         ↓
-mhx/watcher_windows.go: processTraceScript captures event
+mhx/watcher_windows.go: native wevtapi.dll EvtSubscribe socket receives the 4688 event
         ↓
-PowerShell helper enriches process:
-  ├─ Authenticode signature check (Get-AuthenticodeSignature)
+Go process sensor enriches the event (bounded CIM enrichment closes the sub-100 ms lifetime race):
+  ├─ Authenticode signature check
   ├─ Parent process identification
   ├─ Ancestry chain walk (up to 6 levels)
-  └─ SHA-256 binary hash computation
+  ├─ SHA-256 binary hash computation
+  └─ PE OriginalFilename/relocation check for renamed system binaries
         ↓
-Streams NDJSON to stdout → Read by Go mhx/watcher_windows.go scanner
+Event normalized into a ProcessEvent inside the service process
         ↓
 mhx.Engine receives ProcessEvent via internal Go channel
         ↓
@@ -1239,7 +1256,7 @@ graph TD
         AppControl["Windows App Control (WDAC / CiTool)"]
         VBS["VBS / Credential Guard / HVCI"]
         TcpTable["Native TCP Table (iphlpapi.dll)"]
-        WMI["WMI Process Start Trace"]
+        Events["Windows Event Log Telemetry\n(wevtapi EvtSubscribe)"]
         Disks["Fixed NTFS Drives (C:\, etc.)"]
     end
 
@@ -1258,8 +1275,9 @@ graph TD
     App --> XDR
     App --> Ledger
 
-    MHX -->|WMI Event Query| WMI
-    MHX -->|Event Log Tail| Defender
+    MHX -->|EvtSubscribe 4688| Events
+    MHX -->|EvtSubscribe Defender Operational| Defender
+    MHX -->|EvtSubscribe 5157| WFP
     MHX -->|Extended TCP Table| TcpTable
     MHX -->|Identity-Safe Kill| winapi
     Feeds -->|Sync Rules| WFP
@@ -1382,7 +1400,7 @@ sequenceDiagram
 | `src/GeDefense/windows/cmd/gedefense-windows/main.go` | `main` | `main()`: Service dispatcher & CLI parser |
 | `src/GeDefense/windows/internal/service/service_windows.go` | `Runner`, `serviceStatus`, `serviceTableEntry` | `Run()`, `RunConsole()`, `serviceMain()`, `serviceControlHandler()` |
 | `src/GeDefense/windows/internal/app/app.go` | `App` | `New()`, `Run()` |
-| `src/GeDefense/windows/internal/product/version.go` | None | `const Version = "4.1.3"` |
+| `src/GeDefense/windows/internal/product/version.go` | None | `const Version = "5.3.0"` |
 | `src/GeDefense/windows/internal/server/router.go` | None | `New()`: builds http.ServeMux with all route bindings |
 | `src/GeDefense/windows/internal/server/types.go` | `Server`, `HardeningEngine`, `AuditEngine`, `XDREngine`, `MHXEngine`, `IntegrityEngine` | Subsystem interface definitions |
 | `src/GeDefense/windows/internal/server/middleware.go` | `replayGuard`, `rateWindow` | `headers()`, `authorize()`, `masterAuthorize()`, `claim()`, `allowRequest()` |
@@ -1392,8 +1410,8 @@ sequenceDiagram
 | `src/GeDefense/windows/internal/mhx/engine.go` | `Engine` | `NewEngine()`, `Run()`, `Analyses()`, `Status()`, `SetMode()`, `SyncFeeds()`, `evaluate()`, `evaluateNetwork()` |
 | `src/GeDefense/windows/internal/mhx/evaluator.go` | `Evaluator` | `Analyze()`, `rawBehaviorSignals()`, `contentSignals()`, `responseAuthority()` |
 | `src/GeDefense/windows/internal/mhx/encoded_command.go` | None | `DecodePowerShellCommand()` |
-| `src/GeDefense/windows/internal/mhx/watcher_windows.go` | `processWatcher` | `Run()`: WMI process start trace subscriber |
-| `src/GeDefense/windows/internal/mhx/defender_watcher_windows.go` | `defenderWatcher`, `defenderEvent` | `Run()`: Windows Defender operational log tailer |
+| `src/GeDefense/windows/internal/mhx/watcher_windows.go` | `processWatcher` | `Run()`: native Security 4688 subscriber (wevtapi EvtSubscribe) |
+| `src/GeDefense/windows/internal/mhx/defender_watcher_windows.go` | `defenderWatcher`, `defenderEvent` | `Run()`: native Defender Operational log subscriber (wevtapi EvtSubscribe) |
 | `src/GeDefense/windows/internal/mhx/network_watcher_windows.go` | `networkWatcher`, `networkEvent` | `Run()`: Native TCP table polling worker |
 | `src/GeDefense/windows/internal/mhx/terminate_windows.go` | None | `validateObservedProcess()`, `terminateProcess()`, `openObservedProcess()` |
 | `src/GeDefense/windows/internal/mhx/feeds.go` | `FeedManager`, `FeedStatus`, `FeedAttribution` | `NewFeedManager()`, `Sync()`, `Contains()`, `buildPrefixIndex()` |
@@ -1426,7 +1444,7 @@ During the complete audit of the repository, several distinct architectural patt
   - `tools/Invoke-MhxAppControlDiagnostic.ps1`
   - `tools/Test-MhxProcessTrace.ps1`
   - `tools/Test-MhxWatcherIntegration.ps1`
-- **Explanation**: These scripts are not invoked by the production service or UI. They are specialized, elevated integration diagnostics designed for developer verification and QA testing of WMI event traces and Windows App Control policy generation without deploying the full service.
+- **Explanation**: These scripts are not invoked by the production service or UI. They are specialized, elevated integration diagnostics designed for developer verification and QA testing of process-trace telemetry diagnostics and Windows App Control policy generation without deploying the full service.
 
 ### 3. Build Tag Duality in `gedefense-installer`
 - **Observation**: `cmd/gedefense-installer` contains two complementary files: `bundle_development.go` (`//go:build !vgt_bundle`) and `bundle_release.go` (`//go:build vgt_bundle`).
@@ -1437,14 +1455,14 @@ During the complete audit of the repository, several distinct architectural patt
 - **Explanation**: The `Isolation` profile is fully supported by the backend handler (`POST /api/v1/hardening/enforce` accepts `{"profile": "Isolation"}`), but is intentionally omitted from the primary dashboard UI as a one-click action because enabling strict USB storage blocking and high-plus cloud blocks can disrupt normal operator workflows. It is reserved for CLI/API automation.
 
 ### 5. Absence of Kernel Minifilters
-- **Observation**: The EDR subsystem contains no `.sys` driver files and relies on WMI and EventLog tailing.
+- **Observation**: The EDR subsystem contains no `.sys` driver files and relies on native Windows event subscriptions (`wevtapi.dll` `EvtSubscribe`: Security 4688, Defender Operational, Security 5157) plus polling of the native TCP table.
 - **Explanation**: An intentional architectural decision by VGT. Kernel minifilters introduce instability, BSOD vectors, and complex Microsoft WHQL signing requirements. By delegating kernel enforcement to Microsoft Defender Antivirus, ASR rules, Windows Filtering Platform, and Windows App Control (WDAC), GeDefense achieves kernel-grade protection while running entirely in user-mode `LocalSystem`.
 
 ---
 
 ```text
 // ARCHITECTURE MAP COMPLETE
-// BASE ARCHITECTURE: v4.1.1; current changes documented in 4.1.2/4.1.3 addenda
+// BASE ARCHITECTURE: v4.1.1; addenda 4.1.2-4.1.4, 5.2.1 native event telemetry, 5.2.2 Center/Tray authentication and 5.2.3 stable Titan live rendering below
 // ZERO COMPROMISE · ZERO EXTERNAL GO DEPENDENCIES · ZERO CDN ASSETS
 ```
 
@@ -1456,7 +1474,7 @@ GeDefense Windows 4.1 isolates Threat Intelligence into `internal/threatintel`. 
 
 The BLOCK projection is fingerprinted independently from the full correlation index. `Sync-VgtMhxFirewall.ps1` stages a complete Windows Firewall generation using Dynamic Keyword Addresses when available and a bounded static-rule fallback otherwise. A generation is considered active by MHX only after the returned rule count, shard count, indicator count and SHA-256 generation exactly match the desired snapshot. Sovereign readiness requires desired and active enforcement generations to match.
 
-`wfp_watcher_windows.go` consumes failure-only Security Event 5157 telemetry. Windows 11 `FilterOrigin` is preserved when present, and GeDefense Threat Intelligence firewall rules use `VGT-GeDefense-TI-*` identifiers to make GeDefense-originated drops distinguishable from unrelated WFP decisions. Block events are correlated back to the immutable ThreatIndex and recent PID-safe MHX process records before Attack Story creation.
+`wfp_watcher_windows.go` subscribes natively to failure-only Security Event 5157 telemetry through `wevtapi.dll` `EvtSubscribe` (no persistent PowerShell bridge). Windows 11 `FilterOrigin` is preserved when present, and GeDefense Threat Intelligence firewall rules use `VGT-GeDefense-TI-*` identifiers to make GeDefense-originated drops distinguishable from unrelated WFP decisions. Block events are correlated back to the immutable ThreatIndex and recent PID-safe MHX process records before Attack Story creation.
 
 Network intelligence does not create autonomous process-kill authority. Host response remains gated by independent MHX `ResponseAuthority` plus PID, creation-time and binary-path revalidation.
 
@@ -1491,6 +1509,128 @@ internal/winapi/result_windows.go separates BOOL and HRESULT error contracts fro
 
 The WFP watcher supervises its own PowerShell bridge with capped retry backoff and a 30-second inactivity watchdog. Each attempt owns and joins its process and watchdog; stderr is bounded to 2 KiB. Health reflects message receipt time, while correlation retains the Windows event timestamp. The in-memory record cursor survives bridge restarts, with a latest-record check after log reset. Event-log access failures cannot emit ready/heartbeat; an empty readable query is handled independently. The startup telemetry check also requires an answering WFP bridge. None of these signals assert that the effective Windows audit policy is enabled or that all ingress traffic is covered.
 
+**Superseded in 5.2.1:** the WFP telemetry bridge is now a native `wevtapi.dll` `EvtSubscribe` socket under a bounded backoff supervisor; see the 5.2.1 addendum below.
+
+
+## 5.2.1 Addendum: Native Windows event telemetry
+
+The 5.2.1 hotfix replaces the three persistent PowerShell telemetry bridges with native
+`wevtapi.dll` `EvtSubscribe` sockets. The Go service owns the subscriptions; there are no
+persistent `powershell.exe` telemetry children, and process, Defender and WFP sensors run
+under bounded backoff supervisors that re-establish a failed subscription.
+
+- **Security 4688 — process creation:** native subscription for new processes (image,
+  command line, parent PID). The channel only carries command lines when
+  `Audit Process Creation` is enabled and
+  `ProcessCreationIncludeCmdLine_Enabled` is set to 1; GeDefense hardening enables both
+  (`engine/Invoke-VgtHardening.ps1`, `xdr/Set-VgtMhxProtection.ps1`). A missing audit
+  policy degrades the process sensor and is reported as reduced telemetry, not as
+  "no events happened".
+- **Defender Operational:** native subscription to
+  `Microsoft-Windows-Windows Defender/Operational` (1116, 1117, 5001, 5010, 5012).
+- **Security 5157 — WFP:** native subscription to failure-only Windows Filtering Platform
+  block events; `FilterOrigin` and the `VGT-GeDefense-TI-*` rule prefixes remain preserved
+  for correlation.
+- **Enrichment:** events are normalized in-process. Process enrichment uses bounded CIM
+  queries, closing the race with processes that live for less than 100 ms, and applies a
+  PE `OriginalFilename`/relocation check so renamed system binaries are no longer
+  invisible to a pure file-name allowlist.
+- **Honesty:** an unreadable or silent event channel is loss/degraded telemetry, never
+  evidence of absence; no attribution is synthesized from missing events.
+
+Telemetry preconditions and residual blind spots are documented in `docs/THREAT-MODEL.md`.
+
+## 5.2.2 Addendum: Center/tray authentication and unprivileged UI launch
+
+The 5.2.2 hotfix fixes the reproducible first-install failure
+"GeDefense Center konnte nicht authentifiziert geöffnet werden" and makes the UI launch
+path diagnosable.
+
+- **Stale-token root cause:** the installer adds the installing user to the local
+  `VGT GeDefense Operators` group in SAM. A Windows logon token does not gain that group
+  until the next sign-in, so the operator broker's token-only check returned HTTP 403
+  directly after installation.
+- **SAM fallback:** `internal/server/operator_peer_windows.go` resolves the peer user SID
+  from the loopback process token and, when the operator group is absent from the token,
+  checks that user SID's membership in the local operator group through
+  `netapi32!NetLocalGroupGetMembers` (level 1; bounded to 8192 members, 1 MiB buffer and
+  8 resume calls; exact SID comparison against the installer-pinned `OperatorGroupSid`
+  registry value with a `LookupAccountName` fallback). Group names are never compared as
+  strings and client input is never trusted. Deny-only or disabled token entries for the operator group are deliberate restrictions and are never overruled by the SAM fallback. A SAM error leaves the operator flag false
+  (fail closed); Administrator authority remains token-based and is not widened. SAM is
+  authoritative, so revoking a group membership affects the next broker request, while a
+  token issued before the revocation can retain the old group until sign-out.
+- **Unprivileged UI:** `internal/userlaunch` de-elevates Center, Tray and the
+  installer-started Tray before any UI work. It takes the shell window's process token
+  (`GetShellWindow` → `OpenProcess` → `OpenProcessToken` → `DuplicateTokenEx`), starts
+  the validated executable with `CreateProcessWithTokenW` (`LOGON_WITH_PROFILE`,
+  `CREATE_UNICODE_ENVIRONMENT`, `CREATE_NEW_PROCESS_GROUP`) and tags the child with
+  `VGT_UI_LAUNCHED_UNELEVATED=1` so it cannot loop. Arguments are quoted and bounded;
+  the no-argument fallback goes through `explorer.exe` with a validated absolute path.
+  If de-elevation fails, the failure is diagnosed and the elevated process continues only
+  as a documented fallback.
+- **Diagnostics and bounded retries:** launch failures are typed
+  (`broker`, `browser`, `host`, `startup`, `profile`, `elevation`) and written to
+  `%LocalAppData%\VGT\GeDefense\logs\center-launch.log` (per-user directory 0700, file
+  0600, 256 KiB rotation to `.1`, UTC timestamps, elevated flag and browser path — no
+  tokens or secrets). The broker client retries only transient transport errors and
+  HTTP 429/502/503/504 (max 3 attempts, 300/600 ms backoff); 400/401/403/409 are not
+  retried. The browser start deadline is 45 s and attachment/exit failures are classified
+  instead of collapsing into one generic message box.
+- **First-install behavior:** the operator group is created and populated by the
+  installer; because of the SAM fallback, Center and Tray work immediately after setup
+  without signing out and back in. On hosts where SAM is unreadable, the
+  elevated-Administrator break-glass path remains available.
+
+## 5.2.3 Addendum: Stable Titan live rendering
+
+The 5.2.3 hotfix fixes the Titan view jumping back to the top on every 6-second
+auto-refresh. The previous code called `host.replaceChildren()` before the fetch and rebuilt
+the complete lists on each poll (scroll clamping to the top, lost open evidence `<details>`
+and focus, and repeated `aria-live` announcements).
+
+- **Fetch before render:** `loadEvents`, `loadQuarantine` and `loadEvidence` complete the
+  request before touching the DOM; a failed request leaves the previously rendered list in
+  place and only updates the state line.
+- **Scroll anchoring:** `web/list-stability.js` captures the nearest scrollable ancestor (or
+  the document scroller), the first visible row (`selectAnchor`), the open `<details>` row
+  ids and the focused row id before a rebuild and restores them afterwards. Row positions are
+  stored content-relative (`contentRelativeTop`), so the anchor also holds at deep scroll
+  offsets; a list at the top stays at the top (`isNearTop`) and an open incident keeps its
+  screen position (`restoreTarget`). Filter, pagination and tab changes pass an explicit
+  reset (`resetVisibleListPosition`) and continue to start at the top; automatic and manual
+  refreshes keep the position.
+- **Change signatures:** `renderStable(host, signature, build)` keeps a per-host WeakMap
+  signature and skips DOM mutation when `shouldReplace` says the signature is unchanged, so
+  identical poll payloads cause no churn (timeline signature: event ids + total +
+  authorization/response/event type). Rows carry stable `data-titan-row` ids
+  (`event:`, `quarantine:`, `checkpoint:`, `sensor:`, `watch:`, `control:`, `rule:`,
+  `permit:`, `devroot:`) as anchor and regression-test contract; the sub-lists of
+  `renderStatus` (sensors, watch roots, security controls, development roots, permits,
+  policy rules) use the same stable rendering.
+- **Accessibility:** `aria-live` was removed from `#titanEventList`; new events are announced
+  in one aggregated message through the existing polite live region and only when the total
+  increases (never on initial load). The large list is no longer re-read on every poll.
+- **Policy protection:** while the Owner Policy form is dirty, live refresh does not
+  re-render or overwrite the unsaved policy edits; read-only policy information is still
+  updated when no edit is in progress.
+- **Rendering dataflow (Titan):** `app.js 6 s interval -> loadTitan({refresh:true}) ->
+  getTitanStatus/getTitanEvents (fetch) -> renderStatus (renderStable sub-lists) +
+  loadEvents/loadQuarantine/loadEvidence (fetch, signature compare, optional
+  replaceChildren(build()), restore anchor/details/focus) -> aggregated live-region
+  announcement when the event total increased`. Manual refresh uses the same preserved
+  rendering path; filter/pagination/tab changes request the explicit top reset.
+- **Verification:** `test/list-stability.test.mjs` (`node --test`, 8/8 PASS) covers the pure
+  helpers (near-top, anchor selection/restore, missing-anchor fallback, prepend shifts,
+  negative clamps, empty list, `shouldReplace` no-op decision, content-relative rows). The
+  independent headless-Chrome regression test `test/titan-scroll.browser.cjs` (harness
+  `test/helpers/titan-scroll-harness.html`, local server `test/helpers/titan_scroll_server.py`)
+  proves the original bug against the authoritative 5.2.2 web directory (FAIL) and the fixed
+  tree PASS with 6/6 hard assertions: deep-scroll anchor delta 0.3 px (scrollTop
+  1989 → 2154), unchanged refresh keeps identical row elements, top stays 0, open
+  `<details>` preserved, `aria-live` absent from `#titanEventList`; repeated deterministic
+  runs also PASS. The web assets are embedded into the service binary (`embed.FS`), so the
+  fix ships through the signed installer and is covered by the SBOM/provenance binding.
 
 ## 17.10.2026 — Overview threat map and complete Kinetic observations
 
@@ -1564,9 +1704,30 @@ deep-baseline mechanism. Titan adds native, targeted collection and an owner-aut
   origin, request-ID, rate-limit and CSP middleware.
 - `internal/server/web/titan.js`, `titan.css`, `index.html`: five-area Titan control center using
   DOM construction, no CDN assets and explicit `OBSERVED`/`TEMPORAL`/`NONE` correlation labels.
+- `internal/server/web/list-stability.js`: framework-free scroll-anchor and signature-based stable
+  rendering helpers for the Titan lists (fetch-before-render, no DOM churn on unchanged polls,
+  preserved open `<details>`/focus, bounded live-region announcements).
 - `internal/app/app.go`: Titan is created with the service, runs under the existing worker supervisor,
   and is closed with a final checkpoint during shutdown.
 
 Deliberate limits: no TPM measured-boot attestation or external witness in this phase; no Windows
 minifilter execution prevention; no claim of complete kernel/firmware protection. These are product
 boundaries, not silent gaps. See `docs/TITAN.md`.
+
+## 5.3.0 Addendum: Titan Modes & MHX 4.1 Killerdom Sentinel Masterpiece
+
+The 5.3.0 release delivers the convergence between Titan and MHX via the Sentinel & Killerdom subsystem:
+- `internal/titan/auth.go`, `internal/titan/policy.go`, `internal/titan/engine.go`:
+  Normalizes false positives for Windows Per-User Services (`MessagingService_12541b`, `OneSyncSvc_*`, etc.), Defender Platform Engine updates (`Platform\4.18.*`), and Installer Temp-DLL storms. Introduces 4 distinct Titan modes (`SIMPLE`, `BALANCED`, `AGGRESSIVE`, `PARANOID`) and the cross-engine `CorrelateWithKillerdom` dispatcher callback.
+- `internal/mhx/killerdom.go`:
+  Native Go implementation of the MHX 4.1 Killerdom execution defense engine with 6 compiled RE2 regex signatures (`KD-SIG-01` to `KD-SIG-06`), strict parent-child process lineage verification, and Target LotL monitoring.
+- `internal/mhx/amsi_scanner_windows.go`:
+  Win32 remote process memory inspector verifying `amsi.dll!AmsiScanBuffer` for bypass patches (`0xB8 0x57 0x00 0x07 0x80`, `0xC3`, `0xEB`/`0xE9`, `0x31 0xC0 0xC3`).
+- `internal/mhx/sentinel_config.go`:
+  Thread-safe `SentinelStore` persisting to `sentinel-config.json` with Paranoia Mode (Default-Deny), curated Windows system apps (`sys_explorer`, `sys_dwm`, `sys_services`, etc.), and whitelist catalog.
+- `internal/mhx/fair_scorer.go`:
+  Fair Behavioral Threat Scorer (0-100). Whitelisted applications have no free pass ("Kein Freifahrtschein"); if an allowed application tampers with AMSI or beacons to C2, kinetic PID termination is executed immediately.
+- `internal/mhx/telemetry_killer_windows.go`:
+  Ghost Mode telemetry neutralizer terminating connections from `SystemSettings.exe`, `CompPkgSrv.exe`, `DiagTrack` and null-routing 60+ Microsoft telemetry endpoints via `hosts`.
+- `internal/server/handlers_sentinel.go`, `internal/server/web/sentinel.js`, `sentinel.css`:
+  REST endpoints (`/api/v1/sentinel/*`) and Glass 2100 Web Control Matrix with real-time toggles, signature selectors, and whitelist governance.

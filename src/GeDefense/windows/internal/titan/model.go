@@ -255,9 +255,13 @@ type Policy struct {
 	// OwnerProcessImages is an explicit owner-approved toolchain allowlist of
 	// absolute image paths. A match only downgrades ingress/user-content changes
 	// to TOLERATED; it never authorizes system, persistence or security changes.
-	OwnerProcessImages []string  `json:"ownerProcessImages,omitempty"`
-	UpdatedUTC         time.Time `json:"updatedUtc"`
-	Reason             string    `json:"reason"`
+	OwnerProcessImages []string `json:"ownerProcessImages,omitempty"`
+	// CorrelateWithKillerdom authorizes active kinetic response coordination
+	// with the Killerdom process enforcement engine when severe system compromise
+	// is observed with proven process attribution.
+	CorrelateWithKillerdom bool      `json:"correlateWithKillerdom,omitempty"`
+	UpdatedUTC             time.Time `json:"updatedUtc"`
+	Reason                 string    `json:"reason"`
 	// ClockHighWaterUTC is the highest wall-clock timestamp observed by the
 	// policy store. It is persisted so a clock rollback across a restart cannot
 	// silently extend expired permits (DP-FIND-014).
@@ -269,6 +273,12 @@ const (
 	ModeObserve         = "OBSERVE"
 	ModeContain         = "CONTAIN"
 	ModeStrict          = "STRICT"
+
+	// 5.3.0 Sovereign Titan Modes:
+	ModeSimple     = "SIMPLE"
+	ModeBalanced   = "BALANCED"
+	ModeAggressive = "AGGRESSIVE"
+	ModeParanoid   = "PARANOID"
 )
 
 // SecurityControl is the measured state of one critical security setting.

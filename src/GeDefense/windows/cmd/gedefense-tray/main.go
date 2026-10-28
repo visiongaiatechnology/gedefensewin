@@ -18,6 +18,7 @@ import (
 	"github.com/visiongaiatechnology/gedefense/windows/internal/localhttp"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/operatorclient"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/product"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/userlaunch"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/wintray"
 )
@@ -28,6 +29,13 @@ func main() {
 	openAtStart := flag.Bool("open", false, "open the security center after tray initialization")
 	flag.Parse()
 	if *showVersion {
+		return
+	}
+	// The tray is an unprivileged notification UI. The auto-elevated Setup or a
+	// "Run as administrator" start would hand the administrator token to the
+	// tray and, through it, to the Center. The hand-over happens before the
+	// single instance is claimed so the unprivileged process becomes primary.
+	if relaunchTrayUnelevated() {
 		return
 	}
 	primary, event, mutex, tampered := claimInstance()
@@ -275,6 +283,24 @@ func trayIconPath() (string, error) {
 		return "", errors.New("GeDefense tray icon unavailable")
 	}
 	return path, nil
+}
+
+// relaunchTrayUnelevated hands an elevated tray over to the unprivileged
+// desktop shell user. It reports true only when a replacement process was
+// started; this process then exits with status 0. A failed hand-over is
+// reported and the tray keeps running elevated as a documented fallback.
+func relaunchTrayUnelevated() bool {
+	executable, err := os.Executable()
+	if err != nil {
+		winapi.ReportError("tray de-elevation executable", err)
+		return false
+	}
+	relaunched, err := userlaunch.RelaunchUnelevatedIfNeeded(executable, nil)
+	if err != nil {
+		winapi.ReportError("tray de-elevation", err)
+		return false
+	}
+	return relaunched
 }
 
 // claimInstance establishes the tray single instance. HP-FIND-005: a named

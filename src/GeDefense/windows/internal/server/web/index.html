@@ -23,6 +23,7 @@
   <link rel="stylesheet" href="/assets/contrast.css">
   <link rel="stylesheet" href="/assets/i18n.css">
   <link rel="stylesheet" href="/assets/setup-wizard.css">
+  <link rel="stylesheet" href="/assets/sentinel.css">
   <script type="module" src="/assets/i18n.js"></script>
   <script type="module" src="/assets/app.js"></script>
 </head>
@@ -61,7 +62,7 @@
         <div class="brand-copy">
           <strong>GeDefense</strong>
           <small>TITAN // WINDOWS DEFENSE</small>
-          <span class="brand-beta">TITAN 5.2</span>
+          <span class="brand-beta">TITAN 5.3</span>
         </div>
       </div>
 
@@ -73,6 +74,9 @@
           </button>
           <button type="button" class="nav nav-titan" data-view="titan">
             <span class="nav-icon" aria-hidden="true"><svg><use href="#i-titan"></use></svg></span><span class="nav-text">Titan</span><span class="nav-tag">TITAN</span>
+          </button>
+          <button type="button" class="nav nav-sentinel" data-view="sentinel">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-bolt"></use></svg></span><span class="nav-text">Sentinel</span><span class="nav-tag nav-tag-sentinel">5.3</span>
           </button>
         </div>
         <div class="nav-group">
@@ -408,7 +412,7 @@
                   <button type="button" id="titanAcknowledgeOpen" class="button ghost small">Sichtbare offene Befunde prüfen</button>
                   <span id="titanReviewStatus" class="titan-inline-state" role="status"></span>
                 </div>
-                <div id="titanEventList" class="titan-event-list" aria-live="polite"></div>
+                <div id="titanEventList" class="titan-event-list"></div>
                 <div id="titanEventEmpty" class="titan-empty" hidden></div>
                 <div id="titanEventState" class="titan-inline-state" role="status"></div>
                 <nav class="titan-pager" aria-label="Seiten der Titan-Ereignisse">
@@ -458,6 +462,10 @@
                 <div class="titan-policy-form">
                   <label class="titan-field"><span>Antwortmodus</span>
                     <select id="titanPolicyMode">
+                      <option value="SIMPLE">SIMPLE — Alles OS-basierte vollständig erlaubt</option>
+                      <option value="BALANCED">BALANCED — Standard Schutz &amp; Verifikation</option>
+                      <option value="AGGRESSIVE">AGGRESSIVE — Strenger Schutz, nur Defender-Updates erlaubt</option>
+                      <option value="PARANOID">PARANOID — Maximale Zero-Trust-Härtung</option>
                       <option value="OBSERVE">OBSERVE — ausschließlich beobachten</option>
                       <option value="CONTAIN">CONTAIN — Hochrisiko-Objekte kontrolliert isolieren</option>
                       <option value="STRICT">STRICT — Containment und strenge Besitzerprüfung</option>
@@ -566,6 +574,225 @@
             </div>
           </section>
         </div>
+      </section>
+
+      <!-- ============================ SENTINEL // KILLERDOM (5.3.0) ============================ -->
+      <section class="view sentinel-view" data-page="sentinel" hidden aria-labelledby="sentinelViewTitle">
+        <header class="sentinel-hero">
+          <div class="sentinel-hero-content">
+            <div class="sentinel-hero-eyebrow">
+              <span class="sentinel-pulse-dot" aria-hidden="true"></span>
+              <span>VGT SENTINEL // KILLERDOM 4.1 ENGINE</span>
+            </div>
+            <h2 id="sentinelViewTitle" class="sentinel-hero-title">Kinetic Execution &amp; Lineage Defense</h2>
+            <p class="sentinel-hero-desc">
+              MHX 4.1 Hardened Execution Defense, AMSI Scan-Buffer-Integritätsüberwachung, strikte Parent-Child-Lineage, Zero-Trust Paranoia Gate und Ghost-Mode Telemetriekappung.
+            </p>
+          </div>
+          <div class="sentinel-hero-stats">
+            <div class="sentinel-stat-chip">
+              <span class="stat-label">Killerdom</span>
+              <span class="stat-val"><span id="sentinelKillerdomBadge" class="sentinel-badge danger">HOT // SCHARF</span></span>
+            </div>
+            <div class="sentinel-stat-chip">
+              <span class="stat-label">Paranoia Modus</span>
+              <span class="stat-val"><span id="sentinelParanoiaBadge" class="sentinel-badge clean">SELECTIVE</span></span>
+            </div>
+            <div class="sentinel-stat-chip">
+              <span class="stat-label">Ghost Mode</span>
+              <span class="stat-val"><span id="sentinelGhostBadge" class="sentinel-badge neutral">STANDARD</span></span>
+            </div>
+            <div class="sentinel-stat-chip">
+              <span class="stat-label">Titan Bridge</span>
+              <span class="stat-val"><span id="sentinelTitanBadge" class="sentinel-badge clean">GEKOPPELT</span></span>
+            </div>
+          </div>
+        </header>
+
+        <!-- Master Control Matrix -->
+        <div class="sentinel-controls-grid">
+          <!-- Card 1: Killerdom & Paranoia -->
+          <article class="sentinel-card">
+            <div class="sentinel-card-header">
+              <div>
+                <h3 class="sentinel-card-title">Killerdom &amp; Paranoia Gate</h3>
+                <p class="sentinel-card-subtitle">MHX 4.1 Echtzeit-Terminierung verdächtiger Ausführungen.</p>
+              </div>
+            </div>
+            <label class="sentinel-toggle-row">
+              <div class="sentinel-toggle-info">
+                <span class="sentinel-toggle-title">Killerdom Engine</span>
+                <span class="sentinel-toggle-sub">Autonome PID-Terminierung bei Signaturtreffern</span>
+              </div>
+              <div class="sentinel-switch">
+                <input type="checkbox" id="swKillerdom" checked>
+                <span class="sentinel-slider"></span>
+              </div>
+            </label>
+            <label class="sentinel-toggle-row">
+              <div class="sentinel-toggle-info">
+                <span class="sentinel-toggle-title">Paranoia Modus (Default-Deny)</span>
+                <span class="sentinel-toggle-sub">Alles außerhalb Whitelist / SystemApps wird eliminiert</span>
+              </div>
+              <div class="sentinel-switch">
+                <input type="checkbox" id="swParanoia">
+                <span class="sentinel-slider"></span>
+              </div>
+            </label>
+          </article>
+
+          <!-- Card 2: Titan Correlation -->
+          <article class="sentinel-card">
+            <div class="sentinel-card-header">
+              <div>
+                <h3 class="sentinel-card-title">Titan-Killerdom Correlation</h3>
+                <p class="sentinel-card-subtitle">Cross-Engine Schutzbrücke für kompromittierte Persistenz.</p>
+              </div>
+            </div>
+            <label class="sentinel-toggle-row">
+              <div class="sentinel-toggle-info">
+                <span class="sentinel-toggle-title">Mit Titan korrelieren</span>
+                <span class="sentinel-toggle-sub">Titan-Integritätsbrüche lösen Killerdom-Strike aus</span>
+              </div>
+              <div class="sentinel-switch">
+                <input type="checkbox" id="swTitan" checked>
+                <span class="sentinel-slider emerald"></span>
+              </div>
+            </label>
+            <p class="sentinel-card-desc">
+              Ermöglicht Titan (z.B. im AGGRESSIVE oder PARANOID Modus), mutwillige Persistenzen direkt per kinetischer PID-Terminierung unschädlich zu machen.
+            </p>
+          </article>
+
+          <!-- Card 3: Ghost Mode -->
+          <article class="sentinel-card">
+            <div class="sentinel-card-header">
+              <div>
+                <h3 class="sentinel-card-title">Ghost Mode (Telemetriekappung)</h3>
+                <p class="sentinel-card-subtitle">Kappt Windows-Netzwerkverbindungen vollständig.</p>
+              </div>
+            </div>
+            <label class="sentinel-toggle-row">
+              <div class="sentinel-toggle-info">
+                <span class="sentinel-toggle-title">Telemetrie &amp; Settings Cut</span>
+                <span class="sentinel-toggle-sub">SystemSettings, DiagTrack &amp; CompPkgSrv kappen</span>
+              </div>
+              <div class="sentinel-switch">
+                <input type="checkbox" id="swGhost">
+                <span class="sentinel-slider"></span>
+              </div>
+            </label>
+            <p class="sentinel-card-desc">
+              Kappt ausgehende Verbindungen beim Öffnen von Systemeinstellungen und leitet Microsoft Telemetrie-Hosts auf 0.0.0.0 um.
+            </p>
+          </article>
+
+          <!-- Card 4: AMSI & Lineage -->
+          <article class="sentinel-card">
+            <div class="sentinel-card-header">
+              <div>
+                <h3 class="sentinel-card-title">Memory &amp; Lineage Guard</h3>
+                <p class="sentinel-card-subtitle">Speicherintegrität &amp; Eltern-Kind-Linie.</p>
+              </div>
+            </div>
+            <div class="sentinel-stack">
+              <div class="sentinel-status-row">
+                <span class="sentinel-status-label">AMSI Buffer Patch Hook</span>
+                <span class="sentinel-badge clean">AKTIV GESCHÜTZT</span>
+              </div>
+              <div class="sentinel-status-row">
+                <span class="sentinel-status-label">Strict Lineage (Svchost/Lsass/Csrss)</span>
+                <span class="sentinel-badge clean">ERZWUNGEN</span>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <!-- Signature Management Section -->
+        <section class="sentinel-section">
+          <div class="sentinel-section-head">
+            <div>
+              <h3 class="sentinel-section-title">Killerdom Signaturen (Granulare Entwickler-Toggles)</h3>
+              <p class="sentinel-section-desc">Selektive Aktivierung einzelner Erkennungsregeln. Entwickler können gezielt einzelne Signaturen deaktivieren, wenn spezifische Skripte ausgeführt werden müssen.</p>
+            </div>
+          </div>
+          <div class="sentinel-table-wrapper">
+            <table class="sentinel-table">
+              <thead>
+                <tr>
+                  <th scope="col" class="col-sig-id">Sig-ID</th>
+                  <th scope="col" class="col-sig-name">Name &amp; Beschreibung</th>
+                  <th scope="col">Muster / Erkennungslogik</th>
+                  <th scope="col" class="col-action">Aktion</th>
+                </tr>
+              </thead>
+              <tbody id="sentinelSigTableBody">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- System Apps Section -->
+        <section class="sentinel-section">
+          <div class="sentinel-section-head">
+            <div>
+              <h3 class="sentinel-section-title">Kuratierte System-Apps (Windows Kern)</h3>
+              <p class="sentinel-section-desc">Basis-Systemkomponenten für Windows. Im Paranoia-Modus können einzelne System-Apps isoliert oder freigegeben werden.</p>
+            </div>
+          </div>
+          <div class="sentinel-table-wrapper">
+            <table class="sentinel-table">
+              <thead>
+                <tr>
+                  <th scope="col" class="col-sysapp">Komponente</th>
+                  <th scope="col">Ausführungspfad</th>
+                  <th scope="col" class="col-status">Paranoia-Status</th>
+                  <th scope="col" class="col-action">Aktion</th>
+                </tr>
+              </thead>
+              <tbody id="sentinelSysAppTableBody">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Whitelist & Fair Scoring Section -->
+        <section class="sentinel-section">
+          <div class="sentinel-section-head">
+            <div>
+              <h3 class="sentinel-section-title">Zulassungsliste &amp; Fair Threat Scoring</h3>
+              <p class="sentinel-section-desc"><strong>Kein Freifahrtschein:</strong> Whitelist-Programme werden kontinuierlich durch MHX, XDR, Killerdom und Titan korreliert. Bei verdächtigen Verhaltensmustern (Score &ge; 75 wie AMSI-Patching oder C2-Traffic) greift dennoch die kinetische Terminierung.</p>
+            </div>
+          </div>
+
+          <!-- Add form -->
+          <div class="sentinel-add-form">
+            <input type="text" id="sentinelWlName" placeholder="Anwendungsname (z.B. Mein Dev Server)" autocomplete="off">
+            <input type="text" id="sentinelWlPath" placeholder="Absoluter Pfad oder Muster (z.B. C:\Tools\server.exe)" autocomplete="off">
+            <input type="text" id="sentinelWlSha" placeholder="Optional: SHA-256-Pin (64 Hex)" autocomplete="off" spellcheck="false">
+            <input type="text" id="sentinelWlSigner" placeholder="Optional: Signer/Publisher-Pin (z.B. Microsoft)" autocomplete="off">
+            <button type="button" id="sentinelWlAddBtn" class="sentinel-btn-sm primary">+ Zur Whitelist hinzufügen</button>
+          </div>
+
+          <div class="sentinel-table-wrapper">
+            <table class="sentinel-table">
+              <thead>
+                <tr>
+                  <th scope="col" class="col-wl-app">Anwendung</th>
+                  <th scope="col">Pfad-Muster</th>
+                  <th scope="col" class="col-score">Score (0-100)</th>
+                  <th scope="col" class="col-status">Zustand</th>
+                  <th scope="col" class="col-actions">Aktionen</th>
+                </tr>
+              </thead>
+              <tbody id="sentinelWlTableBody">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
       <!-- ============================ PROTECTION ============================ -->

@@ -104,12 +104,12 @@ func (p Policy) Validate() error {
 		return errors.New("titan policy schema is unsupported")
 	}
 	switch p.Mode {
-	case ModeObserve, ModeContain, ModeStrict:
+	case ModeObserve, ModeContain, ModeStrict, ModeSimple, ModeBalanced, ModeAggressive, ModeParanoid:
 	default:
 		return errors.New("titan policy mode is invalid")
 	}
-	if p.Mode == ModeObserve && p.AutoQuarantine {
-		return errors.New("automatic quarantine requires CONTAIN or STRICT")
+	if (p.Mode == ModeObserve || p.Mode == ModeSimple) && p.AutoQuarantine {
+		return errors.New("automatic quarantine requires CONTAIN, BALANCED, STRICT, AGGRESSIVE or PARANOID")
 	}
 	reason := strings.TrimSpace(p.Reason)
 	if len(reason) < 8 || len(reason) > 512 {
@@ -349,14 +349,16 @@ func (s *PolicyStore) RemoveDevelopmentRoot(path, reason string) (Policy, error)
 
 func (s *PolicyStore) SetMode(mode string, autoQuarantine bool, reason string) (Policy, error) {
 	mode = strings.ToUpper(strings.TrimSpace(mode))
-	if mode != ModeObserve && mode != ModeContain && mode != ModeStrict {
+	switch mode {
+	case ModeObserve, ModeContain, ModeStrict, ModeSimple, ModeBalanced, ModeAggressive, ModeParanoid:
+	default:
 		return Policy{}, errors.New("titan policy mode rejected")
 	}
 	reason = strings.TrimSpace(reason)
 	if len(reason) < 8 || len(reason) > 512 {
 		return Policy{}, errors.New("titan policy reason boundary rejected")
 	}
-	if mode == ModeObserve {
+	if mode == ModeObserve || mode == ModeSimple {
 		autoQuarantine = false
 	}
 	s.mu.Lock()
@@ -364,6 +366,27 @@ func (s *PolicyStore) SetMode(mode string, autoQuarantine bool, reason string) (
 	next := clonePolicy(s.current)
 	next.Mode = mode
 	next.AutoQuarantine = autoQuarantine
+	next.UpdatedUTC = time.Now().UTC()
+	next.Reason = reason
+	if err := next.Validate(); err != nil {
+		return Policy{}, err
+	}
+	if err := s.persist(next); err != nil {
+		return Policy{}, err
+	}
+	s.current = next
+	return clonePolicy(next), nil
+}
+
+func (s *PolicyStore) SetCorrelationWithKillerdom(enabled bool, reason string) (Policy, error) {
+	reason = strings.TrimSpace(reason)
+	if len(reason) < 8 || len(reason) > 512 {
+		return Policy{}, errors.New("titan policy reason boundary rejected")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := clonePolicy(s.current)
+	next.CorrelateWithKillerdom = enabled
 	next.UpdatedUTC = time.Now().UTC()
 	next.Reason = reason
 	if err := next.Validate(); err != nil {

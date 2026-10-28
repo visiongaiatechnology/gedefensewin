@@ -24,8 +24,9 @@ type fixedEngine struct{ result hardening.Result }
 type fixedAudit struct{ result audit.Result }
 type fixedXDR struct{ result xdr.Result }
 type fixedMHX struct {
-	mode   string
-	status mhx.Status
+	mode          string
+	status        mhx.Status
+	sentinelStore *mhx.SentinelStore
 }
 type fixedIntegrity struct{ status integrity.Status }
 
@@ -66,6 +67,12 @@ func (f *fixedMHX) SetApplication(context.Context, string, string) ([]mhx.Applic
 	return []mhx.ApplicationAllow{}, nil
 }
 func (f *fixedMHX) ReconcilePolicy(context.Context) error {
+	return nil
+}
+func (f *fixedMHX) SentinelStore() *mhx.SentinelStore {
+	return f.sentinelStore
+}
+func (f *fixedMHX) TerminatePID(uint32, string) error {
 	return nil
 }
 func (f *fixedIntegrity) Status() integrity.Status { return f.status }

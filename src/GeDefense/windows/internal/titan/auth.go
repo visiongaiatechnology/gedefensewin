@@ -58,6 +58,15 @@ func Evaluate(policy Policy, store *PolicyStore, observation Observation, now ti
 		return authorization
 	}
 
+	// GeDefense Sovereign Self-Protection: GeDefense's own processes, executables, updates, and logs
+	if isGeDefenseOperation(observation) {
+		authorization.Status = TrustTolerated
+		authorization.Reason = "Autorisierte GeDefense Sovereign Eigenoperation; kein fremder Systemeingriff."
+		authorization.NeedsReview = false
+		authorization.AutoQuarantine = false
+		return authorization
+	}
+
 	if store != nil && observation.Object.Path != "" {
 		if permit := store.ConsumePermit(observation.Object.Path, observation.Object.SHA256, string(observation.Type), now); permit != nil {
 			authorization.Status = TrustAuthorized
@@ -88,6 +97,59 @@ func Evaluate(policy Policy, store *PolicyStore, observation Observation, now ti
 	if isMaintenanceStartOnly(observation) {
 		authorization.Status = TrustTolerated
 		authorization.Reason = "Starttyp eines Windows-Wartungsdienstes wurde geändert; ImagePath, Diensttyp und Konto blieben unverändert. Die Änderung bleibt in der Evidenz, wird aber nicht als Persistenz-Hochrisiko eskaliert."
+		authorization.NeedsReview = false
+		authorization.AutoQuarantine = false
+		return authorization
+	}
+
+	// 5.3.0 FP Normalization 1: Microsoft Defender Engine & Driver Updates
+	// In ModeSimple, ModeBalanced, ModeAggressive, ModeObserve, ModeContain, ModeStrict:
+	// Defender platform updates are tolerated. Only in ModeParanoid are they strictly flagged.
+	if policy.Mode != ModeParanoid && isDefenderPlatformUpdate(observation) {
+		authorization.Status = TrustTolerated
+		authorization.Reason = "Autorisiertes Microsoft Defender Plattform-/Signatur-Update durch MsMpEng; kein Fremdeingriff."
+		authorization.NeedsReview = false
+		authorization.AutoQuarantine = false
+		return authorization
+	}
+
+	// 5.3.0 FP Normalization 2: Windows Per-User Services (e.g. MessagingService_12541b, OneSyncSvc_12541b)
+	// In ModeSimple, ModeBalanced, ModeObserve, ModeContain:
+	// Dynamic session instances of legitimate registered system services are tolerated.
+	// In ModeAggressive, ModeStrict, ModeParanoid:
+	// They are NOT tolerated automatically because the user explicitly wants them alerted or blocked.
+	if policy.Mode == ModeSimple || policy.Mode == ModeBalanced || policy.Mode == ModeObserve || policy.Mode == ModeContain || policy.Mode == "" {
+		if isPerUser, baseName := isWindowsPerUserService(observation); isPerUser {
+			authorization.Status = TrustTolerated
+			authorization.Reason = fmt.Sprintf("Legitimer Windows Per-User-Dienst (%s); dynamische Session-Instanz; keine bösartige Persistenz.", baseName)
+			authorization.NeedsReview = false
+			authorization.AutoQuarantine = false
+			return authorization
+		}
+	}
+
+	// 5.3.0 FP Normalization 3: Visual Studio & Installer Session Temp Artifacts
+	if (policy.Mode == ModeSimple || policy.Mode == ModeBalanced || policy.Mode == ModeObserve || policy.Mode == ModeContain || policy.Mode == "") && isInstallerSessionTempArtifact(observation) {
+		authorization.Status = TrustTolerated
+		authorization.Reason = "Temporäre Sprach-/Ressourcendatei eines autorisierten UAC-Installationsvorgangs; kein eigenständiger Fremdeingriff."
+		authorization.NeedsReview = false
+		authorization.AutoQuarantine = false
+		return authorization
+	}
+
+	// 5.3.0 FP Normalization 4: Windows Scheduled Maintenance Tasks (Defender Scans, SvcRestartTask, UpdateOrchestrator)
+	if (policy.Mode == ModeSimple || policy.Mode == ModeBalanced || policy.Mode == ModeObserve || policy.Mode == ModeContain || policy.Mode == "") && isWindowsMaintenanceTask(observation) {
+		authorization.Status = TrustTolerated
+		authorization.Reason = "Autorisierter Windows-Systemwartungstask (Task Scheduler); legitime Systemoperation."
+		authorization.NeedsReview = false
+		authorization.AutoQuarantine = false
+		return authorization
+	}
+
+	// 5.3.0 FP Normalization 5: Development & Build Test Artifacts in Temp (go test *.test.exe, node, npm)
+	if (policy.Mode == ModeSimple || policy.Mode == ModeBalanced || policy.Mode == ModeObserve || policy.Mode == ModeContain || policy.Mode == "") && isDevBuildTempArtifact(observation) {
+		authorization.Status = TrustTolerated
+		authorization.Reason = "Autorisiertes lokales Entwicklungs- oder Test-Build-Artefakt in temporärem Verzeichnis."
 		authorization.NeedsReview = false
 		authorization.AutoQuarantine = false
 		return authorization
@@ -284,4 +346,204 @@ func describeRisk(authorization Authorization) string {
 		return fmt.Sprintf("%s · Freigabe %s", authorization.Status, authorization.MatchedGrant)
 	}
 	return fmt.Sprintf("%s · Risiko %d", authorization.Status, authorization.RiskScore)
+}
+
+var knownPerUserTemplates = map[string]struct{}{
+	"messagingservice":                   {},
+	"onesyncsvc":                         {},
+	"wpnuserservice":                     {},
+	"cdpusersvc":                         {},
+	"bluetoothuserservice":               {},
+	"devicesflowusersvc":                 {},
+	"captureservice":                     {},
+	"cbdhsvc":                            {},
+	"bcastdvruserservice":                {},
+	"p9rdrservice":                       {},
+	"penservice":                         {},
+	"userdatasvc":                        {},
+	"devicepickerusersvc":                {},
+	"deviceassociationbrokersvc":         {},
+	"udkusersvc":                         {},
+	"webthreatdefusersvc":                {},
+	"aarsvc":                             {},
+	"pimindexmaintenancesvc":             {},
+	"npsmsvc":                            {},
+	"cloudbackuprestoresvc":              {},
+	"consentuxusersvc":                   {},
+	"unistoresvc":                        {},
+	"printworkflowusersvc":               {},
+	"credentialenrollmentmanagerusersvc": {},
+	"sharedrealitysvc":                   {},
+	"graphicsperfsvc":                    {},
+}
+
+func isWindowsPerUserService(observation Observation) (bool, string) {
+	if observation.Object.Kind != ObjectService {
+		return false, ""
+	}
+	name := strings.TrimSpace(observation.Object.Name)
+	underscore := strings.LastIndex(name, "_")
+	if underscore <= 0 || underscore >= len(name)-1 {
+		return false, ""
+	}
+	base := name[:underscore]
+	suffix := name[underscore+1:]
+	// Suffix must be 4 to 8 hexadecimal digits (the user session LUID)
+	if len(suffix) < 4 || len(suffix) > 8 {
+		return false, ""
+	}
+	for _, ch := range suffix {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
+			return false, ""
+		}
+	}
+	if _, ok := knownPerUserTemplates[strings.ToLower(base)]; ok {
+		return true, base
+	}
+	// Fallback: If base name ends with "service" or "svc", it is also a per-user template instance
+	baseLower := strings.ToLower(base)
+	if strings.HasSuffix(baseLower, "svc") || strings.HasSuffix(baseLower, "service") {
+		return true, base
+	}
+	return false, ""
+}
+
+func isDefenderPlatformUpdate(observation Observation) bool {
+	actorImage := strings.ToLower(filepath.Base(strings.TrimSpace(observation.Actor.Image)))
+	if actorImage == "" && observation.Actor.Path != "" {
+		actorImage = strings.ToLower(filepath.Base(strings.TrimSpace(observation.Actor.Path)))
+	}
+
+	// 1. Defender Drivers & Binaries
+	if observation.Object.Kind == ObjectFile {
+		path := strings.ToLower(filepath.Clean(observation.Object.Path))
+		name := strings.ToLower(observation.Object.Name)
+		isDefenderDriverPath := strings.Contains(path, `\system32\drivers\wd\`) || strings.Contains(path, `\programdata\microsoft\windows defender\platform\`)
+		isDefenderDriverName := name == "wddevflt.sys" || name == "ksld.sys" || name == "wdfilter.sys" || name == "wdboot.sys"
+		if isDefenderDriverPath || isDefenderDriverName {
+			if actorImage == "msmpeng.exe" || actorImage == "mpsigstub.exe" || actorImage == "trustedinstaller.exe" || actorImage == "tiworker.exe" {
+				return true
+			}
+			// If actor image was not captured during temporal correlation, driver path and name match
+			if isDefenderDriverPath && isDefenderDriverName {
+				return true
+			}
+		}
+	}
+
+	// 2. Defender Services ImagePath/Config updates
+	if observation.Object.Kind == ObjectService {
+		serviceName := strings.ToUpper(strings.TrimSpace(observation.Object.Name))
+		if serviceName == "WINDEFEND" || serviceName == "WDNISSVC" || serviceName == "MDCORESVC" || serviceName == "SENSE" {
+			if actorImage == "msmpeng.exe" || actorImage == "trustedinstaller.exe" || actorImage == "tiworker.exe" || actorImage == "services.exe" || actorImage == "" {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func isInstallerSessionTempArtifact(observation Observation) bool {
+	if observation.Object.Kind != ObjectFile {
+		return false
+	}
+	path := strings.ToLower(filepath.Clean(observation.Object.Path))
+	if !strings.Contains(path, `\appdata\local\temp\`) && !strings.Contains(path, `\windows\temp\`) {
+		return false
+	}
+	name := strings.ToLower(observation.Object.Name)
+	if strings.HasSuffix(name, ".resources.dll") {
+		return true
+	}
+	actorImage := strings.ToLower(filepath.Base(strings.TrimSpace(observation.Actor.Image)))
+	switch actorImage {
+	case "consent.exe", "dllhost.exe", "msiexec.exe", "setup.exe", "vs_installer.exe", "vs_installerservice.exe", "tiworker.exe", "trustedinstaller.exe":
+		if strings.HasSuffix(name, ".dll") || strings.HasSuffix(name, ".tmp") {
+			return true
+		}
+	}
+	return false
+}
+
+func isWindowsMaintenanceTask(observation Observation) bool {
+	path := strings.ToLower(filepath.Clean(observation.Object.Path))
+	name := strings.ToLower(strings.TrimSpace(observation.Object.Name))
+
+	isTask := observation.Object.Kind == ObjectScheduledTask || strings.Contains(path, `\windows\system32\tasks\`)
+	if !isTask {
+		return false
+	}
+
+	if strings.Contains(path, `\microsoft\windows\windows defender`) ||
+		strings.Contains(path, `\microsoft\windows\updateorchestrator`) ||
+		strings.Contains(path, `\microsoft\windows\waasmedic`) ||
+		strings.Contains(path, `\microsoft\windows\appid\svcrestarttask`) ||
+		strings.Contains(path, `\microsoft\windows\servicing`) ||
+		strings.Contains(path, `\microsoft\windows\flighting`) ||
+		strings.Contains(path, `\microsoft\windows\diskcleanup`) ||
+		strings.Contains(path, `\microsoft\windows\defrag`) ||
+		name == "svcrestarttask" {
+		return true
+	}
+	return false
+}
+
+func isDevBuildTempArtifact(observation Observation) bool {
+	if observation.Object.Kind != ObjectFile {
+		return false
+	}
+	path := strings.ToLower(filepath.Clean(observation.Object.Path))
+	name := strings.ToLower(observation.Object.Name)
+
+	isTemp := strings.Contains(path, `\appdata\local\temp\`) || strings.Contains(path, `\windows\temp\`)
+	if !isTemp {
+		return false
+	}
+
+	// 1. Go test executables and Go build cache
+	if strings.HasSuffix(name, ".test.exe") || strings.Contains(path, `\go-build`) || name == "a.out.exe" {
+		return true
+	}
+
+	// 2. Node.js / NPM / yarn build artifacts and modules in temp
+	if strings.Contains(path, `\npm-cache\`) || strings.Contains(path, `\yarn-`) || strings.Contains(path, `\node_modules\`) {
+		return true
+	}
+
+	// 3. Known developer tool actor
+	actorImage := strings.ToLower(filepath.Base(strings.TrimSpace(observation.Actor.Image)))
+	switch actorImage {
+	case "go.exe", "compile.exe", "link.exe", "node.exe", "python.exe", "pwsh.exe", "powershell.exe", "code.exe", "vscodium.exe", "antigravity.exe":
+		if strings.HasSuffix(name, ".exe") || strings.HasSuffix(name, ".js") || strings.HasSuffix(name, ".py") || strings.HasSuffix(name, ".tmp") {
+			return true
+		}
+	}
+	return false
+}
+
+func isGeDefenseOperation(observation Observation) bool {
+	actorPath := strings.ToLower(filepath.Clean(strings.TrimSpace(observation.Actor.Path)))
+	if strings.Contains(actorPath, `\vgt\gedefense\`) || strings.Contains(actorPath, `\program files\vgt\gedefense\`) {
+		return true
+	}
+	for _, parent := range observation.Actor.ProcessChain {
+		if strings.Contains(strings.ToLower(parent), `\vgt\gedefense\`) || strings.Contains(strings.ToLower(parent), `\program files\vgt\gedefense\`) {
+			return true
+		}
+	}
+	// A bare image name is attacker-controlled and must never grant the
+	// sovereign exemption. Only the installed GeDefense tree qualifies.
+	objPath := strings.ToLower(filepath.Clean(observation.Object.Path))
+	if strings.Contains(objPath, `\vgt\gedefense\`) || strings.Contains(objPath, `\program files\vgt\gedefense`) ||
+		strings.Contains(objPath, `\programdata\vgt\gedefense`) {
+		return true
+	}
+	if observation.Object.Kind == ObjectService {
+		svcName := strings.ToLower(strings.TrimSpace(observation.Object.Name))
+		if svcName == "gedefense" || svcName == "gedefense-windows" || strings.HasPrefix(svcName, "gedefense") {
+			return true
+		}
+	}
+	return false
 }

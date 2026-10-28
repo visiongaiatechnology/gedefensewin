@@ -25,11 +25,18 @@
 
 # Handoff / AI-agent artifacts (never published)
 /Next.md
+/CURRENT_TASK.md
+/HANDOFF.md
+/SESSION_NOTES.md
+/DEVELOPER_NOTES.md
+/AGENT_NOTES.md
+/WORKLOG.md
+/_analysis/
+/_handoff/
 /MERGE_REPORT.json
 /START_HERE_FULL_MERGED_SOURCE.md
 /GITHUB-UPLOAD.md
 /FULL_SOURCE_SHA256.txt
-/CHANGELOG.md
 /RELEASE-NOTES.md
 /docs/VERIFICATION-*.md
 /docs/AUDIT-REMEDIATION-*.md
