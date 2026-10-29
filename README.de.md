@@ -9,7 +9,7 @@
 [English](README.md) · **Deutsch** · [Русский](README.ru.md) · [中文](README.zh.md)
 
 [![License](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-5.3.0-orange?style=for-the-badge)](#release-history-v5)
+[![Version](https://img.shields.io/badge/Version-5.3.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
 [![Status](https://img.shields.io/badge/Status-Public_Beta-yellow?style=for-the-badge)](#public-beta-advisory)
 [![Platform](https://img.shields.io/badge/Platform-Windows_11_x64-lightgrey?style=for-the-badge&logo=windows)](#system-requirements)
 [![Control Plane](https://img.shields.io/badge/Control_Plane-Local%2FSovereign-brightgreen?style=for-the-badge)](#local-sovereignty-and-privacy)
@@ -34,6 +34,19 @@
 > **Installer-Update (5.3.0):** Der bisherige selbstsignierte PowerShell-Bootstrap konnte auf frischen Windows-Installationen fehlschlagen, weil das VGT-Zertifikat nicht vertraut war. Das Release verwendet jetzt einen gebrandeten **Inno-Setup-Installer**, der das Beta-Zertifikat nach Annahme der Lizenz automatisch importiert — manuelle Zertifikatsschritte sind nicht mehr nötig.
 >
 > **[GeDefense Windows 5.3.0 Installer herunterladen](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v5.3.0/GeDefense-Setup-x64-v5.3.0.exe)**
+
+## 🌐 Das GeDefense-Universum
+
+GeDefense ist eine lokal-first Security-Fabric – für Linux, Windows, Android und WordPress. Alle Schwesterprojekte teilen dieselbe Philosophie: lokale Kontrolle, ehrliche Sichtbarkeit, keine stille Telemetrie.
+
+| Projekt | Schwerpunkt |
+| --- | --- |
+| [![Android TV](https://img.shields.io/badge/Android_TV-3DDC84?style=flat-square&logo=android&logoColor=0B1220)](https://github.com/visiongaiatechnology/gedefense_androidtv) **GeDefense TV** | Sicherheitskonsole für Android TV / Google TV: Loopback-VPN, Traffic-Map, XDR-Light und reversibles Kinetic-Lite-Containment. |
+| [![Linux](https://img.shields.io/badge/Linux-D4AF37?style=flat-square&logo=linux&logoColor=0B1220)](https://github.com/visiongaiatechnology/gedefense) **GeDefense Linux** | Kernel-nahe Netzwerkverteidigung: eBPF/XDP-Durchsetzung, L7-WAF, Host-XDR mit signierter Evidenz und reversible Härtung (Rust/Go, vollständig lokal). |
+| [![Windows](https://img.shields.io/badge/Windows-8B5CF6?style=flat-square&logo=windows&logoColor=ffffff)](https://github.com/visiongaiatechnology/gedefensewin) **GeDefense Windows** *(dieses Repository)* | Lokale, souveräne Windows-11-Sicherheitskonsole: Defender/ASR/WFP/App Control, Härtung, MHX EDR/XDR, lokale Threat Intelligence und HMAC-verkettete Evidenz. |
+| [![Android](https://img.shields.io/badge/Android-22D3EE?style=flat-square&logo=android&logoColor=0B1220)](https://github.com/visiongaiatechnology/gedefenseandroid) **GeDefense Android** | Native Android-Sicherheitsplattform: lokale VPN-Durchsetzung, Endpoint-Telemetrie, XDR/EDR-Korrelation, Threat Intelligence, App-Risikoanalyse und verschlüsselte Evidenz. |
+| [![WordPress](https://img.shields.io/badge/WordPress-1F8FFF?style=flat-square&logo=wordpress&logoColor=ffffff)](https://github.com/visiongaiatechnology/gedefensewp) **GeDefense WordPress** | AGPL-3.0-Open-Core-Suite für WordPress: ZEUS-WAF, AEGIS-Deep-Packet-Inspection, TRINITY-XDR, ThroneGuard-Lockdown und HADES-Admin-Cloaking. |
+
 
 <a id="public-beta-advisory"></a>
 
@@ -82,7 +95,6 @@ Titan kombiniert:
 
 ---
 
-<a id="release-history-v5"></a>
 
 ## Neu in 5.3.0
 
@@ -97,93 +109,6 @@ Titan kombiniert:
 ## Für kritische Szenarien gebaut
 
 GeDefense Windows 5.3.0 ist für Windows-11-Endpunkte gedacht, bei denen der Betreiber in isolierten, regulierten oder Offline-Umgebungen die Kontrolle behalten muss: lokale Control Plane, keine Cloud-Abhängigkeit, prüfbare Evidenz, begrenzte Ressourcen und explizite Antwortgrenzen. Es ist **keine** Behauptung vollständigen Schutzes: Kernel-/Firmware-Kompromittierung, ein bösartiger lokaler Administrator und eine vollständige Supply-Chain-Kompromittierung liegen außerhalb der Produktgrenze; der Build ist selbstsigniert und weiterhin Public Beta.
-
-## Release-Historie V5
-
-### 5.3.0 — Sentinel-Ausführungsebene, Provenance-Härtung und Einsatzreife für kritische Szenarien
-
-- Sentinel-/Killerdom-Konsole mit Signatur-Toggles, System-App-Isolation, Allowlist-Pinning, durchgesetztem Ghost Mode und Titan-Korrelation.
-- VGT-100-Security-Review: 81/81 anwendbare Grenzen PASS, 0 FAIL, keine offenen CRITICAL/HIGH-Findings; Release-Gate `ELIGIBLE_FOR_REVIEW`.
-- Live verifiziert: Ghost Mode 9 Firewall-Regeln plus Hosts-Sinkhole und Rollback; Sentinel-Rendering 6/9/14 Zeilen; `govulncheck` 0; signierter Installer.
-- Dokumentierte Grenzen: Public Beta, selbstsigniert, lokale Admin-/SYSTEM-Kompromittierung außerhalb der Produktgrenze.
-
-**Vollständiger Changelog:** [CHANGELOG.md](CHANGELOG.md)
-
-### 5.2.0 — Internationalisierung und sauberes Quellcode-Release
-
-- **Vier UI-Sprachen:** Deutsch, Englisch, Russisch und vereinfachtes Chinesisch, mit einem Sprachumschalter im Header und automatischer Erkennung anhand der System-/Browsersprache.
-- **Sauberes Repository:** generierte Build-Ausgaben (`work/`, `payload/`, `release/`, `sbom/`), Übergabe-/Agent-Artefakte und historische Verifikationsberichte sind nicht mehr Teil des Quellbaums; `.gitignore` und das Release-Gate erzwingen die Trennung.
-- **README-Konsolidierung:** Release-Historie, Titan-Erläuterung, Zusammenfassung der Sicherheitskorrekturen, Lizenzierung und Drittanbieter-Attribution befinden sich jetzt in einem gepflegten Dokument in vier Sprachen.
-- **Attribution:** die jsVectorMap-Kartengeometrie (MIT, `world-merc.js` 1.7.0) und die ASN-Datenbankquelle **iplocate/ip-address-databases** (CC BY-SA 4.0) werden ausdrücklich genannt (siehe [Lizenzen und Attribution](#licenses-and-attribution)).
-- **Versionsidentität:** `VERSION`/Go-Produktversion 5.2.0; deterministisches SBOM, Provenienz und signierter Installer werden von der Build-Pipeline erzeugt.
-- **Installer- und Upgrade-Zuverlässigkeit:** Bei blockiertem Benutzer-Cache weicht der Installer auf ein sicheres temporäres Staging-Verzeichnis aus; Publisher-Vertrauen wird über den Zertifikatsspeicher statt über eine interaktive `Import-Certificate`-Abfrage gesetzt; veraltete Hardening-/MHX-Baselines werden archiviert und migriert, statt Upgrades zu blockieren; Audit-Richtlinien-Backups und die Behandlung signierter Skripte überstehen Neuinstallationen; der Dienst startet mit korrekter Selbst-Relativ-DACL-Prüfung.
-- **UI-Identität:** TITAN-5.2-Kennzeichnung und Fenstertitel `GeDefense V5 · Windows Security Center` benennen das aktuelle Release.
-
-### 5.1.4 — Audit-Behebung 2 (verbleibende lokal behebbare Befunde)
-
-- **Bediener-Authentifizierung:** Center und Tray lesen nicht mehr das langlebige `dashboard.token`. Ein neuer Loopback-Bediener-Broker verifiziert das Windows-Prozesstoken des Aufrufers (Mitgliedschaft in `VGT GeDefense Operators` oder in der Gruppe Administrators), stellt kurzlebige Sitzungen mit begrenztem Geltungsbereich aus und auditiert das Betriebssystemkonto. Datenstammverzeichnis und Master-Token sind ausschließlich SYSTEM/Administratoren vorbehalten.
-- **Downgrade-Schutz:** Der Installer verweigert das Überschreiben einer neueren Installation (`-AllowDowngrade` nur für ein ausdrückliches, dokumentiertes Rollback).
-- **Nachweise und Übergabe:** verbleibende Live-Journale aus dem Lieferpaket entfernt (mit SHA-256 archiviert); optionaler externer Nachweiszeuge mit Erkennung von Abschneidungen; das Gate für Distributionshygiene schlägt bei Journalen, Schlüsseln, Tokens und `.git`-Metadaten hart fehl.
-- **Host-Härtung:** fremde/vorab erzeugte Single-Instance-Objekte werden nicht mehr als Autorität akzeptiert; Browser-Executables werden vor dem Start per Authenticode verifiziert.
-- **Lieferkette:** deterministische SBOM-/Provenienz-/Sidecar-Kette mit Kreuzverifikation, fail-closed Publish-Gate und einer CI-Workflow-Definition.
-- **Akzeptierte externe Blocker:** öffentliche CA-Signaturidentität, RFC-3161-Zeitstempel, CRL/OCSP, ein extern verankerter Anti-Rollback-Kanal und Feed-Signaturschlüssel bleiben per Eigentümerentscheidung offen; sie werden **nicht** als bestanden gewertet.
-
-### 5.1.3 — Behebung der Sicherheitsprüfung und Lieferkette
-
-- Go 1.26.10; `govulncheck -mode=binary` als verpflichtendes Release-Gate (0 erreichbare Schwachstellen in allen vier Binärdateien).
-- Echtes CycloneDX-SBOM, deterministisches reproduzierbares Quellarchiv, Provenienz-Artefakt, Pakethygiene-Prüfungen und fail-closed Publikationsverifikation.
-- API/Authentifizierung: serverseitige Scopes (read/operate/policy/window), bereichsbezogene Sitzungen, Revoke/Logout, Rotation, absolute/Untätigkeits-Ablaufzeiten, Ratenbegrenzungen pro Klasse, verpflichtende Replay-IDs, Sicherheits-Header bei frühen Ablehnungen, undurchsichtige Engine-Fehler, typisierte Bestätigung plus Begründung bei sicherheitsreduzierenden Änderungen. Das Browser-Bootstrap führt kein Geheimnis mehr in Chromium-Argumenten mit.
-- Titan/Datenebene: vererbungsgeschützte Geheimnisverzeichnisse, signierter Feed-Authority-Verifier, harte Feed-TTL mit explizitem `UNCONFIGURED`-Status, HMAC-authentifizierte Overrides, reparse-sichere Pfade, begrenzte ADS-Lesevorgänge, Tresor-Kontingent/Aufbewahrung, rotierende Nachweisarchive, Sichtbarmachen von Append-Fehlern und Behandlung von Uhrzeit-Rückläufen.
-- Host/MHX: vollständige Präfix-Normalisierung kodierter Befehle, Ablehnung von UNC-/Geräte-/Reparse-Image-Pfaden durch den Watcher, ausschließlich lokale XDR-Signaturprüfungen, PID-Wiederverwendungs-sichere Beendigung von Prozessbäumen, identitätsgebundene Single-Instance-Objekte und MHX-Baseline-/Integritätsbindung.
-- Ergebnis: 33 von 48 Befunden der Tiefenprüfung behoben, 10 teilweise entschärft, 5 externe Vertrauensblocker dokumentiert (fortgesetzt in 5.1.4).
-
-### 5.1.2 — Lesbarkeit, optische Auffrischung von Titan und schnelle Bereitschaft
-
-- Weiße Typografie im gesamten Sicherheitscenter und in Titan; Hierarchie über Größe, Gewicht, Abstand und Flächen; semantische Zustände bleiben über getönte Flächen, Rahmen und Statuspunkte sichtbar.
-- Titan übernimmt die Materialsprache von Glass 2100: kompakte Bedienbühne, eisblaue Primärsignale, Bronze nur als Nachweisakzent, segmentierte Tabs und dichte Sensorzeilen.
-- Schnelleres Start-Gate durch zwischengespeicherten Gesundheitsstatus, 3-s-Grenze für die Richtlinienabstimmung, Feed-Synchronisierung im Hintergrund, keine blockierende Netzwerksynchronisierung.
-- Änderungen des Starttyps von BITS-/Wartungsdiensten sind `TOLERATED`, wenn Image-Pfad, Diensttyp und Konto unverändert bleiben; identische offene Befunde werden innerhalb von zehn Minuten zu einem Toast zusammengefasst; Sammelprüfung von bis zu 100 Befunden; stabiler Watcher-Herzschlag und weniger Rauschen durch Temp-Löschungen.
-
-### 5.1.1 — Titan-Feldkorrekturen
-
-- Rauschfilter für PowerShell-Richtlinientestdateien, Treiber-Dumps und nicht ausführbare temporäre Artefakte; Einstufung als toleriert für nicht ausführbare Eingangsdateien mit mittlerem Score.
-- Dienst-Normalisierung für `C:\Windows` vs. `%SystemRoot%` und Abweichungen in der Groß-/Kleinschreibung.
-- Eigentümerfreigaben (Pfad, optionaler SHA-256, Aktion, Ablauf, einmalig) und Entwicklungsbaum-Marker, jeweils mit einem Nachweisereignis.
-- Mehr Titan-/Server-Tests und ein erweitertes Browser-Fixture.
-
-### 5.1.0 — GeDefense Titan
-
-- Neue Titan-Kontrollcenter-Seite mit Sicherheitslage, Eingangs-Zeitleiste, Quarantäne, Eigentümerrichtlinie und Nachweisen.
-- Vertrauens- und Autorisierungsmodell (`AUTHORIZED`, `TOLERATED`, `UNEXPECTED`, `COMPROMISED`).
-- Nativer Windows-Sensor, Persistenz-/Sicherheitsinventar, signierte Nachweiskette, Quarantänetresor, Eigentümerrichtlinie und Reaktion, native Benachrichtigungen.
-- Ausdrückliche ehrliche Grenzen und Branding-Update auf **GeDefense Titan**.
-
-### 5.0.0 — Konfigurierbares Sicherheitsgefüge
-
-- Serverseitige Einstellungs-Engine mit 55 validierten Steuerungen über Defender, Firewall, Härtung, MHX, Kinetic, Threat Intelligence, Start und Benachrichtigungen.
-- Benutzerdefinierte Schutzprofile mit serverseitig erzwungenen Mindestwerten und Bestätigungsphrasen.
-- Tiefe Defender-Telemetrie mit real gemessenen Werten und explizitem `null` für nicht messbare Felder.
-- Validierte Anwendungspfade für Defender/Firewall/Härtung mit Nachweis-, Baseline- und Rollback-Unterstützung.
-- MHX-XDR-Autoreaktion, Benachrichtigungen und Anwendungs-Zulassen/Blockieren über echte Windows-Firewall-Programmregeln.
-- Threat-Intelligence-Seite mit Autorität pro Feed und Generationsverifikation; Kinetic Defense bleibt mit erneuter Verifikation nach einem Neustart aktiv.
-- Start-Gate nur bei Bedarf, selbstheilender Dienst-Supervisor, UX-Verbesserungen bei Härtung/Audit/Nachweisen.
-- Neue V5-Konsolengestaltung „Glass 2100“, native Windows-Block-Toasts, Korrekturen an WFP-Kardinalität und Synchronisierungsgeschwindigkeit, Feintuning von Falschmeldungen.
-- Neues natives Win32-Installer-Design mit gemessenem Fortschritt, Phasenleiste und Vertrauens-Seitenleiste.
-
----
-
-## Was wir bei der Sicherheitshärtung korrigiert haben
-
-Die Tiefenprüfung (`VGT-AUDIT-20261022-GEDEF-512`) umfasste 48 Befunde aus HTTP/API/Authentifizierung, Datenebene (Parser, Dateien, Nachweise, Titan, Threat Intelligence), Host-Rechten/Diensten/MHX/WFP/Härtung und der PowerShell-Engine. Über 5.1.3 und 5.1.4 hinweg:
-
-- **Lokal behoben:** Authentifizierung und Scopes, Sitzung/Rotation/Replay, ACLs für Tokens und Geheimnisse, Entfernen des Bootstrap-Geheimnisses aus Browser-Argumenten, Behandlung von Nachweiskette und Checkpoints, Feed-TTL/Autoritätsverifikation, Härtung von Tresor/Aufbewahrung/ADS/Reparse, PID-Wiederverwendungs-sichere Prozessbehandlung, Single-Instance-Autorität, Authenticode-Verifikation des Browsers, Installer-Downgrade-Schutz, Hygiene des Release-Kanals, SBOM-/Provenienz-/Sidecar-Kette, Übergabe-Hygiene und Sauberkeit des Repositories.
-- **Entschärft mit dokumentiertem Restrisiko:** Der Center-Host bleibt ein externer Chromium-Kiosk ohne eingebetteten Renderer; Browser-Pfade gelten maschinenweit, sind durch Administratoren beschreibbar, reparse-frei und Authenticode-verifiziert.
-- **Externe Blocker, vom Eigentümer akzeptiert, nicht als bestanden gewertet:** öffentliche Code-Signaturidentität mit RFC-3161-Zeitstempel und CRL/OCSP-Widerruf, Vertrauensbereitstellung auf sauberen Hosts, ein extern verankerter Anti-Rollback-Kanal und VGT-Feed-Signaturschlüssel. Der Feed-Verifier bleibt fail-closed `UNCONFIGURED`, bis Schlüssel bereitgestellt sind.
-- **Verifikation:** vollständiges Release-Gate (Go Race mit `vgt_bundle`, Go Vet, govulncheck-binary, PowerShell-Parsing, Sicherheitsinvarianten des Frontends, SBOM, Provenienz, Distributionshygiene, Installer-Sicherheit, Release-Kanal, Sidecar-Bindung und Publish-Gates), deterministisches Quellarchiv, signierter Installer-Build, Offline-Publish-Verifikation sowie Unit-/Integrationstests für jedes berührte Paket.
-
----
-
-<a id="architecture"></a>
 
 ## Architektur
 

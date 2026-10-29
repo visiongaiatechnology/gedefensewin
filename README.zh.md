@@ -9,7 +9,7 @@
 [English](README.md) · [Deutsch](README.de.md) · [Русский](README.ru.md) · **中文**
 
 [![许可证](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=for-the-badge)](LICENSE)
-[![版本](https://img.shields.io/badge/Version-5.3.0-orange?style=for-the-badge)](#release-history-v5)
+[![版本](https://img.shields.io/badge/Version-5.3.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
 [![状态](https://img.shields.io/badge/Status-Public_Beta-yellow?style=for-the-badge)](#public-beta-advisory)
 [![平台](https://img.shields.io/badge/Platform-Windows_11_x64-lightgrey?style=for-the-badge&logo=windows)](#system-requirements)
 [![控制平面](https://img.shields.io/badge/Control_Plane-Local%2FSovereign-brightgreen?style=for-the-badge)](#local-sovereignty-and-privacy)
@@ -34,6 +34,19 @@
 > **安装程序更新（5.3.0）：**此前的自签名 PowerShell 引导程序在全新 Windows 系统上可能因 VGT 证书不受信任而失败。本版本现使用品牌化的 **Inno Setup 安装程序**，在您接受许可证后自动导入测试版证书——无需再手动处理证书。
 >
 > **[下载 GeDefense Windows 5.3.0 安装程序](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v5.3.0/GeDefense-Setup-x64-v5.3.0.exe)**
+
+## 🌐 GeDefense 宇宙
+
+GeDefense 是一套本地优先的安全架构，覆盖 Linux、Windows、Android 和 WordPress。所有同系项目遵循同一理念：本地控制、诚实可见性、无静默遥测。
+
+| 项目 | 方向 |
+| --- | --- |
+| [![Android TV](https://img.shields.io/badge/Android_TV-3DDC84?style=flat-square&logo=android&logoColor=0B1220)](https://github.com/visiongaiatechnology/gedefense_androidtv) **GeDefense TV** | Android TV / Google TV 安全控制台：回环 VPN、流量地图、XDR-Light 与可逆 Kinetic-Lite 遏制。 |
+| [![Linux](https://img.shields.io/badge/Linux-D4AF37?style=flat-square&logo=linux&logoColor=0B1220)](https://github.com/visiongaiatechnology/gedefense) **GeDefense Linux** | 内核级网络防御：eBPF/XDP 执行、L7 WAF、带签名证据的主机 XDR、可逆加固（Rust/Go，完全本地）。 |
+| [![Windows](https://img.shields.io/badge/Windows-8B5CF6?style=flat-square&logo=windows&logoColor=ffffff)](https://github.com/visiongaiatechnology/gedefensewin) **GeDefense Windows** *（本仓库）* | 本地自主的 Windows 11 安全控制台：Defender/ASR/WFP/App Control、加固、MHX EDR/XDR、本地威胁情报与 HMAC 链式证据。 |
+| [![Android](https://img.shields.io/badge/Android-22D3EE?style=flat-square&logo=android&logoColor=0B1220)](https://github.com/visiongaiatechnology/gedefenseandroid) **GeDefense Android** | 原生 Android 安全平台：本地 VPN 执行、端点遥测、XDR/EDR 关联、威胁情报、应用风险分析与加密证据。 |
+| [![WordPress](https://img.shields.io/badge/WordPress-1F8FFF?style=flat-square&logo=wordpress&logoColor=ffffff)](https://github.com/visiongaiatechnology/gedefensewp) **GeDefense WordPress** | AGPL-3.0 开源核心 WordPress 套件：ZEUS WAF、AEGIS 深度包检测、TRINITY XDR、ThroneGuard 锁定与 HADES 后台隐藏。 |
+
 
 <a id="public-beta-advisory"></a>
 
@@ -82,7 +95,6 @@ Titan 结合了以下内容：
 
 ---
 
-<a id="release-history-v5"></a>
 
 ## 5.3.0 新增内容
 
@@ -97,93 +109,6 @@ Titan 结合了以下内容：
 ## 为关键场景而构建
 
 GeDefense Windows 5.3.0 面向需要在隔离、受监管或离线环境中保持控制权的 Windows 11 终端：仅本地控制平面、无云依赖、可验证证据、受限资源和明确响应边界。这**并非**完整保护的声明：内核/固件失陷、恶意本地管理员和完整供应链失陷仍超出产品边界；该构建为自签名，仍属公开测试版。
-
-## V5 发布历史
-
-### 5.3.0 — Sentinel 执行平面、来源加固与关键场景就绪
-
-- Sentinel/Killerdom 控制台，包含签名开关、系统应用隔离、允许列表固定、强制 Ghost Mode 与 Titan 关联。
-- VGT-100 安全审计：81/81 适用控制项 PASS，0 FAIL，无未解决的 CRITICAL/HIGH；发布门禁 `ELIGIBLE_FOR_REVIEW`。
-- 实际验证：Ghost Mode 9 条防火墙规则、hosts sinkhole 与回滚；Sentinel 渲染 6/9/14 行；`govulncheck` 0；签名安装程序。
-- 已记录限制：公开测试版、自签名、本地 admin/SYSTEM 失陷在产品边界之外。
-
-**完整变更日志：** [CHANGELOG.md](CHANGELOG.md)
-
-### 5.2.0 — 国际化与整洁源码发布
-
-- **四种 UI 语言：**德语、英语、俄语和简体中文，页眉中带有语言切换器，并可根据系统/浏览器语言自动检测。
-- **整洁的仓库：**生成的构建输出（`work/`、`payload/`、`release/`、`sbom/`）、交接/代理产物和历史验证报告不再属于源码树；`.gitignore` 和发布门禁强制实施这一分离。
-- **README 整合：**发布历史、Titan 说明、安全修复摘要、许可和第三方归属现在集中在一份以四种语言维护的文档中。
-- **归属声明：**jsVectorMap 地图几何数据（MIT，`world-merc.js` 1.7.0）和 ASN 数据库来源 **iplocate/ip-address-databases**（CC BY-SA 4.0）均已明确署名（参见[许可证与归属](#licenses-and-attribution)）。
-- **版本标识：**`VERSION`/Go 产品版本 5.2.0；确定性 SBOM、来源证明和已签名安装程序由构建流水线生成。
-- **安装与升级可靠性：** 当用户缓存不可用时，安装程序改用安全的临时暂存目录；发布者信任通过证书存储导入，不再触发交互式 `Import-Certificate`；旧版 hardening/MHX 基线会被归档并迁移，而不是阻止升级；审计策略备份与签名脚本处理在重装时保持稳健；服务在自相对 DACL 校验下可正确启动。
-- **UI 标识：** TITAN 5.2 徽标与窗口标题“GeDefense V5 · Windows Security Center”标识当前版本。
-
-### 5.1.4 — 审计整改 2（其余可在本地修复的发现项）
-
-- **操作员身份验证：**Center 和 Tray 不再读取长期有效的 `dashboard.token`。新的回环操作员代理会验证调用者的 Windows 进程令牌（是否为 `VGT GeDefense Operators` 或 Administrators 组成员），签发短期的范围受限会话，并审计操作系统账户。数据根目录和主令牌仅限 SYSTEM/Administrators 访问。
-- **降级保护：**安装程序拒绝覆盖较新的安装（`-AllowDowngrade` 仅用于明确且已记录的回滚）。
-- **证据与交接：**交付包中已移除剩余的实时日志（以 SHA-256 归档）；可选的外部证据见证机制带截断检测；分发卫生门禁会在发现日志、密钥、令牌和 `.git` 元数据时直接判定失败。
-- **主机加固：**外部或预先创建的单实例对象不再被认可为权威依据；浏览器可执行文件在启动前会进行 Authenticode 验证。
-- **供应链：**确定性 SBOM/来源证明/sidecar 链，带交叉验证、默认拒绝式发布门禁以及 CI 工作流定义。
-- **已接受的外部阻塞项：**公共 CA 签名身份、RFC 3161 时间戳、CRL/OCSP、外部锚定的防回滚通道和情报源签名密钥仍由所有者决定保持未解决；它们**不计为通过**。
-
-### 5.1.3 — 安全审计整改与供应链
-
-- Go 1.26.10；将 `govulncheck -mode=binary` 作为强制发布门禁（全部四个二进制文件中 0 个可达漏洞）。
-- 真正的 CycloneDX SBOM、确定性且可复现的源码归档、来源证明工件、包卫生检查以及默认拒绝式发布验证。
-- **API/身份验证：**服务端作用域（read/operate/policy/window）、范围受限会话、撤销/注销、轮换、绝对/空闲过期、按类别限流、强制重放 ID、早期拒绝时附带安全响应头、不透明的引擎错误，以及针对降低安全性的变更要求输入确认文本并说明原因。浏览器引导不再在 Chromium 参数中携带机密。
-- **Titan/数据平面：**受继承保护的机密目录、已签名的情报源权威性验证器、具有明确 `UNCONFIGURED` 状态和硬性 TTL 的情报源、经 HMAC 认证的覆盖项、可安全处理重解析点的路径、有界 ADS 读取、保管库配额/保留、轮换证据归档、追加错误显现以及时钟回拨处理。
-- **主机/MHX：**完整的编码命令前缀规范化、监视器拒绝 UNC/设备/重解析点映像路径、仅本地 XDR 签名检查、PID 复用安全的进程树终止、按身份限定范围的单实例对象，以及 MHX 基线与完整性绑定。
-- **结果：**48 项深度审计发现中已修复 33 项、部分缓解 10 项、记录了 5 项外部信任阻塞项（在 5.1.4 中继续处理）。
-
-### 5.1.2 — 可读性、Titan 视觉更新与快速就绪
-
-- 安全中心和 Titan 全域采用白色字体排印；通过字号、字重、间距和表面建立层级；语义状态通过着色表面、边框和状态圆点保持可见。
-- Titan 采用 Glass 2100 材质语言：紧凑的控制区、冰蓝色主信号、仅以青铜色作为证据强调色、分段式标签页和密集的传感器行。
-- 通过缓存健康状态实现更快的启动门禁，策略协调时间上限为 3 秒，后台同步情报源，无阻塞式网络同步。
-- 当映像路径、服务类型和账户保持不变时，BITS/维护服务的启动类型变更会被视为 `TOLERATED`；相同的未解决发现会在十分钟内合并为一条通知；最多可批量审查 100 项发现；监视器心跳稳定，并减少临时文件删除噪声。
-
-### 5.1.1 — Titan 现场修复
-
-- 针对 PowerShell 策略测试文件、驱动程序转储和非可执行临时工件的噪声过滤；对非可执行的中等评分入口文件采用容忍分类。
-- 对 `C:\Windows` 与 `%SystemRoot%` 以及大小写漂移进行服务规范化。
-- 所有者许可（路径、可选 SHA-256、操作、到期时间、一次性）和开发树标记，每项均带有一个证据事件。
-- 更多 Titan/服务器测试以及扩展的浏览器测试夹具。
-
-### 5.1.0 — GeDefense Titan
-
-- 新增 Titan 控制中心页面，包含安全态势、入口时间线、隔离区、所有者策略和证据。
-- 信任与授权模型（`AUTHORIZED`、`TOLERATED`、`UNEXPECTED`、`COMPROMISED`）。
-- 原生 Windows 传感器、持久化/安全清单、已签名证据链、隔离保管库、所有者策略与响应、原生通知。
-- 明确说明坦诚的局限，并将品牌更新为 **GeDefense Titan**。
-
-### 5.0.0 — 可配置的安全防护体系
-
-- 服务端设置引擎，覆盖 Defender、防火墙、加固、MHX、Kinetic、威胁情报、启动和通知，包含 55 项经过验证的控制项。
-- 自定义防护配置文件，带服务端强制下限和确认短语。
-- 深入的 Defender 遥测，提供真实测量值，并对不可测量字段显式使用 `null`。
-- 经过验证的 Defender/防火墙/加固应用路径，支持证据、基线和回滚。
-- MHX XDR 自动响应、通知，以及通过真实 Windows 防火墙程序规则实现的应用程序允许/拒绝。
-- 威胁情报页面，具备逐情报源验证的权威性和生成验证；Kinetic Defense 保持活动状态，并在重启后重新验证。
-- 仅在需要时启用启动门禁，服务自愈监督程序，加固/审计/证据用户体验改进。
-- 全新的 V5“Glass 2100”控制台布局、原生 Windows 拦截通知、WFP 基数和同步速度修复、误报调优。
-- 全新的原生 Win32 安装程序设计，包含实测进度、阶段导轨和信任侧边栏。
-
----
-
-## 我们在安全加固中修复了什么
-
-深度审计（`VGT-AUDIT-20261022-GEDEF-512`）覆盖了 48 项发现，涉及 HTTP/API/身份验证、数据平面（解析器、文件、证据、Titan、威胁情报）、主机权限/服务/MHX/WFP/加固以及 PowerShell 引擎。在 5.1.3 和 5.1.4 中：
-
-- **已在本地修复：**身份验证与作用域、会话/轮换/重放、令牌与机密 ACL、从浏览器参数中移除引导机密、证据链与检查点处理、情报源 TTL/权威性验证、保管库/保留/ADS/重解析点加固、PID 复用安全的进程处理、单实例权威性、浏览器 Authenticode 验证、安装程序降级防护、发布通道卫生、SBOM/来源证明/sidecar 链、交接卫生以及仓库整洁性。
-- **已缓解并记录残余风险：**Center 主机仍是以外部 Chromium kiosk 模式运行，且不具备嵌入式渲染器；浏览器路径为全机范围、管理员可写、无重解析点，并且经过 Authenticode 验证。
-- **外部阻塞项（所有者已接受，不声称已通过）：**具备 RFC 3161 时间戳和 CRL/OCSP 撤销的公共代码签名身份、干净主机信任预配、外部锚定的防回滚通道以及 VGT 情报源签名密钥。在密钥预置完成前，情报源验证器保持处于默认拒绝的 `UNCONFIGURED` 状态。
-- **验证：**完整发布门禁（使用 `vgt_bundle` 的 Go race、Go vet、govulncheck-binary、PowerShell 解析、前端安全不变量、SBOM、来源证明、分发卫生、安装程序安全性、发布通道、sidecar 绑定和发布门禁）、确定性源码归档、已签名安装程序构建、离线发布验证，以及针对每个涉及包的单元/集成测试。
-
----
-
-<a id="architecture"></a>
 
 ## 架构
 
