@@ -9,7 +9,7 @@
 [English](README.md) · [Deutsch](README.de.md) · [Русский](README.ru.md) · **中文**
 
 [![许可证](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=for-the-badge)](LICENSE)
-[![版本](https://img.shields.io/badge/Version-5.3.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
+[![版本](https://img.shields.io/badge/Version-6.0.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
 [![状态](https://img.shields.io/badge/Status-Public_Beta-yellow?style=for-the-badge)](#public-beta-advisory)
 [![平台](https://img.shields.io/badge/Platform-Windows_11_x64-lightgrey?style=for-the-badge&logo=windows)](#system-requirements)
 [![控制平面](https://img.shields.io/badge/Control_Plane-Local%2FSovereign-brightgreen?style=for-the-badge)](#local-sovereignty-and-privacy)
@@ -31,9 +31,9 @@
 <img width="1536" height="1024" alt="GeDefense_ Real Security, Many Feathers" src="https://github.com/user-attachments/assets/68406427-a185-4fa5-b06a-af874a747dcb" />
 
 > [!IMPORTANT]
-> **安装程序更新（5.3.0）：**此前的自签名 PowerShell 引导程序在全新 Windows 系统上可能因 VGT 证书不受信任而失败。本版本现使用品牌化的 **Inno Setup 安装程序**，在您接受许可证后自动导入测试版证书——无需再手动处理证书。
+> **安装程序更新（6.0.0）：**此前的自签名 PowerShell 引导程序在全新 Windows 系统上可能因 VGT 证书不受信任而失败。本版本现使用品牌化的 **Inno Setup 安装程序**，在您接受许可证后自动导入测试版证书——无需再手动处理证书。
 >
-> **[下载 GeDefense Windows 5.3.0 安装程序](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v5.3.0/GeDefense-Setup-x64-v5.3.0.exe)**
+> **[下载 GeDefense Windows 6.0.0 安装程序](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v6.0.0/GeDefense-Setup-Inno-x64-v6.0.0.exe)**
 
 ## 🌐 GeDefense 宇宙
 
@@ -53,13 +53,13 @@ GeDefense 是一套本地优先的安全架构，覆盖 Linux、Windows、Androi
 ## ⚠️ 公开测试版公告
 
 > [!IMPORTANT]
-> **状态：公开测试版——GeDefense Windows 5.3.0。**
+> **状态：公开测试版——GeDefense Windows 6.0.0。**
 >
 > GeDefense Titan 正在积极开发中。**此测试版可能包含错误，包括安全缺陷。**我们持续进行加固、测试和修复，并欢迎每一份可复现的报告。
 >
 > - 请先在测试系统上使用测试版，保留备份，不要将其作为生产环境中唯一的安全控制措施。
 > - 请通过 [GitHub Issues](https://github.com/visiongaiatechnology/gedefensewin/issues) 报告错误、安全问题和功能请求，或按照 [SECURITY.md](SECURITY.md) 负责任地进行披露。
-> - 此版本为**自签名**，**没有公共 CA 信任**；目前尚无 RFC 3161 时间戳、CRL/OCSP 撤销路径或外部锚定的防回滚通道。因此，5.3.0 **不是可公开信任的发布版本**。参见[验证与信任](#verification-and-trust)。
+> - 此版本为**自签名**，**没有公共 CA 信任**；目前尚无 RFC 3161 时间戳、CRL/OCSP 撤销路径或外部锚定的防回滚通道。因此，6.0.0 **不是可公开信任的发布版本**。参见[验证与信任](#verification-and-trust)。
 > - 核心架构由自动化发布门禁验证（Go race、Go vet、govulncheck、SBOM、来源证明、安装程序和发布门禁）。实际安装和安全策略变更仍应在隔离的测试虚拟机上执行。
 
 ---
@@ -96,7 +96,7 @@ Titan 结合了以下内容：
 ---
 
 
-## 5.3.0 新增内容
+## 6.0.0 新增内容
 
 - **Sentinel / Killerdom 执行平面：**实时签名与行为响应、严格父子谱系、规范 System32 路径检查、AMSI 扫描缓冲区完整性监控以及默认拒绝的偏执门限。
 - **以执行来源取代免检通行：**精选系统应用和允许列表条目通过路径、PE OriginalFilename、Authenticode 签名者/发布者以及可选的 SHA-256 固定值进行校验；允许列表绝不会压制高置信度的终止操作。
@@ -108,7 +108,7 @@ Titan 结合了以下内容：
 
 ## 为关键场景而构建
 
-GeDefense Windows 5.3.0 面向需要在隔离、受监管或离线环境中保持控制权的 Windows 11 终端：仅本地控制平面、无云依赖、可验证证据、受限资源和明确响应边界。这**并非**完整保护的声明：内核/固件失陷、恶意本地管理员和完整供应链失陷仍超出产品边界；该构建为自签名，仍属公开测试版。
+GeDefense Windows 6.0.0 面向需要在隔离、受监管或离线环境中保持控制权的 Windows 11 终端：仅本地控制平面、无云依赖、可验证证据、受限资源和明确响应边界。这**并非**完整保护的声明：内核/固件失陷、恶意本地管理员和完整供应链失陷仍超出产品边界；该构建为自签名，仍属公开测试版。
 
 ## 架构
 
@@ -149,12 +149,12 @@ VGTGeDefense Windows Service (LocalSystem)     sovereign control plane
 
 ## 安装
 
-1. 从[发布页面](https://github.com/visiongaiatechnology/gedefensewin/releases)下载 `GeDefense-Setup-x64-v5.3.0.exe`。
+1. 从[发布页面](https://github.com/visiongaiatechnology/gedefensewin/releases)下载 `GeDefense-Setup-Inno-x64-v6.0.0.exe`。
 2. 测量并检查工件：
 
    ```powershell
-   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-x64-v5.3.0.exe
-   Get-AuthenticodeSignature .\GeDefense-Setup-x64-v5.3.0.exe
+   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-Inno-x64-v6.0.0.exe
+   Get-AuthenticodeSignature .\GeDefense-Setup-Inno-x64-v6.0.0.exe
    ```
 
    当前安装程序为**自签名**。只有在已经信任 VGT 证书的主机上，`Get-AuthenticodeSignature` 才会报告 `Valid`；对于其他所有主机，预期状态为 `NotTrusted`/`UnknownError`。测得的 SHA-256 必须与 `SHA256SUMS.txt` 以及发布版本的 `.sha256` sidecar 一致。

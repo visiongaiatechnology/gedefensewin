@@ -395,7 +395,13 @@ foreach ($asset in $assetsToUpload) {
         # Older GitHub API responses may omit the digest: download and re-hash.
         $downloadPath = Join-Path $env:TEMP ('vgt-publish-verify-' + [Guid]::NewGuid().ToString('N') + '.bin')
         try {
-            Invoke-WebRequest -Uri ([string]$remoteAsset.browser_download_url) -Headers @{ Authorization = "Bearer $token"; 'User-Agent' = 'VGT-Release-Bot' } -OutFile $downloadPath -UseBasicParsing | Out-Null
+            $redirectResp = Invoke-WebRequest -Uri ([string]$remoteAsset.url) -Headers @{ Authorization = "Bearer $token"; Accept = 'application/octet-stream'; 'User-Agent' = 'VGT-Release-Bot' } -MaximumRedirection 0 -UseBasicParsing -ErrorAction SilentlyContinue
+            $assetLocation = $redirectResp.Headers['Location']
+            if ([string]::IsNullOrWhiteSpace($assetLocation)) {
+                Invoke-WebRequest -Uri ([string]$remoteAsset.url) -Headers @{ Authorization = "Bearer $token"; Accept = 'application/octet-stream'; 'User-Agent' = 'VGT-Release-Bot' } -OutFile $downloadPath -UseBasicParsing | Out-Null
+            } else {
+                Invoke-WebRequest -Uri $assetLocation -Headers @{ 'User-Agent' = 'VGT-Release-Bot' } -OutFile $downloadPath -UseBasicParsing | Out-Null
+            }
             $downloadedHash = Get-VgtFileSha256Lower -Path $downloadPath
             if ($downloadedHash -ne $localHash) { throw [Security.SecurityException]::new(('Re-downloaded asset hash mismatch for {0}.' -f $asset.Name)) }
             $digestVerifiedCount++

@@ -9,7 +9,7 @@
 [English](README.md) · **Deutsch** · [Русский](README.ru.md) · [中文](README.zh.md)
 
 [![License](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-5.3.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
+[![Version](https://img.shields.io/badge/Version-6.0.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases/tag/v6.0.0)
 [![Status](https://img.shields.io/badge/Status-Public_Beta-yellow?style=for-the-badge)](#public-beta-advisory)
 [![Platform](https://img.shields.io/badge/Platform-Windows_11_x64-lightgrey?style=for-the-badge&logo=windows)](#system-requirements)
 [![Control Plane](https://img.shields.io/badge/Control_Plane-Local%2FSovereign-brightgreen?style=for-the-badge)](#local-sovereignty-and-privacy)
@@ -22,7 +22,7 @@
 
 <br />
 
-[Installation und Releases](https://github.com/visiongaiatechnology/gedefensewin/releases) · [Architektur](ARCHITECTURE.md) · [Titan-Konzept](docs/TITAN.md) · [Build-Anleitung](docs/BUILDING.md) · [Betrieb](docs/OPERATIONS.md) · [Sicherheitsrichtlinie](SECURITY.md)
+[Installation und Releases](https://github.com/visiongaiatechnology/gedefensewin/releases) · [Changelog](CHANGELOG.md) · [Architektur](ARCHITECTURE.md) · [Titan-Konzept](docs/TITAN.md) · [Build-Anleitung](docs/BUILDING.md) · [Betrieb](docs/OPERATIONS.md) · [Sicherheitsrichtlinie](SECURITY.md)
 
 </div>
 
@@ -31,9 +31,9 @@
 <img width="1536" height="1024" alt="GeDefense_ Real Security, Many Feathers" src="https://github.com/user-attachments/assets/68406427-a185-4fa5-b06a-af874a747dcb" />
 
 > [!IMPORTANT]
-> **Installer-Update (5.3.0):** Der bisherige selbstsignierte PowerShell-Bootstrap konnte auf frischen Windows-Installationen fehlschlagen, weil das VGT-Zertifikat nicht vertraut war. Das Release verwendet jetzt einen gebrandeten **Inno-Setup-Installer**, der das Beta-Zertifikat nach Annahme der Lizenz automatisch importiert — manuelle Zertifikatsschritte sind nicht mehr nötig.
+> **GeDefense Windows 6.0.0 (`v6.0.0`):** Neu mit **V6 Sovereign Anti-Spyware** (BYOVD, Kamera-/Mikrofon-/Screen-/Standort-Sensoren, Persistenz, LSASS-Überwachung), Out-of-Band-Ed25519-Witness, StyX-Beacon-Erkennung, Emergency Lockdown, AppContainer-ParserCells, nativen ETW-/WFP-/TPM-Grundlagen, allen 23 VGT-100-Security-Fixes sowie Go `1.26.11`. Vollständige Details im [CHANGELOG.md](CHANGELOG.md).
 >
-> **[GeDefense Windows 5.3.0 Installer herunterladen](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v5.3.0/GeDefense-Setup-x64-v5.3.0.exe)**
+> **[Inno Setup Installer (v6.0.0, empfohlen)](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v6.0.0/GeDefense-Setup-Inno-x64-v6.0.0.exe)** · **[Standalone-Installer (v6.0.0)](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v6.0.0/GeDefense-Setup-x64-v6.0.0.exe)**
 
 ## 🌐 Das GeDefense-Universum
 
@@ -53,13 +53,13 @@ GeDefense ist eine lokal-first Security-Fabric – für Linux, Windows, Android 
 ## ⚠️ Hinweis zur öffentlichen Beta
 
 > [!IMPORTANT]
-> **Status: Öffentliche Beta — GeDefense Windows 5.3.0.**
+> **Status: Öffentliche Beta — GeDefense Windows 6.0.0.**
 >
 > GeDefense Titan befindet sich in aktiver Entwicklung. **Diese Beta kann Fehler enthalten — auch Sicherheitsdefekte.** Wir arbeiten kontinuierlich an Härtung, Tests und Korrekturen und freuen uns über jeden reproduzierbaren Bericht.
 >
 > - Bitte setzen Sie die Beta zunächst auf Testsystemen ein, halten Sie Backups bereit und verlassen Sie sich nicht darauf als einzige Sicherheitskontrolle einer Produktivumgebung.
 > - Melden Sie Fehler, Sicherheitsprobleme und Funktionswünsche über [GitHub Issues](https://github.com/visiongaiatechnology/gedefensewin/issues) oder verantwortungsvoll über [SECURITY.md](SECURITY.md).
-> - Dieses Release ist **selbstsigniert** und genießt **kein Vertrauen öffentlicher CAs**; es gibt noch keinen RFC-3161-Zeitstempel, keinen CRL/OCSP-Widerrufspfad und keinen extern verankerten Anti-Rollback-Kanal. Aus diesen Gründen ist 5.3.0 **kein öffentlich vertrauenswürdiges Release**. Siehe [Verifikation und Vertrauen](#verification-and-trust).
+> - Dieses Release ist **selbstsigniert** und genießt **kein Vertrauen öffentlicher CAs**; es gibt noch keinen RFC-3161-Zeitstempel, keinen CRL/OCSP-Widerrufspfad und keinen extern verankerten Anti-Rollback-Kanal. Aus diesen Gründen ist 6.0.0 **kein öffentlich vertrauenswürdiges Release**. Siehe [Verifikation und Vertrauen](#verification-and-trust).
 > - Die Kernarchitektur wird durch automatisierte Release-Gates verifiziert (Go Race, Go Vet, govulncheck, SBOM, Provenienz, Installer- und Publish-Gates). Live-Installation und Änderungen an Sicherheitsrichtlinien gehören weiterhin auf eine isolierte Test-VM.
 
 ---
@@ -96,19 +96,18 @@ Titan kombiniert:
 ---
 
 
-## Neu in 5.3.0
+## Neu in 6.0.0 ([CHANGELOG.md](CHANGELOG.md))
 
-- **Sentinel-/Killerdom-Ausführungsebene:** Echtzeit-Signatur- und Verhaltensreaktion, strikte Parent-Child-Lineage, kanonische System32-Pfadprüfung, AMSI-Scan-Buffer-Integritätsüberwachung und Default-Deny-Paranoia-Gate.
-- **Ausführungs-Provenance statt Freifahrtschein:** kuratierte System-Apps und Allowlist-Einträge werden über Pfad, PE-OriginalFilename, Authenticode-Signer/Publisher und optionalen SHA-256-Pin geprüft; die Allowlist unterdrückt nie einen Kill mit hoher Konfidenz.
-- **Titan→Killerdom-Brücke:** Titan-Integritätsbrüche neutralisieren bösartige Persistenz über verifizierte PID-Terminierung; jede Aktion und jeder Fehler landen in der HMAC-verketteten Evidenz.
-- **Ghost Mode mit echter Durchsetzung:** ausgehende Telemetrie-Programme und -Dienste werden über WFP-gestützte Windows-Firewall-Regeln blockiert, Microsoft-Telemetrie-Hosts gesinkholed, der Status beim Boot abgeglichen und ehrlich gemeldet (`applied` / `lastError`).
-- **False-Positive-Härtung:** Signaturen für PowerShell-Obfuskation, Base64-Blobs und destruktive `cmd /c`-Muster wurden präzisiert; der Encoded-Command-Parser gilt nur noch für PowerShell-Hosts. Admin-/Testbefehle und `govulncheck` werden nicht mehr getötet.
-- **Härtung und Lieferkette:** gescopte Sessions, typisierte Bestätigung plus Begründung bei Schutzreduktion, SHA-256-/Signer-gepinnte Allowlist, unveränderlicher Selbstschutz, v5-API-Aliase, signierter Installer, SBOM/Provenance, null Go-Fremdabhängigkeiten und `govulncheck` 0.
-- **UI und Lokalisierung:** Sentinel-/Killerdom-Tabellen rendern unabhängig mit Empty-States; alle vier UI-Sprachen (Deutsch, Englisch, Russisch, Vereinfachtes Chinesisch) decken die neue Seite ab; Abstände und Glass-2100-Layout wurden korrigiert.
+- **V6 Sovereign Anti-Spyware (`internal/spyware`, UI „V6 Sovereign“):** BYOVD-Treiberprüfung & `WinVerifyTrust`-Authenticode-Validierung, Überwachung des Windows-Capability-Consent-Stores (Kamera, Mikrofon, Bildschirmaufnahme, Standort), Persistenz-Erkennung (`IFEO`, `SilentProcessExit`, `AppCertDlls`, `AppInit_DLLs`, LSA-Pakete, Print-Monitore) sowie LSASS-Zugriffsprüfung über Security-Event-Log (`4656`/`4663`).
+- **Out-of-Band-Evidenz-Witness (`internal/witness`):** Ed25519-signierte Ledger-Checkpoints, AES-256-GCM-Outbox, SPKI-gepinnter HTTPS-Transport, Fail-Closed-Rollback-/Fork-Erkennung und Air-Gap-Export (`vgtw1:`).
+- **StyX Passive Egress- & Beacon-Erkennung (`internal/mhx/styx_*`):** IPv4/IPv6-TCP-Flow-Telemetrie und periodisches Beacon-Scoring (`OBSERVE_ONLY`).
+- **Emergency Lockdown (`internal/lockdown`) & Ephemeral Parser Cells (`internal/parsercells`):** AES-256-GCM-Zustandsdatei mit `expected_epoch`-Compare-Set, BadUSB-Composite-Klassifikator, PID+CreationTime-gebundener Broker-Freezer und AppContainer-Isolation ohne Capabilities.
+- **Native WinAPI V6-Grundlagen (`internal/winapi`):** Echtzeit-ETW (`StartTraceW`/`ProcessTrace`/`tdh.dll`), direkte WFP-Transaktionen (`fwpuclnt.dll`) + `SetTcpEntry` sowie TPM 2.0 / WBCL / Secure Boot / HVCI Measured Boot (`tbs.dll` + `ncrypt.dll`).
+- **VGT-100 Security-Remediation & Go `1.26.11`:** Alle 23 Audit-Befunde (`FIND-WIN-001`..`023`) behoben und Go-Release-Toolchain auf `1.26.11` (`GO-2026-6859`) aktualisiert.
 
 ## Für kritische Szenarien gebaut
 
-GeDefense Windows 5.3.0 ist für Windows-11-Endpunkte gedacht, bei denen der Betreiber in isolierten, regulierten oder Offline-Umgebungen die Kontrolle behalten muss: lokale Control Plane, keine Cloud-Abhängigkeit, prüfbare Evidenz, begrenzte Ressourcen und explizite Antwortgrenzen. Es ist **keine** Behauptung vollständigen Schutzes: Kernel-/Firmware-Kompromittierung, ein bösartiger lokaler Administrator und eine vollständige Supply-Chain-Kompromittierung liegen außerhalb der Produktgrenze; der Build ist selbstsigniert und weiterhin Public Beta.
+GeDefense Windows 6.0.0 ist für Windows-11-Endpunkte gedacht, bei denen der Betreiber in isolierten, regulierten oder Offline-Umgebungen die Kontrolle behalten muss: lokale Control Plane, keine Cloud-Abhängigkeit, prüfbare Evidenz, begrenzte Ressourcen und explizite Antwortgrenzen. Es ist **keine** Behauptung vollständigen Schutzes: Kernel-/Firmware-Kompromittierung, ein bösartiger lokaler Administrator und eine vollständige Supply-Chain-Kompromittierung liegen außerhalb der Produktgrenze; der Build ist selbstsigniert und weiterhin Public Beta.
 
 ## Architektur
 
@@ -149,12 +148,12 @@ VGTGeDefense Windows Service (LocalSystem)     sovereign control plane
 
 ## Installation
 
-1. Laden Sie `GeDefense-Setup-x64-v5.3.0.exe` von der [Releases-Seite](https://github.com/visiongaiatechnology/gedefensewin/releases) herunter.
+1. Laden Sie `GeDefense-Setup-Inno-x64-v6.0.0.exe` von der [Releases-Seite](https://github.com/visiongaiatechnology/gedefensewin/releases) herunter.
 2. Messen und prüfen Sie das Artefakt:
 
    ```powershell
-   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-x64-v5.3.0.exe
-   Get-AuthenticodeSignature .\GeDefense-Setup-x64-v5.3.0.exe
+   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-Inno-x64-v6.0.0.exe
+   Get-AuthenticodeSignature .\GeDefense-Setup-Inno-x64-v6.0.0.exe
    ```
 
    Der Installer ist derzeit **selbstsigniert**. `Get-AuthenticodeSignature` meldet `Valid` nur auf Hosts, die dem VGT-Zertifikat bereits vertrauen; für alle anderen ist der erwartete Zustand `NotTrusted`/`UnknownError`. Der gemessene SHA-256 muss mit `SHA256SUMS.txt` und der `.sha256`-Sidecar-Datei des Releases übereinstimmen.

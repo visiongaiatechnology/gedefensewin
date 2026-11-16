@@ -33,7 +33,10 @@ var (
 
 	procHostsGetFileSecurity = hostsAdvapi32.NewProc("GetFileSecurityW")
 	procHostsSetFileSecurity = hostsAdvapi32.NewProc("SetFileSecurityW")
+	procHostsConvertSDToSDDL = hostsAdvapi32.NewProc("ConvertSecurityDescriptorToStringSecurityDescriptorW")
 	procHostsReplaceFile     = hostsKernel32.NewProc("ReplaceFileW")
+	procHostsLocalFree       = hostsKernel32.NewProc("LocalFree")
+	procHostsRtlMoveMemory   = hostsKernel32.NewProc("RtlMoveMemory")
 )
 
 const (
@@ -436,7 +439,7 @@ func stageAndReplaceHosts(content string, original string, originalDescriptor []
 	if err != nil {
 		return fmt.Errorf("read back hosts DACL: %w", err)
 	}
-	if !bytes.Equal(applied, originalDescriptor) {
+	if !hostsDACLsEquivalent(applied, originalDescriptor) {
 		// Roll the content back so a DACL change never survives as a silent
 		// access-control regression.
 		if restoreErr := stageAndReplaceHosts(original, original, applied); restoreErr != nil {
@@ -495,6 +498,55 @@ func applyGhostModeHostsSinkhole(enable bool) error {
 // negative/positive resolver entries that would otherwise bypass the new hosts
 // entries until their TTL expires. Best effort only; failure never fails the
 // security mutation.
+func hostsDACLsEquivalent(applied, original []byte) bool {
+	if bytes.Equal(applied, original) {
+		return true
+	}
+	sddlApplied, errA := hostsDescriptorToSDDL(applied)
+	sddlOrig, errO := hostsDescriptorToSDDL(original)
+	if errA != nil || errO != nil || sddlApplied == "" || sddlOrig == "" {
+		return false
+	}
+	return normalizeDACLSDDL(sddlApplied) == normalizeDACLSDDL(sddlOrig)
+}
+
+func hostsDescriptorToSDDL(descriptor []byte) (string, error) {
+	if len(descriptor) == 0 {
+		return "", fmt.Errorf("empty descriptor")
+	}
+	var strPtr uintptr
+	var strLen uint32
+	r1, _, callErr := procHostsConvertSDToSDDL.Call(
+		uintptr(unsafe.Pointer(&descriptor[0])),
+		1, // SDDL_REVISION_1
+		hostsDACLSecurityInformation,
+		uintptr(unsafe.Pointer(&strPtr)),
+		uintptr(unsafe.Pointer(&strLen)),
+	)
+	if r1 == 0 || strPtr == 0 {
+		return "", hostsCallError("ConvertSecurityDescriptorToStringSecurityDescriptorW", callErr)
+	}
+	defer procHostsLocalFree.Call(strPtr)
+	if strLen == 0 || strLen > 65536 {
+		return "", fmt.Errorf("unexpected SDDL length %d", strLen)
+	}
+	words := make([]uint16, int(strLen))
+	_, _, _ = procHostsRtlMoveMemory.Call(uintptr(unsafe.Pointer(&words[0])), strPtr, uintptr(strLen)*2)
+	return syscall.UTF16ToString(words), nil
+}
+
+// normalizeDACLSDDL removes the Windows-normalized SE_DACL_AUTO_INHERITED ("AI")
+// flag and "ID" inherited-ACE marker while preserving protection ("P") and all ACEs.
+func normalizeDACLSDDL(sddl string) string {
+	idx := strings.IndexByte(sddl, '(')
+	if idx < 0 {
+		return sddl
+	}
+	prefix := strings.ReplaceAll(sddl[:idx], "AI", "")
+	aces := strings.ReplaceAll(sddl[idx:], ";ID;", ";")
+	return prefix + aces
+}
+
 func flushDNSCache() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

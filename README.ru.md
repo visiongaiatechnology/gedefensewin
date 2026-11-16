@@ -9,7 +9,7 @@
 [English](README.md) · [Deutsch](README.de.md) · **Русский** · [中文](README.zh.md)
 
 [![Лицензия](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=for-the-badge)](LICENSE)
-[![Версия](https://img.shields.io/badge/Version-5.3.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
+[![Версия](https://img.shields.io/badge/Version-6.0.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
 [![Статус](https://img.shields.io/badge/Status-Public_Beta-yellow?style=for-the-badge)](#public-beta-advisory)
 [![Платформа](https://img.shields.io/badge/Platform-Windows_11_x64-lightgrey?style=for-the-badge&logo=windows)](#system-requirements)
 [![Плоскость управления](https://img.shields.io/badge/Control_Plane-Local%2FSovereign-brightgreen?style=for-the-badge)](#local-sovereignty-and-privacy)
@@ -31,9 +31,9 @@
 <img width="1536" height="1024" alt="GeDefense_ Real Security, Many Feathers" src="https://github.com/user-attachments/assets/68406427-a185-4fa5-b06a-af874a747dcb" />
 
 > [!IMPORTANT]
-> **Обновление установщика (5.3.0):** Прежний самоподписанный PowerShell-bootstrap мог не работать на чистых установках Windows, поскольку сертификат VGT не был доверенным. Теперь выпуск использует брендированный **Inno Setup installer**, который автоматически импортирует бета-сертификат после принятия лицензии — ручные действия с сертификатом больше не нужны.
+> **Обновление установщика (6.0.0):** Прежний самоподписанный PowerShell-bootstrap мог не работать на чистых установках Windows, поскольку сертификат VGT не был доверенным. Теперь выпуск использует брендированный **Inno Setup installer**, который автоматически импортирует бета-сертификат после принятия лицензии — ручные действия с сертификатом больше не нужны.
 >
-> **[Скачать установщик GeDefense Windows 5.3.0](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v5.3.0/GeDefense-Setup-x64-v5.3.0.exe)**
+> **[Скачать установщик GeDefense Windows 6.0.0](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v6.0.0/GeDefense-Setup-Inno-x64-v6.0.0.exe)**
 
 ## 🌐 Вселенная GeDefense
 
@@ -53,13 +53,13 @@ GeDefense — единая локальная security-fabric для Linux, Wind
 ## ⚠️ Предупреждение о публичной бета-версии
 
 > [!IMPORTANT]
-> **Статус: публичная бета-версия — GeDefense Windows 5.3.0.**
+> **Статус: публичная бета-версия — GeDefense Windows 6.0.0.**
 >
 > GeDefense Titan находится в активной разработке. **Эта бета-версия может содержать ошибки, в том числе дефекты безопасности.** Мы непрерывно работаем над усилением защиты, тестированием и исправлениями и приветствуем каждое воспроизводимое сообщение.
 >
 > - Используйте бета-версию сначала на тестовых системах, сохраняйте резервные копии и не полагайтесь на неё как на единственный механизм безопасности продуктивной среды.
 > - Сообщайте об ошибках, проблемах безопасности и пожеланиях к функциональности через [GitHub Issues](https://github.com/visiongaiatechnology/gedefensewin/issues) или ответственно через [SECURITY.md](SECURITY.md).
-> - Этот выпуск **подписан самоподписанным сертификатом** и **не имеет доверия публичного CA**; пока отсутствуют метка времени RFC 3161, механизм отзыва CRL/OCSP и внешне закреплённый канал защиты от отката. По этим причинам 5.3.0 **не является публично доверенным выпуском**. См. [Проверка и доверие](#verification-and-trust).
+> - Этот выпуск **подписан самоподписанным сертификатом** и **не имеет доверия публичного CA**; пока отсутствуют метка времени RFC 3161, механизм отзыва CRL/OCSP и внешне закреплённый канал защиты от отката. По этим причинам 6.0.0 **не является публично доверенным выпуском**. См. [Проверка и доверие](#verification-and-trust).
 > - Базовая архитектура проверяется автоматическими релизными шлюзами (Go race, Go vet, govulncheck, SBOM, provenance, шлюзы установщика и публикации). Реальную установку и изменения политик безопасности по-прежнему следует выполнять на изолированной тестовой виртуальной машине.
 
 ---
@@ -96,7 +96,7 @@ Titan объединяет:
 ---
 
 
-## Что нового в 5.3.0
+## Что нового в 6.0.0
 
 - **Плоскость исполнения Sentinel/Killerdom:** реакция на сигнатуры и поведение в реальном времени, строгая цепочка родитель-потомок, проверка канонических путей System32, контроль целостности буфера сканирования AMSI и параноидальный шлюз с запретом по умолчанию.
 - **Provenance исполнения вместо свободного пропуска:** отобранные системные приложения и записи белого списка проверяются по пути, PE OriginalFilename, подписанту/издателю Authenticode и необязательному SHA-256 pin; белый список никогда не подавляет уничтожение с высокой уверенностью.
@@ -108,7 +108,7 @@ Titan объединяет:
 
 ## Для критических сценариев
 
-GeDefense Windows 5.3.0 создан для конечных точек Windows 11, где оператор должен сохранять контроль в изолированных, регулируемых или офлайн-средах: локальная плоскость управления, отсутствие облачной зависимости, проверяемые доказательства, ограниченные ресурсы и явные границы реагирования. Это **не** заявление о полной защите: компрометация ядра/прошивки, вредоносный локальный администратор и полная компрометация цепочки поставок остаются вне границы продукта; сборка самоподписанная и остаётся публичной бетой.
+GeDefense Windows 6.0.0 создан для конечных точек Windows 11, где оператор должен сохранять контроль в изолированных, регулируемых или офлайн-средах: локальная плоскость управления, отсутствие облачной зависимости, проверяемые доказательства, ограниченные ресурсы и явные границы реагирования. Это **не** заявление о полной защите: компрометация ядра/прошивки, вредоносный локальный администратор и полная компрометация цепочки поставок остаются вне границы продукта; сборка самоподписанная и остаётся публичной бетой.
 
 ## Архитектура
 
@@ -149,12 +149,12 @@ VGTGeDefense Windows Service (LocalSystem)     sovereign control plane
 
 ## Установка
 
-1. Скачайте `GeDefense-Setup-x64-v5.3.0.exe` со [страницы релизов](https://github.com/visiongaiatechnology/gedefensewin/releases).
+1. Скачайте `GeDefense-Setup-Inno-x64-v6.0.0.exe` со [страницы релизов](https://github.com/visiongaiatechnology/gedefensewin/releases).
 2. Измерьте и проверьте артефакт:
 
    ```powershell
-   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-x64-v5.3.0.exe
-   Get-AuthenticodeSignature .\GeDefense-Setup-x64-v5.3.0.exe
+   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-Inno-x64-v6.0.0.exe
+   Get-AuthenticodeSignature .\GeDefense-Setup-Inno-x64-v6.0.0.exe
    ```
 
    Установщик сейчас **самоподписанный**. `Get-AuthenticodeSignature` сообщает `Valid` только на хостах, которые уже доверяют сертификату VGT; для всех остальных ожидаемое состояние — `NotTrusted`/`UnknownError`. Измеренный SHA-256 должен совпадать с `SHA256SUMS.txt` и sidecar-файлом `.sha256` этого выпуска.
