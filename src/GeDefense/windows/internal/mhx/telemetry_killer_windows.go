@@ -555,8 +555,12 @@ func normalizeDACLSDDL(sddl string) string {
 		if start < 0 || end < start {
 			return prefix + strings.ReplaceAll(sddl[idx:], ";ID;", ";")
 		}
-		ace := strings.ReplaceAll(rest[start:end+1], ";ID;", ";")
-		ace = strings.ReplaceAll(ace, "(D;", "(D;")
+		rawACE := rest[start+1 : end]
+		fields := strings.Split(rawACE, ";")
+		if len(fields) >= 2 {
+			fields[1] = strings.ReplaceAll(fields[1], "ID", "")
+		}
+		ace := "(" + strings.Join(fields, ";") + ")"
 		if strings.HasPrefix(ace, "(D;") || strings.HasPrefix(ace, "(OD;") {
 			hasDeny = true
 		}
