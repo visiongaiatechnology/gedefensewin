@@ -60,8 +60,9 @@ const (
 	FailureStartup FailureKind = "startup"
 	// FailureProfile means the throw-away browser profile could not be created.
 	FailureProfile FailureKind = "profile"
-	// FailureElevation documents that the unprivileged hand-over failed and the
-	// UI kept running elevated as a diagnostic fallback.
+	// FailureElevation documents that the unprivileged hand-over failed. The UI
+	// process refuses to start elevated (fail-closed), so this category is a
+	// refusal reason, not a fallback that keeps running with the admin token.
 	FailureElevation FailureKind = "elevation"
 )
 
@@ -120,7 +121,7 @@ func Describe(err error) (summary, hint string) {
 		return "Das temporäre Center-Profil konnte nicht angelegt werden.",
 			"Prüfen Sie die Schreibrechte unter %LocalAppData%\\VGT\\GeDefense."
 	case FailureElevation:
-		return "Der unprivilegierte Start über die Desktop-Shell ist fehlgeschlagen; das Center läuft weiterhin mit Administratorrechten.",
+		return "Der unprivilegierte Start über die Desktop-Shell ist fehlgeschlagen; das Center wird aus Sicherheitsgründen nicht mit Administratorrechten gestartet.",
 			"Starten Sie GeDefense Center ohne \"Als Administrator ausführen\" über Startmenü oder Taskleiste."
 	default:
 		return "Das Center konnte wegen eines unerwarteten Fehlers nicht geöffnet werden.",
@@ -731,9 +732,10 @@ func DiagnosticLogPath() (string, error) {
 	return filepath.Join(filepath.Clean(localData), "VGT", "GeDefense", diagnosticLogDirectory, diagnosticLogFileName), nil
 }
 
-// RecordElevationFallback records that the elevated Center could not hand
-// itself over to the unprivileged desktop shell and kept running elevated as a
-// diagnostic fallback. Diagnostics are best effort and must never block the UI.
+// RecordElevationFallback records that an elevated UI process refused to start
+// because it could not hand itself over to the unprivileged desktop shell. The
+// process exits; this is diagnostics for the refusal, not a fallback that keeps
+// running elevated. Diagnostics are best effort and must never block the UI.
 func RecordElevationFallback(err error) {
 	recordLaunchDiagnostic(launchDiagnostic{
 		Category: string(FailureElevation),

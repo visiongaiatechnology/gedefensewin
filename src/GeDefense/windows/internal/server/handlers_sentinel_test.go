@@ -16,7 +16,7 @@ import (
 	"github.com/visiongaiatechnology/gedefense/windows/internal/xdr"
 )
 
-func newSentinelTestServer(t *testing.T) (http.Handler, *titan.Engine, *mhx.SentinelStore) {
+func newSentinelTestServer(t *testing.T) (http.Handler, *titan.Engine, *mhx.SentinelStore, *evidence.Ledger) {
 	t.Helper()
 	root := t.TempDir()
 	ledger, err := evidence.Open(filepath.Join(root, "evidence.jsonl"), filepath.Join(root, "evidence.key"))
@@ -46,11 +46,27 @@ func newSentinelTestServer(t *testing.T) (http.Handler, *titan.Engine, *mhx.Sent
 		&fixedIntegrity{}, ledger, nil, nil, titanEngine)
 
 	t.Cleanup(func() { _ = titanEngine.Close() })
-	return handler, titanEngine, sentinelStore
+	return handler, titanEngine, sentinelStore, ledger
+}
+
+// sentinelAuditRecords returns the evidence records of one sentinel ledger kind.
+func sentinelAuditRecords(t *testing.T, ledger *evidence.Ledger, kind string) []evidence.Record {
+	t.Helper()
+	records, err := ledger.Snapshot(500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filtered := make([]evidence.Record, 0, len(records))
+	for _, record := range records {
+		if record.Kind == kind {
+			filtered = append(filtered, record)
+		}
+	}
+	return filtered
 }
 
 func TestSentinelStatusRequiresAuth(t *testing.T) {
-	handler, _, _ := newSentinelTestServer(t)
+	handler, _, _, _ := newSentinelTestServer(t)
 	req, resp := titanRequest(http.MethodGet, "/api/v1/sentinel/status", "", false)
 	handler.ServeHTTP(resp, req)
 	if resp.Code != http.StatusUnauthorized {
@@ -84,7 +100,7 @@ func TestSentinelStatusWhenUnavailable(t *testing.T) {
 }
 
 func TestSentinelStatusSuccess(t *testing.T) {
-	handler, titanEngine, _ := newSentinelTestServer(t)
+	handler, titanEngine, _, _ := newSentinelTestServer(t)
 	req, resp := titanRequest(http.MethodGet, "/api/v1/sentinel/status", "", true)
 	handler.ServeHTTP(resp, req)
 
@@ -136,7 +152,7 @@ func TestSentinelStatusSuccess(t *testing.T) {
 }
 
 func TestSentinelUpdateConfigAndTitanSync(t *testing.T) {
-	handler, titanEngine, _ := newSentinelTestServer(t)
+	handler, titanEngine, _, _ := newSentinelTestServer(t)
 
 	body := `{"paranoiaMode": true, "killerdomEnabled": true, "correlateWithTitan": true, "ghostModeTelemetryKill": false, "reason": "Test activation"}`
 	req, resp := titanRequest(http.MethodPost, "/api/v1/sentinel/config", body, true)
@@ -169,7 +185,7 @@ func TestSentinelUpdateConfigAndTitanSync(t *testing.T) {
 }
 
 func TestSentinelToggleSignature(t *testing.T) {
-	handler, _, _ := newSentinelTestServer(t)
+	handler, _, _, _ := newSentinelTestServer(t)
 
 	// Disabling a signature reduces coverage and must require a typed
 	// confirmation plus an operator reason.
@@ -223,7 +239,7 @@ func TestSentinelToggleSignature(t *testing.T) {
 }
 
 func TestSentinelToggleSystemApp(t *testing.T) {
-	handler, _, _ := newSentinelTestServer(t)
+	handler, _, _, _ := newSentinelTestServer(t)
 
 	body := `{"id": "sys_cmd", "enabled": true}`
 	req, resp := titanRequest(http.MethodPost, "/api/v1/sentinel/system-apps/toggle", body, true)
@@ -258,7 +274,7 @@ func TestSentinelToggleSystemApp(t *testing.T) {
 }
 
 func TestSentinelV5AliasContract(t *testing.T) {
-	handler, _, _ := newSentinelTestServer(t)
+	handler, _, _, _ := newSentinelTestServer(t)
 	req, resp := titanRequest(http.MethodGet, "/api/v5/sentinel/status", "", true)
 	handler.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK {
@@ -277,18 +293,40 @@ func TestSentinelV5AliasContract(t *testing.T) {
 	}
 }
 
+// TestSentinelWhitelistLifecycle covers the corrected Whitelist contract
+// (FIND-WIN-018): a protection-reducing add/enable requires the typed
+// confirmation plus an operator reason and writes an actor/action/result audit
+// record; the protection-tightening disable/remove steps are not blocked but are
+// audited as well.
 func TestSentinelWhitelistLifecycle(t *testing.T) {
-	handler, _, _ := newSentinelTestServer(t)
+	handler, _, store, ledger := newSentinelTestServer(t)
+	const reason = "Developer toolchain requires a documented exception"
 
-	// 1. Add whitelist entry
-	addBody := `{"name": "Dev_Tool", "pathPattern": "C:\\Tools\\mydev.exe"}`
-	req, resp := titanRequest(http.MethodPost, "/api/v1/sentinel/whitelist/add", addBody, true)
+	// 1. Add without confirmation is rejected and must not write a ledger entry
+	// nor change the persisted whitelist.
+	unconfirmedAdd := `{"name": "Dev_Tool", "pathPattern": "C:\\Tools\\mydev.exe", "reason": "` + reason + `"}`
+	req, resp := titanRequest(http.MethodPost, "/api/v1/sentinel/whitelist/add", unconfirmedAdd, true)
 	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("unconfirmed whitelist add status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if records := sentinelAuditRecords(t, ledger, "sentinel.whitelist"); len(records) != 0 {
+		t.Fatalf("rejected whitelist add wrote a ledger entry: %+v", records)
+	}
+	for _, entry := range store.Config().Whitelist {
+		if entry.Name == "Dev_Tool" {
+			t.Fatal("rejected whitelist add mutated the store")
+		}
+	}
 
+	// 2. Add with confirmation plus reason succeeds and is audited.
+	addBody := `{"name": "Dev_Tool", "pathPattern": "C:\\Tools\\mydev.exe", "reason": "` + reason +
+		`", "confirmation": "CHANGE SENTINEL POSTURE"}`
+	req, resp = titanRequest(http.MethodPost, "/api/v1/sentinel/whitelist/add", addBody, true)
+	handler.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("add status=%d body=%s", resp.Code, resp.Body.String())
 	}
-
 	var entry mhx.WhitelistEntry
 	if err := json.Unmarshal(resp.Body.Bytes(), &entry); err != nil {
 		t.Fatal(err)
@@ -296,22 +334,72 @@ func TestSentinelWhitelistLifecycle(t *testing.T) {
 	if entry.ID == "" || entry.Name != "Dev_Tool" {
 		t.Fatalf("unexpected entry: %+v", entry)
 	}
-
-	// 2. Toggle whitelist entry
-	toggleBody := `{"id": "` + entry.ID + `", "enabled": false}`
-	req, resp = titanRequest(http.MethodPost, "/api/v1/sentinel/whitelist/toggle", toggleBody, true)
-	handler.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusOK {
-		t.Fatalf("toggle status=%d body=%s", resp.Code, resp.Body.String())
+	records := sentinelAuditRecords(t, ledger, "sentinel.whitelist")
+	if len(records) != 1 {
+		t.Fatalf("whitelist add was not audited: %+v", records)
+	}
+	if records[0].Action != "add" || !strings.Contains(records[0].Result, "actor=master") ||
+		!strings.Contains(records[0].Result, "outcome=created") || !strings.Contains(records[0].Result, "reason-sha256=") {
+		t.Fatalf("whitelist audit record incomplete: %+v", records[0])
 	}
 
-	// 3. Remove whitelist entry
+	// 3. Disabling the exemption tightens the posture: no confirmation needed.
+	toggleOffBody := `{"id": "` + entry.ID + `", "enabled": false}`
+	req, resp = titanRequest(http.MethodPost, "/api/v1/sentinel/whitelist/toggle", toggleOffBody, true)
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("toggle disable status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	// 4. Re-enabling it reduces protection again and requires the confirmation.
+	unconfirmedEnable := `{"id": "` + entry.ID + `", "enabled": true, "reason": "` + reason + `"}`
+	req, resp = titanRequest(http.MethodPost, "/api/v1/sentinel/whitelist/toggle", unconfirmedEnable, true)
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("unconfirmed whitelist enable status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	confirmedEnable := `{"id": "` + entry.ID + `", "enabled": true, "reason": "` + reason +
+		`", "confirmation": "CHANGE SENTINEL POSTURE"}`
+	req, resp = titanRequest(http.MethodPost, "/api/v1/sentinel/whitelist/toggle", confirmedEnable, true)
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("confirmed toggle enable status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	// 5. Remove (protection-tightening) succeeds and is audited.
 	removeBody := `{"id": "` + entry.ID + `"}`
 	req, resp = titanRequest(http.MethodPost, "/api/v1/sentinel/whitelist/remove", removeBody, true)
 	handler.ServeHTTP(resp, req)
-
 	if resp.Code != http.StatusOK {
 		t.Fatalf("remove status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	records = sentinelAuditRecords(t, ledger, "sentinel.whitelist")
+	if len(records) != 4 {
+		t.Fatalf("expected add/disable/enable/remove audit entries, got %+v", records)
+	}
+	if records[3].Action != "remove" || !strings.Contains(records[3].Result, "outcome=removed") {
+		t.Fatalf("whitelist remove was not audited: %+v", records[3])
+	}
+}
+
+// TestSentinelWhitelistAuditAttributesSessionActor proves the ledger record
+// carries the authenticated actor and action for a scoped operator session, not
+// only for the master break-glass credential (FIND-WIN-018).
+func TestSentinelWhitelistAuditAttributesSessionActor(t *testing.T) {
+	handler, _, _, ledger := newSentinelTestServer(t)
+	session := mintSession(t, handler, "sentinel-console", "read", "operate", "policy")
+	body := `{"name": "Session_Tool", "pathPattern": "C:\\Tools\\session.exe", "reason": "operator session requests a documented exception", "confirmation": "CHANGE SENTINEL POSTURE"}`
+	response := callHandler(handler, http.MethodPost, "/api/v1/sentinel/whitelist/add", body,
+		withBearer(session), withReplayID())
+	if response.Code != http.StatusOK {
+		t.Fatalf("session whitelist add status=%d body=%s", response.Code, response.Body.String())
+	}
+	records := sentinelAuditRecords(t, ledger, "sentinel.whitelist")
+	if len(records) != 1 {
+		t.Fatalf("session whitelist add was not audited: %+v", records)
+	}
+	if records[0].Action != "add" || !strings.Contains(records[0].Result, "actor=sentinel-console") ||
+		!strings.Contains(records[0].Result, "session=") {
+		t.Fatalf("session actor attribution missing: %+v", records[0])
 	}
 }

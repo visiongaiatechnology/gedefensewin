@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/mhx"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/startup"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/titan"
 )
 
 //go:embed web/*
@@ -46,12 +48,23 @@ func NewWithTitan(version, token string, engine HardeningEngine, auditEngine Aud
 	return handler
 }
 
+// NewWithV6 composes the control plane together with Titan and the V6
+// Sovereign anti-spyware and witness provider.
+func NewWithV6(version, token string, engine HardeningEngine, auditEngine AuditEngine, xdrEngine XDREngine, mhxEngine MHXEngine, integrityEngine IntegrityEngine, ledger *evidence.Ledger, startupGate *startup.State, settingsService SettingsService, titanEngine TitanEngine, v6 V6Provider) http.Handler {
+	_, handler := newServerWithV6(version, token, engine, auditEngine, xdrEngine, mhxEngine, integrityEngine, ledger, startupGate, settingsService, titanEngine, v6)
+	return handler
+}
+
 // newServer returns the control-plane state and its HTTP handler so tests can
 // drive sessions, rotation and rate budgets with a deterministic clock.
 func newServer(version, token string, engine HardeningEngine, auditEngine AuditEngine, xdrEngine XDREngine, mhxEngine MHXEngine, integrityEngine IntegrityEngine, ledger *evidence.Ledger, startupGate *startup.State, settingsService SettingsService, titanEngine TitanEngine) (*Server, http.Handler) {
+	return newServerWithV6(version, token, engine, auditEngine, xdrEngine, mhxEngine, integrityEngine, ledger, startupGate, settingsService, titanEngine, nil)
+}
+
+func newServerWithV6(version, token string, engine HardeningEngine, auditEngine AuditEngine, xdrEngine XDREngine, mhxEngine MHXEngine, integrityEngine IntegrityEngine, ledger *evidence.Ledger, startupGate *startup.State, settingsService SettingsService, titanEngine TitanEngine, v6 V6Provider) (*Server, http.Handler) {
 	s := &Server{
 		version: version, token: token, engine: engine, audit: auditEngine, xdr: xdrEngine, mhx: mhxEngine,
-		integrity: integrityEngine, titan: titanEngine, ledger: ledger, startupGate: startupGate, settings: settingsService,
+		integrity: integrityEngine, titan: titanEngine, v6: v6, ledger: ledger, startupGate: startupGate, settings: settingsService,
 		replay:               replayGuard{items: make(map[string]time.Time)},
 		bootstrapCodes:       make(map[string]bootstrapCode),
 		sessions:             make(map[string]*sessionRecord),
@@ -60,7 +73,17 @@ func newServer(version, token string, engine HardeningEngine, auditEngine AuditE
 		windowCommands:       make(chan string, 1), windowStateVal: "normal",
 	}
 	if titanEngine != nil && mhxEngine != nil {
-		titanEngine.SetKillerdomBridge(mhxEngine.TerminatePID)
+		// Adapter between the two engine boundaries: Titan hands over full
+		// identity evidence, MHX re-verifies it before any termination. Neither
+		// package imports the other.
+		titanEngine.SetKillerdomBridge(func(target titan.KillerdomTarget) error {
+			return mhxEngine.TerminateTarget(mhx.TerminationTarget{
+				PID:              target.PID,
+				CreationUnixNano: target.CreationUnixNano,
+				ImagePath:        target.ImagePath,
+				Reason:           target.Reason,
+			})
+		})
 	}
 	return s, s.routes()
 }
@@ -226,5 +249,10 @@ func (s *Server) routes() http.Handler {
 	policy("/api/v5/sentinel/whitelist/toggle", s.sentinelToggleWhitelist)
 	policy("/api/v5/sentinel/whitelist/add", s.sentinelAddWhitelist)
 	policy("/api/v5/sentinel/whitelist/remove", s.sentinelRemoveWhitelist)
+
+	// V6 Sovereign telemetry & status routes (read-only observations).
+	read("/api/v1/v6/status", s.v6Status)
+	read("/api/v1/v6/spyware/findings", s.v6SpywareFindings)
+	read("/api/v1/v6/styx/incidents", s.v6StyxIncidents)
 	return s.headers(mux)
 }

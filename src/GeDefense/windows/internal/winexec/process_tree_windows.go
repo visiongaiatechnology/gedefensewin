@@ -130,6 +130,15 @@ func pruneTrackedLocked() {
 	}
 }
 
+// IsTrackedProcess reports whether pid belongs to a child process this service
+// spawned and still pins with a kernel handle. It is the evidence-backed
+// replacement for the former command-line substring exemption: self-healing and
+// hardening children are recognised because the service started them, not
+// because their command line happens to contain a trusted-looking path.
+func IsTrackedProcess(pid int) bool {
+	return lookupTrackedProcess(pid) != nil
+}
+
 func lookupTrackedProcess(pid int) *trackedProcess {
 	trackedMu.Lock()
 	defer trackedMu.Unlock()

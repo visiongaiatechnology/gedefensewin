@@ -7,48 +7,51 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
 )
 
-func writeFeedPolicyTestSnapshot(t *testing.T, root, key string, indicators []string) {
-	t.Helper()
-	source, exists := sourceByKey(key)
-	if !exists {
-		t.Fatalf("test feed %q is not in the catalog", key)
-	}
-	sorted := append([]string(nil), indicators...)
-	sort.Strings(sorted)
-	snapshot := sourceSnapshot{
-		SchemaVersion:    SchemaVersion,
-		Key:              key,
-		GeneratedUTC:     time.Now().UTC(),
-		Action:           source.Action,
-		Attribution:      Attribution{Name: source.Name, URL: source.URL},
-		GenerationSHA256: digestIndicators(key, source.Action, sorted),
-		Indicators:       sorted,
-	}
-	if err := writeSourceSnapshot(root, snapshot); err != nil {
-		t.Fatalf("write cached snapshot %s: %v", key, err)
-	}
-}
-
 // newFeedPolicyTestManager seeds validated last-known-good data for every
-// default BLOCK feed plus one CORRELATE_ONLY feed, then starts the real manager
-// without any network access.
+// default BLOCK feed plus one CORRELATE_ONLY feed, provisions the signed
+// feed-authority trust anchor those generations are attested by, then starts the
+// real manager without any network access.
+//
+// FIND-WIN-015: enforcement requires a verified signed authority, so the fixture
+// carries a real Ed25519 key ring and one signed authority document covering
+// every cached generation. The pre-fix fixture used unsigned snapshots which are
+// now (correctly) annotation-only.
 func newFeedPolicyTestManager(t *testing.T) (*Manager, string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "intelligence")
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeFeedPolicyTestSnapshot(t, root, "feodo", []string{"45.155.205.0/24"})
-	writeFeedPolicyTestSnapshot(t, root, "spamhaus_drop_v4", []string{"46.155.205.0/24"})
-	writeFeedPolicyTestSnapshot(t, root, "spamhaus_drop_v6", []string{"2a02:1234::/32"})
-	writeFeedPolicyTestSnapshot(t, root, "firehol_l1", []string{"47.155.205.0/24"})
-	writeFeedPolicyTestSnapshot(t, root, "cins_army", []string{"48.155.205.0/24"})
+	const keyID = "feed-policy-test-authority"
+	publicKey, privateKey := testAuthorityKeypair(t, keyID)
+	writeAuthorityKeyring(t, root, keyID, publicKey)
+	fixtures := map[string][]string{
+		"feodo":            {"45.155.205.0/24"},
+		"spamhaus_drop_v4": {"46.155.205.0/24"},
+		"spamhaus_drop_v6": {"2a02:1234::/32"},
+		"firehol_l1":       {"47.155.205.0/24"},
+		"cins_army":        {"48.155.205.0/24"},
+	}
+	generated := time.Now().UTC().Add(-time.Minute)
+	attestations := make([]FeedAuthorityAttestation, 0, len(fixtures))
+	for key, indicators := range fixtures {
+		source, exists := sourceByKey(key)
+		if !exists {
+			t.Fatalf("test feed %q is not in the catalog", key)
+		}
+		attestations = append(attestations, feedAuthorityTestAttestation(source, indicators, 5, generated.Add(24*time.Hour)))
+	}
+	document := signedFeedAuthorityDocument(t, keyID, privateKey, 5, generated, attestations...)
+	writeSignedFeedAuthorityDocument(t, root, document)
+	for key, indicators := range fixtures {
+		source, _ := sourceByKey(key)
+		writeCachedFeedSnapshot(t, root, source, generated, indicators, document)
+	}
 	manager, err := NewManager(root)
 	if err != nil {
 		t.Fatalf("NewManager() error: %v", err)
@@ -306,8 +309,14 @@ func TestFeedPolicyWithoutValidatedDataPersistsIntentButClaimsNoEnforcement(t *t
 	if preSync.EnforcementGeneration != "" || preSync.BlockingIndicators != 0 {
 		t.Fatalf("pre-sync policy fabricated enforcement: %+v", preSync)
 	}
-	if entry := feedPolicyEntry(t, preSync, "cins_army"); entry.EffectiveAction != ActionBlock || entry.Indicators != 0 {
+	// FIND-WIN-015: the configured BLOCK intent is persisted and visible, but the
+	// effective action stays ANNOTATE_ONLY because the trusted authority key ring
+	// is unavailable. The old expectation (EffectiveAction=BLOCK) was the
+	// fail-open behaviour the audit found.
+	if entry := feedPolicyEntry(t, preSync, "cins_army"); entry.ConfiguredAction != ActionBlock || entry.EffectiveAction != ActionAnnotateOnly || entry.Indicators != 0 || entry.Blocking {
 		t.Fatalf("pre-sync authority is unclear: %+v", entry)
+	} else if entry.EnforcementImpact != "AUTHORITY_UNVERIFIED" {
+		t.Fatalf("pre-sync enforcement impact does not name the missing authority: %+v", entry)
 	}
 	if preSync.StoreState != feedPolicySourcePersisted {
 		t.Fatalf("pre-sync intent was not persisted: %+v", preSync)
@@ -334,9 +343,15 @@ func TestFeedPolicyCorruptStoreFallsBackAndPreservesForensics(t *testing.T) {
 	if policy.EnforcementChanged || policy.BlockingIndicators != 0 {
 		t.Fatalf("corrupt store fabricated authority: %+v", policy)
 	}
+	authorityAvailable := manager.authorityEnforcementAvailable()
 	for _, entry := range policy.Entries {
-		if entry.Source != feedPolicySourceDefault || entry.EffectiveAction != entry.DefaultAction {
-			t.Fatalf("corrupt store affected effective authority: %+v", entry)
+		// FIND-WIN-015: without a verified trust anchor even catalog defaults are
+		// projected as annotation-only; the corrupt store must not change that.
+		if entry.Source != feedPolicySourceDefault || entry.ConfiguredAction != entry.DefaultAction {
+			t.Fatalf("corrupt store affected the configured authority: %+v", entry)
+		}
+		if entry.EffectiveAction != capEnforcementAction(entry.DefaultAction, entry.ConfiguredAction, authorityAvailable) {
+			t.Fatalf("corrupt store affected the effective enforcement authority: %+v", entry)
 		}
 	}
 	preserved, err := os.ReadFile(filepath.Join(root, feedPolicyFileName))

@@ -411,26 +411,32 @@ export function toggleSentinelSystemApp(id,enabled,{reason='',confirmation=''}={
   });
 }
 
-export function toggleSentinelWhitelist(id,enabled){
+export function toggleSentinelWhitelist(id,enabled,{reason='',confirmation=''}={}){
   return api('/api/v1/sentinel/whitelist/toggle',{
     method:'POST',
-    json:{id,enabled},
+    json:{id,enabled,reason,confirmation},
     signal:AbortSignal.timeout(15000),
   });
 }
 
-export function addSentinelWhitelist(name,pathPattern,{sha256='',signerMatch=''}={}){
+export function addSentinelWhitelist(name,pathPattern,{sha256='',signerMatch='',reason='',confirmation=''}={}){
   return api('/api/v1/sentinel/whitelist/add',{
     method:'POST',
-    json:{name,pathPattern,sha256,signerMatch},
+    json:{name,pathPattern,sha256,signerMatch,reason,confirmation},
     signal:AbortSignal.timeout(15000),
   });
 }
 
-export function removeSentinelWhitelist(id){
+export function removeSentinelWhitelist(id,{reason=''}={}){
   return api('/api/v1/sentinel/whitelist/remove',{
     method:'POST',
-    json:{id},
+    json:{id,reason},
+    signal:AbortSignal.timeout(15000),
+  });
+}
+
+export function getV6Status(limit=50){
+  return api(`/api/v1/v6/status?limit=${encodeURIComponent(String(limit))}`,{
     signal:AbortSignal.timeout(15000),
   });
 }

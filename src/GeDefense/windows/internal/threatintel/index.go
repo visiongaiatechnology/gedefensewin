@@ -37,6 +37,14 @@ type mutableEntry struct {
 func buildIndex(snapshots map[string]sourceSnapshot) *Index {
 	entries := make(map[netip.Prefix]*mutableEntry, 8192)
 	for key, snapshot := range snapshots {
+		// FIND-WIN-015 defense in depth: the catalog declaration is the action
+		// ceiling even if a caller hands in an already-escalated snapshot. An
+		// ANNOTATE_ONLY feed can never contribute a blocking decision.
+		declared := snapshot.Action
+		if source, exists := sourceByKey(key); exists {
+			declared = source.Action
+		}
+		action := capDeclaredAction(declared, snapshot.Action)
 		for _, value := range snapshot.Indicators {
 			prefix, err := netip.ParsePrefix(value)
 			if err != nil || !validThreatPrefix(prefix) {
@@ -45,11 +53,11 @@ func buildIndex(snapshots map[string]sourceSnapshot) *Index {
 			prefix = prefix.Masked()
 			entry := entries[prefix]
 			if entry == nil {
-				entry = &mutableEntry{action: snapshot.Action, sources: make(map[string]struct{}, 2)}
+				entry = &mutableEntry{action: action, sources: make(map[string]struct{}, 2)}
 				entries[prefix] = entry
 			}
-			if snapshot.Action.rank() > entry.action.rank() {
-				entry.action = snapshot.Action
+			if action.rank() > entry.action.rank() {
+				entry.action = action
 			}
 			entry.sources[key] = struct{}{}
 		}

@@ -78,6 +78,9 @@
           <button type="button" class="nav nav-sentinel" data-view="sentinel">
             <span class="nav-icon" aria-hidden="true"><svg><use href="#i-bolt"></use></svg></span><span class="nav-text">Sentinel</span><span class="nav-tag nav-tag-sentinel">5.3</span>
           </button>
+          <button type="button" class="nav" data-view="v6">
+            <span class="nav-icon" aria-hidden="true"><svg><use href="#i-radar"></use></svg></span><span class="nav-text">V6 Sovereign</span><span class="nav-tag">V6</span>
+          </button>
         </div>
         <div class="nav-group">
           <span class="nav-label" id="navGroupSchutz">Schutz</span>
@@ -1310,6 +1313,39 @@
         <div class="metric-grid" id="integrityMetrics"></div>
         <article class="glass section-card"><div class="section-head"><div><p class="eyebrow">SCAN</p><h3 id="integrityProgressText">Noch keine Baseline</h3></div><span id="integrityState" class="status-pill info">DISABLED</span></div><div class="progress"><span id="integrityProgressBar"></span></div><p id="integritySchedule" class="muted"></p></article>
         <article class="glass table-card"><div class="section-head"><div><p class="eyebrow">ÄNDERUNGEN</p><h3>Erkannte Dateiveränderungen</h3></div><span id="integrityChangesCount" class="status-pill info">—</span></div><div class="table-wrap"><table><thead><tr><th>Typ</th><th>Datei</th><th>Alter Hash</th><th>Neuer Hash</th><th>Größe</th></tr></thead><tbody id="integrityRows"></tbody></table></div></article>
+      </section>
+
+      <!-- ============================ V6 SOVEREIGN ============================ -->
+      <section class="view" data-page="v6" hidden aria-labelledby="viewTitle">
+        <div class="page-head">
+          <div class="page-head-copy">
+            <p class="eyebrow">V6 SOVEREIGN</p>
+            <h2>Anti-Spyware, Externer Witness &amp; StyX Egress-Telemetrie.</h2>
+            <p>Tiefe Telemetrie-Erkennung auf Kernel-, Capability-, Persistenz-, LSASS-, Evidenz-Witness- und Beacon-Ebene. Alle Sensoren melden ausschließlich überprüfbare Evidenz.</p>
+          </div>
+          <button type="button" id="v6Refresh" class="button ghost">V6 Status aktualisieren</button>
+        </div>
+        <div class="metric-grid" id="v6Metrics"></div>
+        <article class="glass section-card">
+          <div class="section-head">
+            <div><p class="eyebrow">SENSOR-ABDECKUNG</p><h3>Aktive Module &amp; Diagnose</h3></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <span id="v6SpywarePill" class="status-pill info">SPYWARE</span>
+              <span id="v6WitnessPill" class="status-pill info">WITNESS</span>
+              <span id="v6StyxPill" class="status-pill info">STYX</span>
+            </div>
+          </div>
+          <div class="metric-grid" id="v6SensorMatrix"></div>
+          <p id="v6DiagnosticNote" class="muted">Status wird geladen...</p>
+        </article>
+        <article class="glass table-card">
+          <div class="section-head"><div><p class="eyebrow">ANTI-SPYWARE</p><h3>BYOVD, Capabilities, Persistenz &amp; LSASS</h3></div><span id="v6SpywareCount" class="status-pill info">0</span></div>
+          <div class="table-wrap"><table><thead><tr><th>Schweregrad</th><th>Quelle</th><th>Befund</th><th>Asset</th><th>Reaktion</th><th>Zeit UTC</th></tr></thead><tbody id="v6SpywareRows"></tbody></table></div>
+        </article>
+        <article class="glass table-card">
+          <div class="section-head"><div><p class="eyebrow">STYX</p><h3>Passive Egress- &amp; Beacon-Vorfälle</h3></div><span id="v6StyxCount" class="status-pill info">0</span></div>
+          <div class="table-wrap"><table><thead><tr><th>Schweregrad</th><th>Kategorie</th><th>Score</th><th>Zusammenfassung</th><th>Aktion</th><th>Zeit UTC</th></tr></thead><tbody id="v6StyxRows"></tbody></table></div>
+        </article>
       </section>
 
       <!-- ============================ SYSTEM ============================ -->

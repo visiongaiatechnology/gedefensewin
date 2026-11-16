@@ -24,7 +24,7 @@ function Read-VgtText {
 }
 
 $version = (Read-VgtText $versionPath).Trim()
-Assert-Vgt ($version -match '^5\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') 'VERSION is not a valid GeDefense V5 version.'
+Assert-Vgt ($version -match '^[56]\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') 'VERSION is not a valid GeDefense release version.'
 
 $toolchainPath = Join-Path $projectRoot 'TOOLCHAINS.lock'
 $toolchain = @{}
@@ -38,7 +38,12 @@ foreach ($line in Get-Content -LiteralPath $toolchainPath -Encoding UTF8) {
 Assert-Vgt ($toolchain.ContainsKey('go')) 'Pinned Go release toolchain is missing.'
 Assert-Vgt ($toolchain.ContainsKey('powershell')) 'Pinned PowerShell release toolchain is missing.'
 Assert-Vgt (([string]$toolchain['go_windows_amd64_zip_sha256']) -match '^[0-9a-fA-F]{64}$') 'Pinned Go toolchain archive hash is missing or invalid.'
-$goVersion = (& go env GOVERSION).Trim()
+Push-Location -LiteralPath $sourceRoot
+try {
+    $goVersion = (& go env GOVERSION).Trim()
+} finally {
+    Pop-Location
+}
 Assert-Vgt ($LASTEXITCODE -eq 0) 'Unable to read the Go toolchain version.'
 $requiredGo = $toolchain['go'].TrimStart('g','o')
 $actualGo = $goVersion.TrimStart('g','o')
@@ -61,18 +66,18 @@ $productVersionFile = Join-Path $sourceRoot 'internal\product\version.go'
 $productVersionSource = Read-VgtText $productVersionFile
 Assert-Vgt ($productVersionSource.Contains('const Version = "' + $version + '"')) 'Go product version does not match VERSION.'
 
-# Clean-source repository contract: generated build output and AI-agent handoff
-# artifacts are gitignored and must never be part of the delivered source tree.
-# CHANGELOG.md is intentionally public documentation as of 5.3.0.
-$forbiddenRepositoryFiles = @(
-    'Next.md',
-    'MERGE_REPORT.json',
-    'START_HERE_FULL_MERGED_SOURCE.md',
-    'GITHUB-UPLOAD.md',
-    'RELEASE-NOTES.md'
-)
-foreach ($forbiddenFile in $forbiddenRepositoryFiles) {
-    Assert-Vgt (-not (Test-Path -LiteralPath (Join-Path $projectRoot $forbiddenFile))) ("Repository hygiene violation: {0} must not be part of the source tree." -f $forbiddenFile)
+# FIND-WIN-022: AI-agent handoff notes (Next.md, START_HERE_*.md, GITHUB-UPLOAD.md,
+# RELEASE-NOTES.md, MERGE_REPORT.json, ...) are the canonical agent workflow state:
+# they MAY exist in the working tree. They must never be part of the DISTRIBUTION.
+# Get-VgtSourceFileList/Write-VgtSourceManifest exclude them centrally, and the
+# generated source archive is asserted note-free below instead of forbidding the
+# working file. CHANGELOG.md is intentionally public documentation as of 5.3.0.
+# Legacy audit reports remain forbidden in the delivered source tree.
+$agentNoteDistributionState = 'archive-absent'
+$releaseSourceArchive = Join-Path $projectRoot ('release\VGT_GeDefense_Windows_{0}_Source.zip' -f $version)
+if (Test-Path -LiteralPath $releaseSourceArchive -PathType Leaf) {
+    $agentNoteDistribution = Assert-VgtSourceArchiveExcludesAgentNotes -ArchivePath $releaseSourceArchive -Version $version
+    $agentNoteDistributionState = [string]$agentNoteDistribution.Status
 }
 foreach ($forbiddenPattern in @('docs\VERIFICATION-*.md','docs\AUDIT-REMEDIATION-*.md','docs\SUPPLY-CHAIN-*.md','docs\TRUST-*.md')) {
     $hits = @(Get-ChildItem -Path (Join-Path $projectRoot $forbiddenPattern) -File -ErrorAction SilentlyContinue)
@@ -244,6 +249,10 @@ if ($releaseChannel.HasSourceArchive) {
 # SC-FIND-009: publish path is fail-closed and contains no hardcoded claims.
 & (Join-Path $toolsRoot 'Test-PublishGates.ps1') | Out-Null
 
+# FIND-WIN-022: Inno asset registration, agent-note distribution exclusion and
+# prerelease-aware downgrade comparison, proven on disposable offline fixtures.
+& (Join-Path $toolsRoot 'Test-ReleaseChannelHygiene.ps1') | Out-Null
+
 Push-Location $sourceRoot
 try {
     $modules = @(& go list -m all)
@@ -316,10 +325,13 @@ foreach ($script in $scripts) {
     ReleaseChannel = [string]$releaseChannel.State
     ReleaseChannelAssets = [int]$releaseChannel.Assets
     ReleaseChannelForeignAssets = @($releaseChannel.ForeignAssets).Count
+    ReleaseChannelInnoInstaller = [bool]$releaseChannel.HasInnoInstaller
     Sha256Sums = [string]$releaseChannel.SumsState
+    SourceArchiveAgentNotes = $agentNoteDistributionState
     ReleaseSidecar = $releaseSidecarState
     SourceArchive = $sourceArchiveState
     InstallerSafety = 'PASS'
     PublishGates = 'PASS'
+    ReleaseChannelHygieneTests = 'PASS'
     ExternalTrustAnchor = 'EXTERNAL-BLOCKER (public CA/RFC3161/revocation/anti-rollback unavailable)'
 }

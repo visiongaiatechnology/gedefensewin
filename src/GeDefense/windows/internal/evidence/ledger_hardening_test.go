@@ -2,6 +2,7 @@
 package evidence
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -110,7 +111,11 @@ func TestLedgerDetectsTruncatedTailAgainstSignedCheckpoint(t *testing.T) {
 	}
 }
 
-func TestLedgerQuarantinesCorruptCheckpointStoreAndKeepsRecording(t *testing.T) {
+// FIND-WIN-016 (adapted from the pre-fix expectation): a corrupt checkpoint
+// store is preserved for forensics but the ledger fails closed. The old
+// behaviour ("quarantine and keep recording on a freshly signed tip") was the
+// audited truncation bypass, so the recovery path below is now explicit.
+func TestLedgerQuarantinesCorruptCheckpointStoreAndRequiresRecovery(t *testing.T) {
 	withLedgerTestTuning(t, 64<<20, 1)
 	root := t.TempDir()
 	ledger := openTestLedger(t, root)
@@ -123,13 +128,24 @@ func TestLedgerQuarantinesCorruptCheckpointStoreAndKeepsRecording(t *testing.T) 
 	if err := os.WriteFile(checkpointPath, []byte("{corrupt-checkpoint\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(filepath.Join(root, "evidence.jsonl"), filepath.Join(root, "evidence.key"))
-	if err != nil {
-		t.Fatalf("corrupt checkpoint store bricked the ledger: %v", err)
+	if _, err := Open(filepath.Join(root, "evidence.jsonl"), filepath.Join(root, "evidence.key")); !errors.Is(err, ErrEvidenceCheckpointAnchorMissing) {
+		t.Fatalf("corrupt checkpoint store did not fail closed with the typed anchor error: %v", err)
 	}
 	forensics, err := filepath.Glob(filepath.Join(root, "evidence.jsonl.checkpoints.jsonl.corrupt-*"))
 	if err != nil || len(forensics) == 0 {
 		t.Fatalf("corrupt checkpoint store was not preserved for forensics: %v %v", forensics, err)
+	}
+	if _, err := RecoverCheckpointAnchors(
+		filepath.Join(root, "evidence.jsonl"),
+		filepath.Join(root, "evidence.key"),
+		Options{},
+		"operator verified the chain after a checkpoint store storage failure",
+	); err != nil {
+		t.Fatalf("explicit checkpoint recovery failed: %v", err)
+	}
+	reopened, err := Open(filepath.Join(root, "evidence.jsonl"), filepath.Join(root, "evidence.key"))
+	if err != nil {
+		t.Fatalf("ledger did not recover after explicit re-anchoring: %v", err)
 	}
 	if err := reopened.Append("test", "after-repair", "verified"); err != nil {
 		t.Fatalf("append after checkpoint repair: %v", err)

@@ -126,21 +126,60 @@ func TestSignedFeedAuthorityVerificationAndRollbackRejection(t *testing.T) {
 	}
 }
 
+// FIND-WIN-015 (adapted from the pre-fix expectation): a missing feed-authority
+// key ring is no longer a silent TLS-only enforcement mode. Unsigned feed data
+// stays available for display and audit as ANNOTATE_ONLY, but no enforcement
+// counter/generation is published and no enforcement snapshot is written.
 func TestUnconfiguredFeedAuthorityIsReportedNotFaked(t *testing.T) {
-	manager, err := NewManager(t.TempDir())
+	root := t.TempDir()
+	source, _ := sourceByKey("feodo")
+	generated := time.Now().UTC().Add(-time.Minute)
+	writeCachedFeedSnapshot(t, root, source, generated, []string{"45.155.205.0/24"}, nil)
+	manager, err := NewManager(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status := manager.Status(); status.FeedAuthenticity != feedAuthenticityUnconfigured {
-		t.Fatalf("feed authenticity=%q, want %q", status.FeedAuthenticity, feedAuthenticityUnconfigured)
+	status := manager.Status()
+	if status.FeedAuthenticity != feedAuthenticityUnverified {
+		t.Fatalf("feed authenticity=%q, want %q", status.FeedAuthenticity, feedAuthenticityUnverified)
 	}
-	source, _ := sourceByKey("feodo")
+	if status.FeedEnforcement != feedEnforcementDisabled || status.FeedAuthorityError == "" {
+		t.Fatalf("unverified enforcement state is not explicit: %+v", status)
+	}
+	if status.BlockingIndicators != 0 || status.EnforcementGeneration != "" || status.BlockingFeedsTotal != 0 {
+		t.Fatalf("unverified authority still advertised enforcement: %+v", status)
+	}
+	if _, statErr := os.Stat(enforcementSnapshotPath(root)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unverified authority wrote an enforcement snapshot: %v", statErr)
+	}
+	// Display/audit stays available: the cached generation is loaded, but only as
+	// an annotation authority.
+	found := false
+	for _, feed := range status.Feeds {
+		if feed.Key != "feodo" {
+			continue
+		}
+		found = true
+		if feed.State != "CACHED" || feed.Indicators <= 0 {
+			t.Fatalf("unverified cached generation was not kept for display: %+v", feed)
+		}
+		if feed.EffectiveAction != ActionAnnotateOnly || feed.AuthorityVerified {
+			t.Fatalf("unverified feed advertised an enforcement authority: %+v", feed)
+		}
+	}
+	if !found {
+		t.Fatal("feodo feed state missing from status")
+	}
+	// The legacy verifier still reports display mode without fabricating a
+	// signature, so callers can distinguish "unverified" from "verified".
 	if document, err := manager.verifyFetchedAuthority(source, []string{"45.155.205.0/24"}, nil); err != nil || document != nil {
-		t.Fatalf("unconfigured verifier did not report legacy TLS-only mode: document=%v err=%v", document, err)
+		t.Fatalf("unconfigured verifier did not report display-only mode: document=%v err=%v", document, err)
 	}
 }
 
-func TestPresentButBrokenFeedAuthorityFailsClosed(t *testing.T) {
+// A provisioned but broken trust anchor fails closed and never enables
+// enforcement on unsigned data.
+func TestBrokenFeedAuthorityDisablesEnforcement(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "keys"), 0o700); err != nil {
 		t.Fatal(err)
@@ -148,16 +187,18 @@ func TestPresentButBrokenFeedAuthorityFailsClosed(t *testing.T) {
 	if err := os.WriteFile(feedAuthorityKeyringPath(root), []byte("{broken"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	source, _ := sourceByKey("feodo")
+	writeCachedFeedSnapshot(t, root, source, time.Now().UTC().Add(-time.Minute), []string{"45.155.205.0/24"}, nil)
 	manager, err := NewManager(root)
 	if err != nil {
 		t.Fatalf("broken trust anchor bricked the manager: %v", err)
 	}
-	source, _ := sourceByKey("feodo")
-	if _, err := manager.verifyFetchedAuthority(source, []string{"45.155.205.0/24"}, nil); err == nil {
-		t.Fatal("broken provisioned trust anchor did not fail closed")
+	status := manager.Status()
+	if status.FeedAuthenticity != feedAuthenticityFailed || status.FeedEnforcement != feedEnforcementDisabled {
+		t.Fatalf("broken trust anchor enforcement state is wrong: %+v", status)
 	}
-	if status := manager.Status(); status.FeedAuthenticity != feedAuthenticityFailed {
-		t.Fatalf("feed authenticity=%q, want %q", status.FeedAuthenticity, feedAuthenticityFailed)
+	if status.BlockingIndicators != 0 || status.EnforcementGeneration != "" {
+		t.Fatalf("broken trust anchor still advertised enforcement: %+v", status)
 	}
 }
 
@@ -251,7 +292,10 @@ func TestHardFeedTTLExpiresStaleCache(t *testing.T) {
 }
 
 func TestStatusReadTimeTTLWithdrawsAgingGeneration(t *testing.T) {
-	manager, err := NewManager(t.TempDir())
+	root := t.TempDir()
+	publicKey, _ := testAuthorityKeypair(t, "ttl-authority")
+	writeAuthorityKeyring(t, root, "ttl-authority", publicKey)
+	manager, err := NewManager(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +322,13 @@ func TestStatusReadTimeTTLWithdrawsAgingGeneration(t *testing.T) {
 	}
 }
 
-func TestClockRollbackWithdrawsFeedTrustAndRefusesSync(t *testing.T) {
+// FIND-WIN-015 (adapted): the pre-fix test wrote an unauthenticated (v1) clock
+// file with a future date and expected it to be trusted as a rollback mark. That
+// was exactly the unauthenticated-clock DoS finding. The unsigned/untrusted file
+// now fails closed: no date from it is adopted, the state is DEGRADED, and
+// synchronization is refused. The genuine authenticated rollback case is covered
+// by TestClockStateBackwardsJumpIsDetected.
+func TestUnauthenticatedClockHighWaterIsRejectedAndRefusesSync(t *testing.T) {
 	root := t.TempDir()
 	if err := atomicWrite(feedClockPath(root), []byte(`{"schemaVersion":1,"highWaterUtc":"`+time.Now().UTC().Add(2*time.Hour).Format(time.RFC3339Nano)+`"}`+"\n")); err != nil {
 		t.Fatal(err)
@@ -291,10 +341,16 @@ func TestClockRollbackWithdrawsFeedTrustAndRefusesSync(t *testing.T) {
 	}
 	status := manager.Status()
 	if !status.FeedClockRollback || status.BlockingIndicators != 0 {
-		t.Fatalf("clock rollback did not withdraw feed trust: %+v", status)
+		t.Fatalf("unauthenticated clock state did not withdraw feed trust: %+v", status)
+	}
+	if status.FeedClockError == "" {
+		t.Fatalf("unauthenticated clock state is not evident: %+v", status)
+	}
+	if manager.effectiveNowUTC().After(time.Now().UTC().Add(time.Minute)) {
+		t.Fatalf("forged future clock date became the effective now: %v", manager.effectiveNowUTC())
 	}
 	if err := manager.Sync(context.Background()); err == nil || !strings.Contains(err.Error(), "wall-clock rollback") {
-		t.Fatalf("sync did not refuse to run on a rolled-back clock: %v", err)
+		t.Fatalf("sync did not refuse to run on an untrusted clock state: %v", err)
 	}
 }
 

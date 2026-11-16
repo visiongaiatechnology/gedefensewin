@@ -151,6 +151,11 @@ type Status struct {
 	ThreatIntelPolling threatintel.PollingConfig `json:"threatIntelPolling"`
 	DefenderTelemetry  *DefenderTelemetry        `json:"defenderTelemetry,omitempty"`
 	NotificationCount  int                       `json:"notificationCount"`
+
+	// V6 egress/beacon evidence (passive detector; never enforces by itself).
+	Styx          *StyxStatus          `json:"styx,omitempty"`
+	StyxCollector *StyxCollectorStatus `json:"styxCollector,omitempty"`
+	StyxIncidents int                  `json:"styxIncidents"`
 }
 
 type NetworkFinding struct {

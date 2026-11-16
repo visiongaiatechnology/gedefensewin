@@ -4,41 +4,46 @@
 package mhx
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+	"unsafe"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winexec"
 )
 
 var (
 	hostsFileLock sync.Mutex
 	hostsFilePath = `C:\Windows\System32\drivers\etc\hosts`
-	// ghostStagingDirOverride is a test seam. In production the staging file is
-	// written under ProgramData so the sensitive System32\drivers\etc directory
-	// never contains a short-lived VGT temp file (which Titan would report as a
-	// system modification).
-	ghostStagingDirOverride = ""
 	// ghostFirewallApply is replaceable in tests so no real firewall mutation
 	// happens during `go test`.
 	ghostFirewallApply = applyGhostModeFirewall
+
+	hostsAdvapi32 = syscall.NewLazyDLL("advapi32.dll")
+	hostsKernel32 = syscall.NewLazyDLL("kernel32.dll")
+
+	procHostsGetFileSecurity = hostsAdvapi32.NewProc("GetFileSecurityW")
+	procHostsSetFileSecurity = hostsAdvapi32.NewProc("SetFileSecurityW")
+	procHostsReplaceFile     = hostsKernel32.NewProc("ReplaceFileW")
 )
 
-// ghostStagingDirectory returns a same-volume directory outside System32 for
-// the atomic hosts replacement staging file.
-func ghostStagingDirectory() string {
-	if ghostStagingDirOverride != "" {
-		return ghostStagingDirOverride
-	}
-	programData := strings.TrimSpace(os.Getenv("ProgramData"))
-	if programData != "" && filepath.IsAbs(programData) {
-		return filepath.Join(programData, "VGT", "GeDefense")
-	}
-	return os.TempDir()
-}
+const (
+	hostsDACLSecurityInformation   = 0x00000004
+	hostsErrorInsufficientBuffer   = 122
+	hostsMaxSecurityDescriptorSize = 1 << 20
+	hostsMaxHostsBytes             = 1 << 20
+	hostsReplaceFileWriteThrough   = 0x00000001
+	hostsReplaceFileIgnoreMerge    = 0x00000002
+)
 
 const (
 	ghostModeHeader = "# === VGT GHOST MODE TELEMETRY SINKHOLE START ==="
@@ -227,11 +232,45 @@ func buildGhostFirewallScript(enable bool) string {
 	return b.String()
 }
 
+// ghostFirewallPowerShellArguments is the project-standard hardened Windows
+// PowerShell invocation: absolute System32 PowerShell resolved by winexec,
+// no profile, non-interactive and AllSigned so no unsigned script or module can
+// be loaded by the firewall transaction (FIND-WIN-017).
+func ghostFirewallPowerShellArguments() []string {
+	return []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "AllSigned", "-Command", "-"}
+}
+
+// hardenedPowerShellEnvironment removes any inherited PSModulePath so the
+// firewall script can only import modules from the signed system module root
+// (an inherited, user-writable PSModulePath is a module-hijack surface).
+func hardenedPowerShellEnvironment() []string {
+	moduleRoot := system32Binary(filepath.Join("WindowsPowerShell", "v1.0", "Modules"))
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if entry == "" || strings.IndexByte(entry, 0) >= 0 {
+			continue
+		}
+		name := entry
+		if separator := strings.IndexByte(entry, '='); separator > 0 {
+			name = entry[:separator]
+		}
+		if strings.EqualFold(name, "PSModulePath") {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	return append(environment, "PSModulePath="+moduleRoot)
+}
+
 func runFirewallScript(script string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	shell := system32Binary(filepath.Join("WindowsPowerShell", "v1.0", "powershell.exe"))
-	command := exec.CommandContext(ctx, shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-")
+	shell, err := winexec.PowerShell()
+	if err != nil {
+		return fmt.Errorf("ghost firewall script: %w", err)
+	}
+	command := exec.CommandContext(ctx, shell, ghostFirewallPowerShellArguments()...)
+	command.Env = hardenedPowerShellEnvironment()
 	command.Stdin = strings.NewReader(script)
 	output, err := command.CombinedOutput()
 	if len(output) > 2048 {
@@ -251,9 +290,168 @@ func system32Binary(name string) string {
 	return filepath.Join(root, "System32", name)
 }
 
+// hostsFileSecurityDescriptor reads the effective DACL of path. A failure is
+// fatal for the hosts mutation: without the original DACL the replacement file
+// could not be proven to carry the same access control (FIND-WIN-017).
+func hostsFileSecurityDescriptor(path string) ([]byte, error) {
+	pathPointer, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	var required uint32
+	result, _, callErr := procHostsGetFileSecurity.Call(
+		uintptr(unsafe.Pointer(pathPointer)),
+		hostsDACLSecurityInformation,
+		0, 0,
+		uintptr(unsafe.Pointer(&required)),
+	)
+	if result == 0 && (required == 0 || required > hostsMaxSecurityDescriptorSize) {
+		return nil, hostsCallError("GetFileSecurityW", callErr)
+	}
+	if required == 0 || required > hostsMaxSecurityDescriptorSize {
+		return nil, fmt.Errorf("hosts security descriptor size rejected: %d", required)
+	}
+	buffer := make([]byte, required)
+	var written uint32
+	result, _, callErr = procHostsGetFileSecurity.Call(
+		uintptr(unsafe.Pointer(pathPointer)),
+		hostsDACLSecurityInformation,
+		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(len(buffer)),
+		uintptr(unsafe.Pointer(&written)),
+	)
+	if result == 0 || written == 0 || int(written) > len(buffer) {
+		return nil, hostsCallError("GetFileSecurityW", callErr)
+	}
+	return buffer[:written], nil
+}
+
+// hostsApplySecurityDescriptor applies the DACL part of a self-relative
+// security descriptor to path (used for the sibling staging file so a fallback
+// move can never transfer a restrictive directory DACL onto hosts).
+func hostsApplySecurityDescriptor(path string, descriptor []byte) error {
+	if len(descriptor) == 0 {
+		return fmt.Errorf("empty security descriptor rejected")
+	}
+	pathPointer, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	result, _, callErr := procHostsSetFileSecurity.Call(
+		uintptr(unsafe.Pointer(pathPointer)),
+		hostsDACLSecurityInformation,
+		uintptr(unsafe.Pointer(&descriptor[0])),
+		uintptr(len(descriptor)),
+	)
+	if result == 0 {
+		return hostsCallError("SetFileSecurityW", callErr)
+	}
+	return nil
+}
+
+func hostsCallError(operation string, callErr error) error {
+	var errno syscall.Errno
+	if errors.As(callErr, &errno) && errno != 0 {
+		return fmt.Errorf("%s failed with Windows error %d", operation, uint32(errno))
+	}
+	return fmt.Errorf("%s failed", operation)
+}
+
+// replaceHostsFile performs the atomic replacement. ReplaceFileW preserves the
+// destination security descriptor/attributes; MoveFileEx with REPLACE_EXISTING
+// is only the fallback after the staging file received the original DACL. Both
+// paths are atomic and there is deliberately no truncating in-place fallback:
+// a torn hosts file would break name resolution for the whole machine.
+func replaceHostsFile(temporaryPath string) error {
+	replacedPointer, err := syscall.UTF16PtrFromString(hostsFilePath)
+	if err != nil {
+		return err
+	}
+	temporaryPointer, err := syscall.UTF16PtrFromString(temporaryPath)
+	if err != nil {
+		return err
+	}
+	result, _, callErr := procHostsReplaceFile.Call(
+		uintptr(unsafe.Pointer(replacedPointer)),
+		uintptr(unsafe.Pointer(temporaryPointer)),
+		0,
+		hostsReplaceFileWriteThrough|hostsReplaceFileIgnoreMerge,
+		0, 0,
+	)
+	if result != 0 {
+		return nil
+	}
+	primaryErr := hostsCallError("ReplaceFileW", callErr)
+	if err := winapi.MoveFileReplace(temporaryPath, hostsFilePath); err != nil {
+		return fmt.Errorf("replace hosts file: %v (atomic fallback failed: %w)", primaryErr, err)
+	}
+	return nil
+}
+
+// stageAndReplaceHosts writes content through an empty sibling temporary file.
+// The original DACL is applied to the staging file before the first content
+// byte, the replacement is atomic and the result is read back (content and
+// DACL) before the mutation is reported as successful.
+func stageAndReplaceHosts(content string, original string, originalDescriptor []byte) error {
+	if len(content) > hostsMaxHostsBytes {
+		return fmt.Errorf("hosts content size rejected: %d bytes", len(content))
+	}
+	directory := filepath.Dir(hostsFilePath)
+	temporary, err := os.CreateTemp(directory, ".vgt-hosts-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create hosts staging file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	committed := false
+	defer func() {
+		_ = temporary.Close()
+		if !committed {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := hostsApplySecurityDescriptor(temporaryPath, originalDescriptor); err != nil {
+		return fmt.Errorf("apply original hosts DACL to staging file: %w", err)
+	}
+	if _, err := temporary.WriteString(content); err != nil {
+		return fmt.Errorf("write hosts staging file: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("flush hosts staging file: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close hosts staging file: %w", err)
+	}
+	if err := replaceHostsFile(temporaryPath); err != nil {
+		return err
+	}
+	committed = true
+	written, err := os.ReadFile(hostsFilePath)
+	if err != nil {
+		return fmt.Errorf("read back hosts file: %w", err)
+	}
+	if string(written) != content {
+		return fmt.Errorf("hosts read-back verification failed: %d bytes differ", len(written))
+	}
+	applied, err := hostsFileSecurityDescriptor(hostsFilePath)
+	if err != nil {
+		return fmt.Errorf("read back hosts DACL: %w", err)
+	}
+	if !bytes.Equal(applied, originalDescriptor) {
+		// Roll the content back so a DACL change never survives as a silent
+		// access-control regression.
+		if restoreErr := stageAndReplaceHosts(original, original, applied); restoreErr != nil {
+			return fmt.Errorf("hosts DACL read-back mismatch and rollback failed: %w", restoreErr)
+		}
+		return fmt.Errorf("hosts DACL read-back mismatch; original content restored")
+	}
+	return nil
+}
+
 // applyGhostModeHostsSinkhole is the Ghost Mode DNS-layer effect. The hosts file
-// is replaced crash-safely (temp file + flush + atomic rename) because a torn
-// write would break name resolution for the whole machine.
+// is replaced atomically through a sibling temporary file that carries the exact
+// original DACL, so neither a cross-directory rename nor a truncating fallback
+// can widen or narrow the access control of System32\drivers\etc\hosts
+// (FIND-WIN-017).
 func applyGhostModeHostsSinkhole(enable bool) error {
 	hostsFileLock.Lock()
 	defer hostsFileLock.Unlock()
@@ -261,6 +459,10 @@ func applyGhostModeHostsSinkhole(enable bool) error {
 	raw, err := os.ReadFile(hostsFilePath)
 	if err != nil {
 		return fmt.Errorf("read hosts file: %w", err)
+	}
+	originalDescriptor, err := hostsFileSecurityDescriptor(hostsFilePath)
+	if err != nil {
+		return fmt.Errorf("read hosts DACL: %w", err)
 	}
 	content := stripGhostModeBlock(string(raw))
 
@@ -282,47 +484,8 @@ func applyGhostModeHostsSinkhole(enable bool) error {
 		return nil
 	}
 
-	stagingDir := ghostStagingDirectory()
-	if err := os.MkdirAll(stagingDir, 0700); err != nil {
-		return fmt.Errorf("create hosts staging directory: %w", err)
-	}
-	tmpFile, err := os.CreateTemp(stagingDir, "hosts.vgt-*")
-	if err != nil {
-		return fmt.Errorf("create hosts staging file: %w", err)
-	}
-	tmpName := tmpFile.Name()
-	cleanup := func() {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpName)
-	}
-	if _, err := tmpFile.WriteString(content); err != nil {
-		cleanup()
-		return fmt.Errorf("write hosts staging file: %w", err)
-	}
-	if err := tmpFile.Sync(); err != nil {
-		cleanup()
-		return fmt.Errorf("flush hosts staging file: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("close hosts staging file: %w", err)
-	}
-	if err := os.Chmod(tmpName, 0644); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("permission hosts staging file: %w", err)
-	}
-	if err := os.Rename(tmpName, hostsFilePath); err != nil {
-		_ = os.Remove(tmpName)
-		// The hosts file is owned by TrustedInstaller; deleting/renaming it can
-		// be denied even for SYSTEM although the Modify ACE allows an in-place
-		// rewrite. Keep a recovery backup, then fall back to a truncating write.
-		backupPath := hostsFilePath + ".vgt-backup"
-		if _, statErr := os.Stat(backupPath); statErr != nil {
-			_ = os.WriteFile(backupPath, raw, 0600)
-		}
-		if writeErr := os.WriteFile(hostsFilePath, []byte(content), 0644); writeErr != nil {
-			return fmt.Errorf("replace hosts file: %v (fallback rewrite failed: %w)", err, writeErr)
-		}
+	if err := stageAndReplaceHosts(content, string(raw), originalDescriptor); err != nil {
+		return err
 	}
 	flushDNSCache()
 	return nil

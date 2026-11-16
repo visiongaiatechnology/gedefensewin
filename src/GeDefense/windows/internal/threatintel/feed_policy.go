@@ -256,16 +256,19 @@ func (m *Manager) loadFeedPolicy() {
 }
 
 // effectiveActionLocked resolves a feed key against the override layer while
-// policyMu is held for reading or writing.
+// policyMu is held for reading or writing. The result always passes the central
+// enforcement caps (ANNOTATE_ONLY ceiling plus verified signed-authority
+// requirement), so no consumer can act on an escalated or unverified authority.
 func (m *Manager) effectiveActionLocked(key string) Action {
-	if override, exists := m.overrides[key]; exists {
-		return override.Action
-	}
 	source, exists := sourceByKey(key)
 	if !exists {
 		return Action("")
 	}
-	return source.Action
+	resolved := source.Action
+	if override, exists := m.overrides[key]; exists {
+		resolved = override.Action
+	}
+	return capEnforcementAction(source.Action, resolved, m.authorityEnforcementAvailable())
 }
 
 // feedPolicyView returns a detached copy of the override layer for callers that
@@ -280,28 +283,38 @@ func (m *Manager) feedPolicyView() (map[string]FeedPolicyOverride, string, time.
 	return overrides, m.policySource, m.policyUpdatedUTC, m.policyStoreError
 }
 
-// applyEffectiveActions clones the given snapshots and replaces each feed's
-// authority with its effective action. Downloaded snapshots are never mutated.
-func applyEffectiveActionsToSnapshots(snapshots map[string]sourceSnapshot, overrides map[string]FeedPolicyOverride) map[string]sourceSnapshot {
+// applyEffectiveActionsToSnapshots clones the given snapshots and replaces each
+// feed's authority with its effective enforcement action. Downloaded snapshots
+// are never mutated. authorityAvailable is the fail-closed signed-authority gate
+// (FIND-WIN-015): without a verified key ring every feed is projected as
+// ANNOTATE_ONLY so it can never reach the enforcement compiler.
+func applyEffectiveActionsToSnapshots(snapshots map[string]sourceSnapshot, overrides map[string]FeedPolicyOverride, authorityAvailable bool) map[string]sourceSnapshot {
 	result := make(map[string]sourceSnapshot, len(snapshots))
 	for key, snapshot := range snapshots {
-		if override, exists := overrides[key]; exists {
-			snapshot.Action = override.Action
+		declared := snapshot.Action
+		if source, exists := sourceByKey(key); exists {
+			declared = source.Action
 		}
+		resolved := snapshot.Action
+		if override, exists := overrides[key]; exists {
+			resolved = override.Action
+		}
+		snapshot.Action = capEnforcementAction(declared, resolved, authorityAvailable)
 		result[key] = snapshot
 	}
 	return result
 }
 
 // effectiveBlockingCoverage counts effective BLOCK feeds and how many of those
-// have validated last-known-good indicators.
-func effectiveBlockingCoverage(snapshots map[string]sourceSnapshot, overrides map[string]FeedPolicyOverride) (total, ready int) {
+// have validated last-known-good indicators. The effective action is derived
+// through the same central enforcement caps as the compiler.
+func effectiveBlockingCoverage(snapshots map[string]sourceSnapshot, overrides map[string]FeedPolicyOverride, authorityAvailable bool) (total, ready int) {
 	for _, source := range catalog {
-		action := source.Action
+		resolved := source.Action
 		if override, exists := overrides[source.Key]; exists {
-			action = override.Action
+			resolved = override.Action
 		}
-		if action != ActionBlock {
+		if capEnforcementAction(source.Action, resolved, authorityAvailable) != ActionBlock {
 			continue
 		}
 		total++
@@ -329,15 +342,21 @@ func (m *Manager) FeedPolicy() FeedPolicySnapshot {
 	snapshot.StoreState = policySource
 	snapshot.StoreError = storeError
 	snapshot.UpdatedUTC = policyUpdatedUTC
+	authorityAvailable := m.authorityEnforcementAvailable()
 	if index != nil {
 		snapshot.Generation = index.generation
 		snapshot.Indicators = index.indicators
-		snapshot.BlockingIndicators = index.blocking
-		if index.blocking > 0 {
-			// An empty block projection has no meaningful enforcement
-			// generation; reporting the hash of an empty set would imply an
-			// enforcement authority that does not exist.
-			snapshot.EnforcementGeneration = index.enforcementGeneration
+		// FIND-WIN-015: no enforcement counter/generation is published while the
+		// signed-authority gate is closed, even if the in-memory index still holds
+		// a stale projection from an earlier state.
+		if authorityAvailable {
+			snapshot.BlockingIndicators = index.blocking
+			if index.blocking > 0 {
+				// An empty block projection has no meaningful enforcement
+				// generation; reporting the hash of an empty set would imply an
+				// enforcement authority that does not exist.
+				snapshot.EnforcementGeneration = index.enforcementGeneration
+			}
 		}
 	}
 	states := make(map[string]FeedState, len(status.Feeds))
@@ -350,12 +369,12 @@ func (m *Manager) FeedPolicy() FeedPolicySnapshot {
 		entry := FeedPolicyEntry{FeedKey: feedSource.Key, Name: feedSource.Name, DefaultAction: feedSource.Action, ConfiguredAction: feedSource.Action, EffectiveAction: feedSource.Action, Source: feedPolicySourceDefault}
 		if override, exists := overrides[feedSource.Key]; exists {
 			entry.ConfiguredAction = override.Action
-			entry.EffectiveAction = override.Action
 			entry.Source = feedPolicyEntrySource
 			entry.UpdatedUTC = override.UpdatedUTC
 		}
+		entry.EffectiveAction = capEnforcementAction(entry.DefaultAction, entry.ConfiguredAction, authorityAvailable)
 		entry.Blocking = entry.EffectiveAction == ActionBlock
-		entry.EnforcementImpact = feedEnforcementImpact(entry.DefaultAction, entry.EffectiveAction)
+		entry.EnforcementImpact = feedEnforcementImpact(entry.DefaultAction, entry.EffectiveAction, authorityAvailable)
 		if feedState, exists := states[feedSource.Key]; exists {
 			entry.Indicators = feedState.Indicators
 			entry.FeedState = feedState.State
@@ -378,7 +397,13 @@ func (m *Manager) FeedPolicy() FeedPolicySnapshot {
 	return snapshot
 }
 
-func feedEnforcementImpact(defaultAction, effectiveAction Action) string {
+// feedEnforcementImpact describes how the effective action differs from the
+// catalog declaration. An unavailable signed-authority gate is reported
+// explicitly instead of pretending the operator removed a block.
+func feedEnforcementImpact(defaultAction, effectiveAction Action, authorityAvailable bool) string {
+	if !authorityAvailable && defaultAction != ActionAnnotateOnly {
+		return "AUTHORITY_UNVERIFIED"
+	}
 	switch {
 	case defaultAction == effectiveAction:
 		return "NONE"
@@ -442,19 +467,27 @@ func (m *Manager) SetFeedActions(changes []FeedActionChange, reasonSHA256 string
 		if !validFeedAction(*change.Action) {
 			return FeedPolicySnapshot{}, errors.New("feed policy action rejected")
 		}
+		// FIND-WIN-015: the immutable catalog declaration is an enforcement
+		// ceiling. An ANNOTATE_ONLY feed can never be promoted (only downgraded),
+		// so an operator override cannot turn display-only intelligence into
+		// blocking authority.
+		if capDeclaredAction(source.Action, *change.Action) != *change.Action {
+			return FeedPolicySnapshot{}, fmt.Errorf("feed policy cannot promote ANNOTATE_ONLY feed %q beyond its declared authority", change.FeedKey)
+		}
 		nextOverrides[change.FeedKey] = FeedPolicyOverride{FeedKey: change.FeedKey, Action: *change.Action, UpdatedUTC: updatedUTC.UTC(), ReasonSHA256: reasonSHA256}
 	}
 
+	authorityAvailable := m.authorityEnforcementAvailable()
 	protectedPolicy, protectedPrefixes := m.protectedSnapshot()
-	index := buildIndex(applyEffectiveActionsToSnapshots(m.snapshots, nextOverrides))
+	index := buildIndex(applyEffectiveActionsToSnapshots(m.snapshots, nextOverrides, authorityAvailable))
 	if err := index.compileEnforcement(protectedPrefixes); err != nil {
 		return FeedPolicySnapshot{}, err
 	}
 	if index.blocking > maximumEnforcementIndicators {
 		return FeedPolicySnapshot{}, errors.New("blocking threat intelligence boundary exceeded")
 	}
-	blockingTotal, blockingReady := effectiveBlockingCoverage(m.snapshots, nextOverrides)
-	if index.indicators > 0 {
+	blockingTotal, blockingReady := effectiveBlockingCoverage(m.snapshots, nextOverrides, authorityAvailable)
+	if authorityAvailable && index.indicators > 0 {
 		if index.blocking == 0 {
 			return FeedPolicySnapshot{}, errors.New("feed policy would remove all blocking enforcement indicators")
 		}
@@ -485,11 +518,14 @@ func (m *Manager) SetFeedActions(changes []FeedActionChange, reasonSHA256 string
 		}
 		_ = os.Remove(feedPolicyPath(m.root))
 	}
-	if index.indicators > 0 {
+	if authorityAvailable && index.indicators > 0 {
 		if err := writeEnforcementSnapshot(m.root, updatedUTC, index, blockingReady, protectedPolicy); err != nil {
 			rollbackStore()
 			return FeedPolicySnapshot{}, fmt.Errorf("feed policy enforcement snapshot: %w", err)
 		}
+	} else if !authorityAvailable {
+		// No enforcement projection may survive while the authority gate is closed.
+		_ = os.Remove(enforcementSnapshotPath(m.root))
 	}
 	m.policyMu.Lock()
 	m.overrides = nextOverrides
@@ -532,13 +568,21 @@ func marshalFeedPolicyState(overrides map[string]FeedPolicyOverride, updatedUTC 
 func (m *Manager) applyFeedPolicyToStatus(index *Index, blockingTotal, blockingReady int) {
 	m.statusMu.Lock()
 	defer m.statusMu.Unlock()
+	authorityAvailable := m.authorityEnforcementAvailable()
 	if index != nil {
 		m.status.Indicators = index.indicators
-		m.status.BlockingIndicators = index.blocking
 		m.status.CorrelationIndicators = index.correlation
 		m.status.AnnotationIndicators = index.annotation
 		m.status.Generation = index.generation
-		m.status.EnforcementGeneration = index.enforcementGeneration
+		if authorityAvailable {
+			m.status.BlockingIndicators = index.blocking
+			m.status.EnforcementGeneration = index.enforcementGeneration
+		} else {
+			// FIND-WIN-015: never publish enforcement counters/generation while the
+			// signed-authority gate is closed.
+			m.status.BlockingIndicators = 0
+			m.status.EnforcementGeneration = ""
+		}
 	}
 	m.status.BlockingFeedsTotal = blockingTotal
 	m.status.BlockingFeedsReady = blockingReady

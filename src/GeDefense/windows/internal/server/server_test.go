@@ -72,8 +72,17 @@ func (f *fixedMHX) ReconcilePolicy(context.Context) error {
 func (f *fixedMHX) SentinelStore() *mhx.SentinelStore {
 	return f.sentinelStore
 }
-func (f *fixedMHX) TerminatePID(uint32, string) error {
+func (f *fixedMHX) TerminateTarget(mhx.TerminationTarget) error {
 	return nil
+}
+func (f *fixedMHX) StyxStatus() mhx.StyxStatus {
+	return mhx.StyxStatus{Mode: mhx.StyxModeOff, SensorState: "unavailable", Capability: "missing", Top: []mhx.StyxFlowSnapshot{}}
+}
+func (f *fixedMHX) StyxCollectorStatus() mhx.StyxCollectorStatus {
+	return mhx.StyxCollectorStatus{}
+}
+func (f *fixedMHX) StyxIncidents(int) []mhx.StyxIncident {
+	return []mhx.StyxIncident{}
 }
 func (f *fixedIntegrity) Status() integrity.Status { return f.status }
 func (f *fixedIntegrity) Configure(enabled bool, hours int) (integrity.Status, error) {

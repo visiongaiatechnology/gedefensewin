@@ -94,34 +94,39 @@ func Evaluate(policy Policy, store *PolicyStore, observation Observation, now ti
 		return authorization
 	}
 
-	if isMaintenanceStartOnly(observation) {
+	if tolerated, evidence := maintenanceStartOnlyEvidence(observation); tolerated {
 		authorization.Status = TrustTolerated
-		authorization.Reason = "Starttyp eines Windows-Wartungsdienstes wurde geändert; ImagePath, Diensttyp und Konto blieben unverändert. Die Änderung bleibt in der Evidenz, wird aber nicht als Persistenz-Hochrisiko eskaliert."
+		authorization.Reason = "Starttyp eines Windows-Wartungsdienstes wurde geändert; ImagePath, Diensttyp und Konto blieben unverändert. Beleg: " + evidence + ". Die Änderung bleibt in der Evidenz, wird aber nicht als Persistenz-Hochrisiko eskaliert."
 		authorization.NeedsReview = false
 		authorization.AutoQuarantine = false
 		return authorization
 	}
 
 	// 5.3.0 FP Normalization 1: Microsoft Defender Engine & Driver Updates
-	// In ModeSimple, ModeBalanced, ModeAggressive, ModeObserve, ModeContain, ModeStrict:
-	// Defender platform updates are tolerated. Only in ModeParanoid are they strictly flagged.
-	if policy.Mode != ModeParanoid && isDefenderPlatformUpdate(observation) {
-		authorization.Status = TrustTolerated
-		authorization.Reason = "Autorisiertes Microsoft Defender Plattform-/Signatur-Update durch MsMpEng; kein Fremdeingriff."
-		authorization.NeedsReview = false
-		authorization.AutoQuarantine = false
-		return authorization
+	// A tolerance requires a canonical Microsoft Defender path AND a valid
+	// Authenticode signature on the binary body. Name-only matches, an empty
+	// actor or an unverifiable signature stay flagged (FIND-WIN-010).
+	if policy.Mode != ModeParanoid {
+		if tolerated, evidence := titanDefenderPlatformEvidence(observation); tolerated {
+			authorization.Status = TrustTolerated
+			authorization.Reason = "Autorisiertes Microsoft Defender Plattform-/Signatur-Update belegt: " + evidence + "; kein Fremdeingriff."
+			authorization.NeedsReview = false
+			authorization.AutoQuarantine = false
+			return authorization
+		}
 	}
 
 	// 5.3.0 FP Normalization 2: Windows Per-User Services (e.g. MessagingService_12541b, OneSyncSvc_12541b)
 	// In ModeSimple, ModeBalanced, ModeObserve, ModeContain:
-	// Dynamic session instances of legitimate registered system services are tolerated.
+	// Dynamic session instances of registered system services are tolerated only
+	// when the service ImagePath proves canonical svchost.exe with a valid
+	// signature. Random service-name patterns alone are never tolerated.
 	// In ModeAggressive, ModeStrict, ModeParanoid:
 	// They are NOT tolerated automatically because the user explicitly wants them alerted or blocked.
 	if policy.Mode == ModeSimple || policy.Mode == ModeBalanced || policy.Mode == ModeObserve || policy.Mode == ModeContain || policy.Mode == "" {
-		if isPerUser, baseName := isWindowsPerUserService(observation); isPerUser {
+		if tolerated, evidence := isWindowsPerUserService(observation); tolerated {
 			authorization.Status = TrustTolerated
-			authorization.Reason = fmt.Sprintf("Legitimer Windows Per-User-Dienst (%s); dynamische Session-Instanz; keine bösartige Persistenz.", baseName)
+			authorization.Reason = fmt.Sprintf("Legitimer Windows Per-User-Dienst; dynamische Session-Instanz; belegt: %s.", evidence)
 			authorization.NeedsReview = false
 			authorization.AutoQuarantine = false
 			return authorization
@@ -129,12 +134,14 @@ func Evaluate(policy Policy, store *PolicyStore, observation Observation, now ti
 	}
 
 	// 5.3.0 FP Normalization 3: Visual Studio & Installer Session Temp Artifacts
-	if (policy.Mode == ModeSimple || policy.Mode == ModeBalanced || policy.Mode == ModeObserve || policy.Mode == ModeContain || policy.Mode == "") && isInstallerSessionTempArtifact(observation) {
-		authorization.Status = TrustTolerated
-		authorization.Reason = "Temporäre Sprach-/Ressourcendatei eines autorisierten UAC-Installationsvorgangs; kein eigenständiger Fremdeingriff."
-		authorization.NeedsReview = false
-		authorization.AutoQuarantine = false
-		return authorization
+	if policy.Mode == ModeSimple || policy.Mode == ModeBalanced || policy.Mode == ModeObserve || policy.Mode == ModeContain || policy.Mode == "" {
+		if tolerated, evidence := installerSessionTempArtifactEvidence(observation); tolerated {
+			authorization.Status = TrustTolerated
+			authorization.Reason = "Temporäre Sprach-/Ressourcendatei eines autorisierten Installationsvorgangs; belegt: " + evidence + "."
+			authorization.NeedsReview = false
+			authorization.AutoQuarantine = false
+			return authorization
+		}
 	}
 
 	// 5.3.0 FP Normalization 4: Windows Scheduled Maintenance Tasks (Defender Scans, SvcRestartTask, UpdateOrchestrator)
@@ -147,12 +154,16 @@ func Evaluate(policy Policy, store *PolicyStore, observation Observation, now ti
 	}
 
 	// 5.3.0 FP Normalization 5: Development & Build Test Artifacts in Temp (go test *.test.exe, node, npm)
-	if (policy.Mode == ModeSimple || policy.Mode == ModeBalanced || policy.Mode == ModeObserve || policy.Mode == ModeContain || policy.Mode == "") && isDevBuildTempArtifact(observation) {
-		authorization.Status = TrustTolerated
-		authorization.Reason = "Autorisiertes lokales Entwicklungs- oder Test-Build-Artefakt in temporärem Verzeichnis."
-		authorization.NeedsReview = false
-		authorization.AutoQuarantine = false
-		return authorization
+	// A tolerance requires the observed developer-tool actor evidence; a
+	// standalone ".test.exe" name in Temp is never enough (FIND-WIN-010).
+	if policy.Mode == ModeSimple || policy.Mode == ModeBalanced || policy.Mode == ModeObserve || policy.Mode == ModeContain || policy.Mode == "" {
+		if tolerated, evidence := devBuildTempArtifactEvidence(observation); tolerated {
+			authorization.Status = TrustTolerated
+			authorization.Reason = "Autorisiertes lokales Entwicklungs- oder Test-Build-Artefakt; belegt: " + evidence + "."
+			authorization.NeedsReview = false
+			authorization.AutoQuarantine = false
+			return authorization
+		}
 	}
 
 	if highRisk(riskClass, observation.Type, fileType) {
@@ -267,16 +278,34 @@ func classifyFile(path string) string {
 	}
 }
 
-func isMaintenanceStartOnly(observation Observation) bool {
+func maintenanceStartOnlyEvidence(observation Observation) (bool, string) {
 	if observation.Object.Kind != ObjectService || observation.Object.Change != "START_ONLY" {
-		return false
+		return false, ""
 	}
 	switch strings.ToUpper(strings.TrimSpace(observation.Object.Name)) {
 	case "BITS", "WUAUSERV", "TRUSTEDINSTALLER", "USOSVC", "WINDOWSMODULESINSTALLER":
-		return true
 	default:
-		return false
+		return false, ""
 	}
+	// A service name alone is attacker-chosen. The service's own configured
+	// image must prove to be a signed Windows servicing binary.
+	actorImage, actorPath := titanActorEvidence(observation)
+	if actorImage == "" || actorPath == "" {
+		return false, ""
+	}
+	switch actorImage {
+	case "svchost.exe", "trustedinstaller.exe", "tiworker.exe":
+	default:
+		return false, ""
+	}
+	if !titanPathWithin(actorPath, titanWindowsRootDir()) {
+		return false, ""
+	}
+	signature := titanFileSignatureStatus(actorPath)
+	if signature != signatureStatusValid {
+		return false, ""
+	}
+	return true, fmt.Sprintf("Dienst %s startet %s mit gültiger Authenticode-Signatur (%s)", observation.Object.Name, actorPath, signature)
 }
 
 func isRiskyType(fileType string) bool {
@@ -377,8 +406,15 @@ var knownPerUserTemplates = map[string]struct{}{
 	"graphicsperfsvc":                    {},
 }
 
+// isWindowsPerUserService recognizes the dynamic session instances of known
+// per-user service templates. A random "<name>_<hex>" service is never accepted:
+// the service ImagePath must resolve to canonical System32\svchost.exe and that
+// binary must carry a valid Authenticode signature (FIND-WIN-010).
 func isWindowsPerUserService(observation Observation) (bool, string) {
 	if observation.Object.Kind != ObjectService {
+		return false, ""
+	}
+	if observation.Type == EventPersistenceRemoved {
 		return false, ""
 	}
 	name := strings.TrimSpace(observation.Object.Name)
@@ -397,73 +433,53 @@ func isWindowsPerUserService(observation Observation) (bool, string) {
 			return false, ""
 		}
 	}
-	if _, ok := knownPerUserTemplates[strings.ToLower(base)]; ok {
-		return true, base
+	if _, known := knownPerUserTemplates[strings.ToLower(base)]; !known {
+		return false, ""
 	}
-	// Fallback: If base name ends with "service" or "svc", it is also a per-user template instance
-	baseLower := strings.ToLower(base)
-	if strings.HasSuffix(baseLower, "svc") || strings.HasSuffix(baseLower, "service") {
-		return true, base
+	actorImage, actorPath := titanActorEvidence(observation)
+	if actorImage != "svchost.exe" || actorPath == "" {
+		return false, ""
 	}
-	return false, ""
+	if !titanIsCanonicalWindowsSystemBinary(actorPath, "svchost.exe") {
+		return false, ""
+	}
+	signature := titanFileSignatureStatus(actorPath)
+	if signature != signatureStatusValid {
+		return false, ""
+	}
+	return true, fmt.Sprintf("%s über %s mit gültiger Authenticode-Signatur (%s)", base, actorPath, signature)
 }
 
-func isDefenderPlatformUpdate(observation Observation) bool {
-	actorImage := strings.ToLower(filepath.Base(strings.TrimSpace(observation.Actor.Image)))
-	if actorImage == "" && observation.Actor.Path != "" {
-		actorImage = strings.ToLower(filepath.Base(strings.TrimSpace(observation.Actor.Path)))
-	}
-
-	// 1. Defender Drivers & Binaries
-	if observation.Object.Kind == ObjectFile {
-		path := strings.ToLower(filepath.Clean(observation.Object.Path))
-		name := strings.ToLower(observation.Object.Name)
-		isDefenderDriverPath := strings.Contains(path, `\system32\drivers\wd\`) || strings.Contains(path, `\programdata\microsoft\windows defender\platform\`)
-		isDefenderDriverName := name == "wddevflt.sys" || name == "ksld.sys" || name == "wdfilter.sys" || name == "wdboot.sys"
-		if isDefenderDriverPath || isDefenderDriverName {
-			if actorImage == "msmpeng.exe" || actorImage == "mpsigstub.exe" || actorImage == "trustedinstaller.exe" || actorImage == "tiworker.exe" {
-				return true
-			}
-			// If actor image was not captured during temporal correlation, driver path and name match
-			if isDefenderDriverPath && isDefenderDriverName {
-				return true
-			}
-		}
-	}
-
-	// 2. Defender Services ImagePath/Config updates
-	if observation.Object.Kind == ObjectService {
-		serviceName := strings.ToUpper(strings.TrimSpace(observation.Object.Name))
-		if serviceName == "WINDEFEND" || serviceName == "WDNISSVC" || serviceName == "MDCORESVC" || serviceName == "SENSE" {
-			if actorImage == "msmpeng.exe" || actorImage == "trustedinstaller.exe" || actorImage == "tiworker.exe" || actorImage == "services.exe" || actorImage == "" {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func isInstallerSessionTempArtifact(observation Observation) bool {
+func installerSessionTempArtifactEvidence(observation Observation) (bool, string) {
 	if observation.Object.Kind != ObjectFile {
-		return false
+		return false, ""
 	}
 	path := strings.ToLower(filepath.Clean(observation.Object.Path))
 	if !strings.Contains(path, `\appdata\local\temp\`) && !strings.Contains(path, `\windows\temp\`) {
-		return false
+		return false, ""
 	}
-	name := strings.ToLower(observation.Object.Name)
-	if strings.HasSuffix(name, ".resources.dll") {
-		return true
+	name := strings.ToLower(strings.TrimSpace(observation.Object.Name))
+	if name == "" {
+		name = strings.ToLower(filepath.Base(observation.Object.Path))
 	}
-	actorImage := strings.ToLower(filepath.Base(strings.TrimSpace(observation.Actor.Image)))
-	switch actorImage {
-	case "consent.exe", "dllhost.exe", "msiexec.exe", "setup.exe", "vs_installer.exe", "vs_installerservice.exe", "tiworker.exe", "trustedinstaller.exe":
-		if strings.HasSuffix(name, ".dll") || strings.HasSuffix(name, ".tmp") {
-			return true
-		}
+	if !strings.HasSuffix(name, ".resources.dll") && !strings.HasSuffix(name, ".dll") && !strings.HasSuffix(name, ".tmp") {
+		return false, ""
 	}
-	return false
+	actorImage, actorPath := titanActorEvidence(observation)
+	if actorImage == "" || actorPath == "" {
+		return false, ""
+	}
+	if _, allowed := titanInstallerTempActorImages[actorImage]; !allowed {
+		return false, ""
+	}
+	if !titanIsCanonicalTrustedToolPath(actorPath) {
+		return false, ""
+	}
+	signature := titanFileSignatureStatus(actorPath)
+	if signature != signatureStatusValid {
+		return false, ""
+	}
+	return true, fmt.Sprintf("%s durch Installer-Komponente %s mit gültiger Authenticode-Signatur (%s)", name, actorPath, signature)
 }
 
 func isWindowsMaintenanceTask(observation Observation) bool {
@@ -489,37 +505,121 @@ func isWindowsMaintenanceTask(observation Observation) bool {
 	return false
 }
 
-func isDevBuildTempArtifact(observation Observation) bool {
+// titanInstallerTempActorImages are the only installer components whose
+// temporary localization/resource artifacts may be tolerated, and only together
+// with a canonical trusted tool path and a valid Authenticode signature.
+var titanInstallerTempActorImages = map[string]struct{}{
+	"consent.exe":             {},
+	"dllhost.exe":             {},
+	"msiexec.exe":             {},
+	"setup.exe":               {},
+	"vs_installer.exe":        {},
+	"vs_installerservice.exe": {},
+	"tiworker.exe":            {},
+	"trustedinstaller.exe":    {},
+}
+
+// titanGoToolchainImages are the bounded set of Go toolchain actors a Go test
+// artifact may be attributed to. Windows Go binaries are not Authenticode
+// signed, so the tolerance rests on the observed process identity instead of a
+// name-only match.
+var titanGoToolchainImages = map[string]struct{}{
+	"go.exe":      {},
+	"compile.exe": {},
+	"link.exe":    {},
+	"asm.exe":     {},
+	"vet.exe":     {},
+}
+
+// titanDeveloperImages are the narrow developer tool actors tolerated for
+// temporary build output. Shells and interpreters that an attacker can launch
+// trivially are deliberately not part of this set.
+var titanDeveloperImages = map[string]struct{}{
+	"go.exe":       {},
+	"compile.exe":  {},
+	"link.exe":     {},
+	"node.exe":     {},
+	"python.exe":   {},
+	"code.exe":     {},
+	"vscodium.exe": {},
+}
+
+func devBuildTempArtifactEvidence(observation Observation) (bool, string) {
 	if observation.Object.Kind != ObjectFile {
-		return false
+		return false, ""
 	}
 	path := strings.ToLower(filepath.Clean(observation.Object.Path))
-	name := strings.ToLower(observation.Object.Name)
+	name := strings.ToLower(strings.TrimSpace(observation.Object.Name))
+	if name == "" {
+		name = strings.ToLower(filepath.Base(observation.Object.Path))
+	}
 
 	isTemp := strings.Contains(path, `\appdata\local\temp\`) || strings.Contains(path, `\windows\temp\`)
 	if !isTemp {
-		return false
+		return false, ""
+	}
+
+	actorImage, actorPath := titanActorEvidence(observation)
+	if actorImage == "" || actorPath == "" {
+		return false, ""
+	}
+	// A bare image name is attacker-controlled. Only a process that Titan
+	// actually observed may justify a developer-artifact tolerance.
+	switch observation.Actor.CorrelationQuality {
+	case CorrelationObserved, CorrelationTemporal:
+	default:
+		return false, ""
 	}
 
 	// 1. Go test executables and Go build cache
-	if strings.HasSuffix(name, ".test.exe") || strings.Contains(path, `\go-build`) || name == "a.out.exe" {
-		return true
+	isGoTest := strings.HasSuffix(name, ".test.exe") || strings.Contains(path, `\go-build`) || name == "a.out.exe"
+	if isGoTest {
+		if _, allowed := titanGoToolchainImages[actorImage]; !allowed {
+			return false, ""
+		}
+		return true, fmt.Sprintf("Go-Testartefakt %s, beobachteter Go-Actor %s", name, actorPath)
 	}
 
 	// 2. Node.js / NPM / yarn build artifacts and modules in temp
-	if strings.Contains(path, `\npm-cache\`) || strings.Contains(path, `\yarn-`) || strings.Contains(path, `\node_modules\`) {
-		return true
+	isNodeArtifact := strings.Contains(path, `\npm-cache\`) || strings.Contains(path, `\yarn-`) || strings.Contains(path, `\node_modules\`)
+	if isNodeArtifact {
+		if _, allowed := titanDeveloperImages[actorImage]; !allowed {
+			return false, ""
+		}
+		return true, fmt.Sprintf("Node-Buildartefakt %s, beobachteter Entwickler-Actor %s", name, actorPath)
 	}
 
 	// 3. Known developer tool actor
-	actorImage := strings.ToLower(filepath.Base(strings.TrimSpace(observation.Actor.Image)))
-	switch actorImage {
-	case "go.exe", "compile.exe", "link.exe", "node.exe", "python.exe", "pwsh.exe", "powershell.exe", "code.exe", "vscodium.exe", "antigravity.exe":
-		if strings.HasSuffix(name, ".exe") || strings.HasSuffix(name, ".js") || strings.HasSuffix(name, ".py") || strings.HasSuffix(name, ".tmp") {
-			return true
-		}
+	if _, allowed := titanDeveloperImages[actorImage]; !allowed {
+		return false, ""
 	}
-	return false
+	if strings.HasSuffix(name, ".exe") || strings.HasSuffix(name, ".js") || strings.HasSuffix(name, ".py") || strings.HasSuffix(name, ".tmp") {
+		return true, fmt.Sprintf("%s durch beobachtetes Entwicklerwerkzeug %s", name, actorPath)
+	}
+	return false, ""
+}
+
+// Boolean wrappers keep the historic policy-helper contracts available for
+// regression tests. The policy engine itself always uses the evidence-returning
+// variants so that every tolerance decision carries its justification.
+func isMaintenanceStartOnly(observation Observation) bool {
+	tolerated, _ := maintenanceStartOnlyEvidence(observation)
+	return tolerated
+}
+
+func isDefenderPlatformUpdate(observation Observation) bool {
+	tolerated, _ := titanDefenderPlatformEvidence(observation)
+	return tolerated
+}
+
+func isInstallerSessionTempArtifact(observation Observation) bool {
+	tolerated, _ := installerSessionTempArtifactEvidence(observation)
+	return tolerated
+}
+
+func isDevBuildTempArtifact(observation Observation) bool {
+	tolerated, _ := devBuildTempArtifactEvidence(observation)
+	return tolerated
 }
 
 func isGeDefenseOperation(observation Observation) bool {

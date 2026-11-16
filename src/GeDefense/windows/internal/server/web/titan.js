@@ -159,7 +159,10 @@ function renderStatus(status){
   const secure=boot.secureBoot;
   setText('titanBootState',secure===true?'SECURE BOOT AKTIV':secure===false?'SECURE BOOT DEAKTIVIERT':'NICHT GEMESSEN');
   setText('titanBootDetail',boot.detail||'Keine ausreichende Boot-Messung verfügbar.');
-  setText('titanSensorState',status.journalError||(status.sensors||[]).some(sensor=>sensor.state==='DEGRADED')?'Mindestens ein Sensor ist eingeschränkt. Fehlende Abdeckung wird nicht als gesund gewertet.':'Alle gemeldeten Sensoren sind innerhalb ihrer Abdeckung gesund.');
+  const quarantineIntegrity=Array.isArray(status.quarantineIntegrity)?status.quarantineIntegrity:[];
+  setText('titanSensorState',quarantineIntegrity.length
+    ?`Quarantäne-Metadaten-Integrität verletzt (${formatNumber(quarantineIntegrity.length)} betroffene Einträge). Die Objekte sind für Wiederherstellung und Prüfung gesperrt.`
+    :status.journalError||(status.sensors||[]).some(sensor=>sensor.state==='DEGRADED')?'Mindestens ein Sensor ist eingeschränkt. Fehlende Abdeckung wird nicht als gesund gewertet.':'Alle gemeldeten Sensoren sind innerhalb ihrer Abdeckung gesund.');
 
   const sensors=byId('titanSensors');
   if(sensors){
@@ -451,12 +454,24 @@ function renderQuarantineEntry(entry){
   meta.append(node('span','',`SHA-256 ${String(entry.sha256||'').slice(0,16)}…`),node('span','',formatBytes(entry.size||0)),node('span','',formatTime(entry.createdUtc)));
   main.append(meta);
   if(entry.reason)main.append(node('small','',entry.reason));
+  if(entry.restoreReason)main.append(node('small','',`Wiederherstellung: ${entry.restoreReason}`));
   const side=node('div','titan-quarantine-actions');
-  const stateBadge=node('span','titan-quarantine-state',entry.state==='RESTORED'?'WIEDERHERGESTELLT':entry.originalGone?'ISOLIERT':'ORIGINAL GESPERRT');
-  stateBadge.dataset.state=entry.state||'';
+  // A quarantine record whose authenticated metadata MAC failed verification is
+  // blocked by the service. The UI must show that instead of claiming the object
+  // is still safely isolated while restore/review are unavailable.
+  const integrityIds=new Set((Array.isArray(state.status?.quarantineIntegrity)?state.status.quarantineIntegrity:[])
+    .map(issue=>issue&&issue.id).filter(Boolean));
+  const integrityBroken=integrityIds.has(entry.id);
+  const restoredDegraded=String(entry.state||'').toUpperCase()==='RESTORED_DEGRADED';
+  const stateBadge=node('span','titan-quarantine-state',
+    integrityBroken?'INTEGRITÄT VERLETZT'
+      :restoredDegraded?'WIEDERHERGESTELLT · EINGESCHRÄNKT'
+        :String(entry.state||'').toUpperCase()==='RESTORED'?'WIEDERHERGESTELLT'
+          :entry.originalGone?'ISOLIERT':'ORIGINAL GESPERRT');
+  stateBadge.dataset.state=integrityBroken?'INTEGRITY_VIOLATION':(entry.state||'');
   side.append(stateBadge);
-  if(entry.state!=='RESTORED'&&entry.originalGone!==false)side.append(actionButton('Wiederherstellen','restore',entry.id));
-  if(!entry.reviewed)side.append(actionButton('Als geprüft','review',entry.id,'ghost'));
+  if(!integrityBroken&&entry.state!=='RESTORED'&&entry.originalGone!==false)side.append(actionButton('Wiederherstellen','restore',entry.id));
+  if(!integrityBroken&&!entry.reviewed)side.append(actionButton('Als geprüft','review',entry.id,'ghost'));
   row.append(main,side);
   return row;
 }

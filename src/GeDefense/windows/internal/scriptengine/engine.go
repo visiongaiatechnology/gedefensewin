@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +49,41 @@ func New(script, operationRoot string, timeout time.Duration) (*Engine, error) {
 	return &Engine{script: script, operationRoot: operationRoot, timeout: timeout}, nil
 }
 
+// powerShellArguments is the single hardened Windows PowerShell invocation used
+// by the script engine: no profile, non-interactive and AllSigned so neither an
+// unsigned script nor a profile-sourced script can run during a transaction.
+func powerShellArguments(script, output string, extraArgs []string) []string {
+	arguments := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "AllSigned", "-File", script, "-OutputPath", output}
+	return append(arguments, extraArgs...)
+}
+
+// hardenedPowerShellEnvironment removes any inherited PSModulePath so the
+// transaction can only import modules from the signed system module root. An
+// inherited, user-writable PSModulePath is a module-hijacking surface
+// (FIND-WIN-017).
+func hardenedPowerShellEnvironment() []string {
+	systemRoot := os.Getenv("SystemRoot")
+	if systemRoot == "" || !filepath.IsAbs(systemRoot) {
+		systemRoot = `C:\Windows`
+	}
+	moduleRoot := filepath.Join(filepath.Clean(systemRoot), "System32", "WindowsPowerShell", "v1.0", "Modules")
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if entry == "" || strings.IndexByte(entry, 0) >= 0 {
+			continue
+		}
+		name := entry
+		if separator := strings.IndexByte(entry, '='); separator > 0 {
+			name = entry[:separator]
+		}
+		if strings.EqualFold(name, "PSModulePath") {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	return append(environment, "PSModulePath="+moduleRoot)
+}
+
 func RunJSON[T any](engine *Engine, parent context.Context, operation string, extraArgs ...string) (result T, err error) {
 	if operation == "" || len(operation) > 48 {
 		return result, errors.New("operation name rejected")
@@ -58,13 +94,12 @@ func RunJSON[T any](engine *Engine, parent context.Context, operation string, ex
 	defer cancel()
 	output := filepath.Join(engine.operationRoot, fmt.Sprintf("%s-%d.json", operation, time.Now().UnixNano()))
 	defer cleanup.RemoveInto(&err, output)
-	arguments := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "AllSigned", "-File", engine.script, "-OutputPath", output}
-	arguments = append(arguments, extraArgs...)
 	powerShell, err := winexec.PowerShell()
 	if err != nil {
 		return result, err
 	}
-	command := exec.CommandContext(ctx, powerShell, arguments...)
+	command := exec.CommandContext(ctx, powerShell, powerShellArguments(engine.script, output, extraArgs)...)
+	command.Env = hardenedPowerShellEnvironment()
 	command.WaitDelay = 3 * time.Second
 	command.Cancel = func() error {
 		if command.Process != nil && command.Process.Pid > 0 {

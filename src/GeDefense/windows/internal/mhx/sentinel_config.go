@@ -1,4 +1,4 @@
-// STATUS: DIAMANT VGT SUPREME
+// STATUS: PLATIN VGT SUPREME
 package mhx
 
 import (
@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +23,12 @@ const (
 	maxSentinelPathBytes   = 260
 	maxWhitelistEntries    = 256
 	maxSentinelReasonBytes = 512
+
+	// unsafeWildcardMigrationReason documents a FIND-WIN-009 migration that
+	// deactivated a whitelist entry which authorized by file name wildcard
+	// alone. The text is bounded like every other operator-facing reason and is
+	// part of the persisted JSON only as an optional field.
+	unsafeWildcardMigrationReason = "FIND-WIN-009: Wildcard-Whitelist ohne SHA-256-/Signer-Pin deaktiviert; Eintrag mit SHA-256- oder Signer-Pin neu anlegen"
 )
 
 type SystemAppEntry struct {
@@ -43,6 +50,11 @@ type WhitelistEntry struct {
 	AddedUTC     time.Time `json:"addedUtc"`
 	LastSeenUTC  time.Time `json:"lastSeenUtc,omitempty"`
 	CurrentScore int       `json:"currentScore"`
+	// DisabledReason is optional (omitempty) and therefore contract-compatible
+	// with older clients. It explains why an entry is currently disabled, for
+	// example a legacy filename-only wildcard that the FIND-WIN-009 migration
+	// deactivated because it carried no SHA-256 or signer pin.
+	DisabledReason string `json:"disabledReason,omitempty"`
 }
 
 type SentinelConfig struct {
@@ -105,6 +117,13 @@ func defaultSentinelConfig() SentinelConfig {
 		cfg.SystemApps[app.ID] = app
 	}
 
+	// FIND-WIN-009: default entries must not authorize through a bare file-name
+	// wildcard. Every default entry below names an absolute canonical path; the
+	// developer-tool entries that used to be enabled as "*name.exe" are shipped
+	// disabled (with a visible reason) because a filename-only wildcard cannot
+	// be pinned to a publisher or binary hash without knowing the install path.
+	// An owner can re-add them through AddWhitelistAppPinned with a SHA-256 or
+	// signer pin; the store refuses to enable an unpinned wildcard again.
 	defaultWhitelist := []WhitelistEntry{
 		{ID: "wl_gedefense_svc", Name: "GeDefense Service", PathPattern: `C:\Program Files\VGT\GeDefense\bin\gedefense-windows.exe`, Enabled: true, IsSystemApp: true, AddedUTC: time.Now().UTC()},
 		{ID: "wl_gedefense_center", Name: "GeDefense Center", PathPattern: `C:\Program Files\VGT\GeDefense\bin\GeDefenseCenter.exe`, Enabled: true, IsSystemApp: true, AddedUTC: time.Now().UTC()},
@@ -113,13 +132,13 @@ func defaultSentinelConfig() SentinelConfig {
 		{ID: "wl_chrome", Name: "Google Chrome", PathPattern: `C:\Program Files\Google\Chrome\Application\chrome.exe`, Enabled: true, IsSystemApp: false, AddedUTC: time.Now().UTC()},
 		{ID: "wl_msedge", Name: "Microsoft Edge", PathPattern: `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`, Enabled: true, IsSystemApp: false, AddedUTC: time.Now().UTC()},
 		{ID: "wl_firefox", Name: "Mozilla Firefox", PathPattern: `C:\Program Files\Mozilla Firefox\firefox.exe`, Enabled: true, IsSystemApp: false, AddedUTC: time.Now().UTC()},
-		{ID: "wl_antigravity", Name: "Antigravity Assistant", PathPattern: `*antigravity.exe`, Enabled: true, IsSystemApp: false, AddedUTC: time.Now().UTC()},
-		{ID: "wl_codex", Name: "VGT Codex", PathPattern: `*codex.exe`, Enabled: true, IsSystemApp: false, AddedUTC: time.Now().UTC()},
-		{ID: "wl_vscodium", Name: "VSCodium / VS Code", PathPattern: `*vscodium.exe`, Enabled: true, IsSystemApp: false, AddedUTC: time.Now().UTC()},
-		{ID: "wl_code", Name: "Visual Studio Code", PathPattern: `*code.exe`, Enabled: true, IsSystemApp: false, AddedUTC: time.Now().UTC()},
-		{ID: "wl_go", Name: "Go Toolchain", PathPattern: `*go.exe`, Enabled: true, IsSystemApp: false, AddedUTC: time.Now().UTC()},
-		{ID: "wl_git", Name: "Git Version Control", PathPattern: `*git.exe`, Enabled: true, IsSystemApp: false, AddedUTC: time.Now().UTC()},
-		{ID: "wl_ollama", Name: "Ollama Local AI", PathPattern: `*ollama.exe`, Enabled: true, IsSystemApp: false, AddedUTC: time.Now().UTC()},
+		{ID: "wl_antigravity", Name: "Antigravity Assistant", PathPattern: `*antigravity.exe`, Enabled: false, IsSystemApp: false, AddedUTC: time.Now().UTC(), DisabledReason: unsafeWildcardMigrationReason},
+		{ID: "wl_codex", Name: "VGT Codex", PathPattern: `*codex.exe`, Enabled: false, IsSystemApp: false, AddedUTC: time.Now().UTC(), DisabledReason: unsafeWildcardMigrationReason},
+		{ID: "wl_vscodium", Name: "VSCodium / VS Code", PathPattern: `*vscodium.exe`, Enabled: false, IsSystemApp: false, AddedUTC: time.Now().UTC(), DisabledReason: unsafeWildcardMigrationReason},
+		{ID: "wl_code", Name: "Visual Studio Code", PathPattern: `*code.exe`, Enabled: false, IsSystemApp: false, AddedUTC: time.Now().UTC(), DisabledReason: unsafeWildcardMigrationReason},
+		{ID: "wl_go", Name: "Go Toolchain", PathPattern: `*go.exe`, Enabled: false, IsSystemApp: false, AddedUTC: time.Now().UTC(), DisabledReason: unsafeWildcardMigrationReason},
+		{ID: "wl_git", Name: "Git Version Control", PathPattern: `*git.exe`, Enabled: false, IsSystemApp: false, AddedUTC: time.Now().UTC(), DisabledReason: unsafeWildcardMigrationReason},
+		{ID: "wl_ollama", Name: "Ollama Local AI", PathPattern: `*ollama.exe`, Enabled: false, IsSystemApp: false, AddedUTC: time.Now().UTC(), DisabledReason: unsafeWildcardMigrationReason},
 	}
 	for _, item := range defaultWhitelist {
 		cfg.Whitelist[item.ID] = item
@@ -141,6 +160,7 @@ func OpenSentinelStore(root string) (*SentinelStore, error) {
 		if err := store.saveLocked(); err != nil {
 			return nil, err
 		}
+		store.publishTriagePolicy()
 		return store, nil
 	}
 	if err != nil {
@@ -165,6 +185,7 @@ func OpenSentinelStore(root string) (*SentinelStore, error) {
 		if saveErr := store.saveLocked(); saveErr != nil {
 			return nil, saveErr
 		}
+		store.publishTriagePolicy()
 		return store, nil
 	}
 	if loaded.ActiveSignatures == nil {
@@ -177,6 +198,31 @@ func OpenSentinelStore(root string) (*SentinelStore, error) {
 		loaded.Whitelist = make(map[string]WhitelistEntry)
 	}
 	modified := false
+	// FIND-WIN-009 migration: older builds persisted filename-only wildcard
+	// whitelist entries (for example "*code.exe") that authorized any binary
+	// with a matching basename, including one in a user-writable directory.
+	// Those entries are deactivated on load instead of being materialized as
+	// valid; the reason stays visible for the operator and no entry is deleted.
+	migratedWildcards := 0
+	for id, entry := range loaded.Whitelist {
+		if whitelistEntryAuthorizationSafe(entry) {
+			continue
+		}
+		if entry.Enabled || entry.DisabledReason == "" {
+			entry.Enabled = false
+			entry.DisabledReason = unsafeWildcardMigrationReason
+			loaded.Whitelist[id] = entry
+			migratedWildcards++
+			modified = true
+		}
+	}
+	if migratedWildcards > 0 {
+		note := fmt.Sprintf("%s (%d Einträge deaktiviert)", unsafeWildcardMigrationReason, migratedWildcards)
+		if previous := strings.TrimSpace(loaded.Reason); previous != "" {
+			note += " | " + previous
+		}
+		loaded.Reason = trimSentinelText(note)
+	}
 	// Forward-migrate the curated system-app catalog: existing installations
 	// must not end up with an empty table merely because their persisted config
 	// predates the 5.3.0 catalog.
@@ -220,6 +266,7 @@ func OpenSentinelStore(root string) (*SentinelStore, error) {
 	if modified {
 		_ = store.saveLocked()
 	}
+	store.publishTriagePolicy()
 	return store, nil
 }
 
@@ -258,6 +305,63 @@ func cloneSentinelConfig(cfg SentinelConfig) SentinelConfig {
 	return res
 }
 
+// sentinelTriagePolicy is the immutable snapshot the native process-creation
+// sensor consults before it may drop an event. The sensor is started by the
+// engine that owns the Sentinel store but is constructed without a store
+// reference (watcher_windows.go), so the active policy is published here as a
+// compact read-only view. Production runs exactly one SentinelStore per
+// process; the most recently opened/updated store is authoritative.
+//
+// The type is deliberately detached from SentinelConfig: triage only needs the
+// switches that can make an otherwise uninteresting image interesting, and the
+// sensor hot path must not clone maps on every 4688 record.
+type sentinelTriagePolicy struct {
+	paranoia bool
+	// ghostModeTelemetryKill is part of the immutable policy snapshot for
+	// completeness; the sensor always forwards the curated telemetry process
+	// list (fail-safe), independent of the toggle, so it cannot be used to
+	// suppress an event here.
+	ghostModeTelemetryKill bool
+	killerdomEnabled       bool
+	// activeSignatures is immutable after publication: callers must never
+	// mutate the map. EvaluateKillerdomCLI only reads it.
+	activeSignatures map[string]bool
+}
+
+// activeSentinelTriagePolicy is nil until a Sentinel store is opened. Triage
+// treats a nil policy as "cannot prove the event is uninteresting" and
+// therefore forwards the event (fail-safe toward detection).
+var activeSentinelTriagePolicy atomic.Pointer[sentinelTriagePolicy]
+
+// publishSentinelTriagePolicyFromConfig publishes the triage view for cfg. It
+// copies the signature map once so readers never observe a concurrent map
+// write. Tests use the same entry point to make triage deterministic.
+func publishSentinelTriagePolicyFromConfig(cfg SentinelConfig) {
+	signatures := make(map[string]bool, len(cfg.ActiveSignatures))
+	for id, enabled := range cfg.ActiveSignatures {
+		signatures[id] = enabled
+	}
+	activeSentinelTriagePolicy.Store(&sentinelTriagePolicy{
+		paranoia:               cfg.ParanoiaMode,
+		ghostModeTelemetryKill: cfg.GhostModeTelemetryKill,
+		killerdomEnabled:       cfg.KillerdomEnabled,
+		activeSignatures:       signatures,
+	})
+}
+
+// publishTriagePolicy republishes the current config. The caller must hold
+// s.mu (write lock) or exclusively own the store (OpenSentinelStore paths).
+func (s *SentinelStore) publishTriagePolicy() {
+	publishSentinelTriagePolicyFromConfig(s.config)
+}
+
+// currentSentinelTriagePolicy returns the active triage view. A false result
+// means no Sentinel policy has been published yet.
+func currentSentinelTriagePolicy() (*sentinelTriagePolicy, bool) {
+	policy := activeSentinelTriagePolicy.Load()
+	return policy, policy != nil
+}
+
 func (s *SentinelStore) SetParanoiaMode(enabled bool, reason string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -266,8 +370,10 @@ func (s *SentinelStore) SetParanoiaMode(enabled bool, reason string) error {
 	s.config.Reason = trimSentinelText(reason)
 	if err := s.saveLocked(); err != nil {
 		s.config.ParanoiaMode, s.config.Reason = previousEnabled, previousReason
+		s.publishTriagePolicy()
 		return err
 	}
+	s.publishTriagePolicy()
 	return nil
 }
 
@@ -279,8 +385,10 @@ func (s *SentinelStore) SetKillerdomEnabled(enabled bool, reason string) error {
 	s.config.Reason = trimSentinelText(reason)
 	if err := s.saveLocked(); err != nil {
 		s.config.KillerdomEnabled, s.config.Reason = previousEnabled, previousReason
+		s.publishTriagePolicy()
 		return err
 	}
+	s.publishTriagePolicy()
 	return nil
 }
 
@@ -320,11 +428,13 @@ func (s *SentinelStore) SetGhostMode(enabled bool, reason string) error {
 		// never diverge.
 		s.config.GhostModeTelemetryKill = previous
 		s.config.Reason = previousReason
+		s.publishTriagePolicy()
 		s.mu.Unlock()
 		_ = applyGhostModeEffects(previous)
 		s.setGhostRuntime(previous, err)
 		return err
 	}
+	s.publishTriagePolicy()
 	s.mu.Unlock()
 	s.setGhostRuntime(enabled, nil)
 	return nil
@@ -398,8 +508,10 @@ func (s *SentinelStore) ToggleSignature(sigID string, enabled bool) error {
 		} else {
 			delete(s.config.ActiveSignatures, sigID)
 		}
+		s.publishTriagePolicy()
 		return err
 	}
+	s.publishTriagePolicy()
 	return nil
 }
 
@@ -430,8 +542,17 @@ func (s *SentinelStore) ToggleWhitelistApp(id string, enabled bool) error {
 	if app.IsSystemApp {
 		return fmt.Errorf("self-protection whitelist entry %s is immutable", id)
 	}
+	// FIND-WIN-009: re-enabling a filename-only wildcard without a SHA-256 or
+	// signer pin would restore the original vulnerability, so the store refuses
+	// it instead of silently authorizing arbitrary binaries by basename.
+	if enabled && !whitelistEntryAuthorizationSafe(app) {
+		return errors.New("whitelist wildcard entry requires a SHA-256 or signer pin before it can be enabled")
+	}
 	previous := app
 	app.Enabled = enabled
+	if enabled {
+		app.DisabledReason = ""
+	}
 	s.config.Whitelist[id] = app
 	if err := s.saveLocked(); err != nil {
 		s.config.Whitelist[id] = previous
@@ -460,6 +581,13 @@ func (s *SentinelStore) AddWhitelistAppPinned(name, pathPattern, sha256Hex, sign
 	}
 	if err := validateWhitelistPattern(pathPattern); err != nil {
 		return WhitelistEntry{}, err
+	}
+	// FIND-WIN-009: a wildcard pattern is only authorization-safe when it is
+	// bound to a concrete binary hash or publisher. Filename-only wildcards
+	// allow any binary with the matching basename (for example
+	// C:\Users\Public\code.exe to inherit the VS Code trust).
+	if strings.Contains(pathPattern, "*") && sha256Hex == "" && signerMatch == "" {
+		return WhitelistEntry{}, errors.New("wildcard whitelist pattern requires a SHA-256 or signer pin")
 	}
 	if sha256Hex != "" {
 		decoded, err := hex.DecodeString(sha256Hex)
@@ -552,7 +680,14 @@ func (s *SentinelStore) IsAppAllowed(imagePath string) (bool, string, bool) {
 
 	// 2. Owner whitelist entries.
 	for _, wl := range s.config.Whitelist {
-		if !wl.Enabled {
+		if !wl.Enabled || !whitelistEntryAuthorizationSafe(wl) {
+			continue
+		}
+		// A pinned entry can only be evaluated with live event evidence
+		// (SHA-256/signer), which this path-only helper does not have. It must
+		// therefore stay fail-closed here and is only authorized through
+		// IsAppAllowedEvent.
+		if wl.SHA256 != "" || wl.SignerMatch != "" {
 			continue
 		}
 		if matchSentinelPathPattern(wl.PathPattern, cleanPath, baseName) {
@@ -597,16 +732,19 @@ func (s *SentinelStore) IsAppAllowedEvent(event ProcessEvent) (allowed bool, nam
 		if !matchSentinelPathPattern(wl.PathPattern, cleanPath, baseName) {
 			continue
 		}
+		// FIND-WIN-009: a filename-only wildcard without a pin must never
+		// authorize, even if a hand-edited/stale config still marks it enabled.
+		if !whitelistEntryAuthorizationSafe(wl) {
+			return false, wl.Name, wl.IsSystemApp, "unsafe whitelist wildcard without SHA-256/signer pin"
+		}
 		if wl.SHA256 != "" {
-			actual, hashErr := hashExecutableBounded(event.ImagePath)
-			if hashErr != nil || !strings.EqualFold(actual, wl.SHA256) {
-				return false, wl.Name, wl.IsSystemApp, "whitelist SHA-256 pin mismatch"
+			if ok, why := verifyWhitelistSHA256Pin(wl, event); !ok {
+				return false, wl.Name, wl.IsSystemApp, why
 			}
 		}
 		if wl.SignerMatch != "" {
-			if !strings.EqualFold(event.SignerStatus, "Valid") ||
-				!strings.Contains(strings.ToLower(event.ImageVersionCompany), strings.ToLower(wl.SignerMatch)) {
-				return false, wl.Name, wl.IsSystemApp, "whitelist signer pin mismatch"
+			if ok, why := verifyWhitelistSignerPin(wl, event); !ok {
+				return false, wl.Name, wl.IsSystemApp, why
 			}
 		}
 		if wl.IsSystemApp {
@@ -618,6 +756,62 @@ func (s *SentinelStore) IsAppAllowedEvent(event ProcessEvent) (allowed bool, nam
 		return true, wl.Name, false, ""
 	}
 	return false, "", false, ""
+}
+
+// whitelistEntryAuthorizationSafe implements the FIND-WIN-009 authorization
+// contract: an entry may authorize exactly when it either names a concrete
+// path (no wildcard) or carries a SHA-256/signer pin. A bare filename wildcard
+// ("*code.exe") is not authorization evidence because any binary with that
+// basename inherits the trust.
+func whitelistEntryAuthorizationSafe(entry WhitelistEntry) bool {
+	if !strings.Contains(entry.PathPattern, "*") {
+		return true
+	}
+	return strings.TrimSpace(entry.SHA256) != "" || strings.TrimSpace(entry.SignerMatch) != ""
+}
+
+// verifyWhitelistSHA256Pin enforces an owner SHA-256 pin. The live event hash is
+// preferred when the sensor captured it; otherwise the image is hashed at
+// verification time under the same bounded reader. A missing event hash is
+// therefore never treated as a satisfied pin: an unreadable/replaced binary is
+// denied.
+func verifyWhitelistSHA256Pin(entry WhitelistEntry, event ProcessEvent) (bool, string) {
+	pin := strings.TrimSpace(entry.SHA256)
+	if pin == "" {
+		return true, ""
+	}
+	actual := strings.TrimSpace(event.SHA256)
+	if actual == "" {
+		hashed, err := hashExecutableBounded(event.ImagePath)
+		if err != nil {
+			return false, "whitelist SHA-256 pin unverifiable"
+		}
+		actual = hashed
+	}
+	if !strings.EqualFold(actual, pin) {
+		return false, "whitelist SHA-256 pin mismatch"
+	}
+	return true, ""
+}
+
+// verifyWhitelistSignerPin enforces an owner publisher pin. The binary must
+// carry a valid Authenticode signature AND the pinned publisher string must
+// appear in the signer subject or the PE CompanyName. A missing signer signal is
+// fail-closed: it is not treated as a satisfied pin.
+func verifyWhitelistSignerPin(entry WhitelistEntry, event ProcessEvent) (bool, string) {
+	pin := strings.ToLower(strings.TrimSpace(entry.SignerMatch))
+	if pin == "" {
+		return true, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(event.SignerStatus), "Valid") {
+		return false, "whitelist signer pin requires a valid Authenticode status"
+	}
+	for _, candidate := range []string{event.SignerSubject, event.ImageVersionCompany} {
+		if candidate != "" && strings.Contains(strings.ToLower(candidate), pin) {
+			return true, ""
+		}
+	}
+	return false, "whitelist signer pin mismatch"
 }
 
 // verifySystemAppEvent validates the live PE provenance of a curated system

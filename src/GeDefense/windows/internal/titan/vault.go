@@ -8,7 +8,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,8 +19,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence/secretfs"
 )
 
 const (
@@ -51,6 +48,11 @@ type Vault struct {
 	metadataAuth bool
 	usageEntries int
 	usageBytes   int64
+	// blocked maps quarantine IDs whose metadata authentication failed to the
+	// recorded integrity reason. Blocked objects can never be restored, reviewed
+	// or re-signed; the remaining authenticated vault stays usable (FIND-WIN-012).
+	blocked         map[string]string
+	integrityIssues []VaultIntegrityIssue
 }
 
 type restoreTargetError struct{ detail string }
@@ -59,6 +61,12 @@ func (e *restoreTargetError) Error() string { return "titan restore target rejec
 
 func errRestoreTarget(detail string) error { return &restoreTargetError{detail: detail} }
 
+// OpenVault opens the authenticated quarantine store. A tampered or unverifiable
+// metadata record is never re-signed: the tampered entries are blocked and
+// reported through *VaultMetadataIntegrityError, while the remaining
+// authenticated vault is returned usable. This keeps detection and protection
+// available instead of turning one corrupted file into a total service outage
+// (FIND-WIN-012).
 func OpenVault(root string) (*Vault, error) {
 	if root == "" || !filepath.IsAbs(root) {
 		return nil, errors.New("titan vault root must be absolute")
@@ -66,11 +74,11 @@ func OpenVault(root string) (*Vault, error) {
 	if err := ensurePrivateDir(root); err != nil {
 		return nil, err
 	}
-	key, err := loadOrCreateVaultKey(root)
+	keyState, err := loadVaultKeyState(root)
 	if err != nil {
 		return nil, err
 	}
-	block, err := aes.NewCipher(key)
+	block, err := aes.NewCipher(keyState.key)
 	if err != nil {
 		return nil, err
 	}
@@ -79,69 +87,56 @@ func OpenVault(root string) (*Vault, error) {
 		return nil, err
 	}
 	vault := &Vault{
-		root: root, aed: aed, rawKey: key,
+		root: root, aed: aed, rawKey: keyState.key,
 		maxEntries: maxQuarantineEntries, maxBytes: vaultDefaultMaxBytes, diskReserve: vaultDiskReserveBytes,
+		blocked: make(map[string]string),
 	}
-	if err := vault.migrateMetadata(); err != nil {
-		return nil, err
+	issues, migrationErr := vault.migrateMetadata(keyState)
+	if migrationErr != nil {
+		return nil, migrationErr
 	}
 	vault.metadataAuth = true
+	for _, issue := range issues {
+		vault.blocked[issue.ID] = issue.Detail
+	}
+	vault.integrityIssues = issues
 	vault.recoverOriginalState()
 	if err := vault.recountUsageLocked(); err != nil {
 		return nil, err
 	}
+	if len(issues) > 0 {
+		return vault, &VaultMetadataIntegrityError{Issues: issues}
+	}
 	return vault, nil
 }
 
-// loadOrCreateVaultKey stores the AES key in a dedicated keys/ subdirectory with
-// a SYSTEM/Administrators-only DACL (DP-FIND-001) and migrates the historic
-// root-level vault.key once.
-func loadOrCreateVaultKey(root string) ([]byte, error) {
-	protected := filepath.Join(root, "keys", vaultKeyName)
-	legacy := filepath.Join(root, vaultKeyName)
-	if _, err := os.Lstat(protected); errors.Is(err, os.ErrNotExist) {
-		if raw, legacyErr := os.ReadFile(legacy); legacyErr == nil {
-			key, decodeErr := base64.RawStdEncoding.DecodeString(strings.TrimSpace(string(raw)))
-			if decodeErr != nil || len(key) != 32 {
-				return nil, errors.New("titan vault key is invalid")
-			}
-			if err := secretfs.CreateSecretFile(protected, []byte(base64.RawStdEncoding.EncodeToString(key))); err != nil {
-				return nil, err
-			}
-			_ = os.Remove(legacy)
-			if _, err := secretfs.HardenFile(protected); err != nil {
-				return nil, err
-			}
-			return key, nil
-		}
+// IntegrityIssues returns a bounded copy of the quarantine metadata integrity
+// findings raised while opening the vault. It is the evidence/status projection
+// for the owner surface and never exposes file content.
+func (v *Vault) IntegrityIssues() []VaultIntegrityIssue {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if len(v.integrityIssues) == 0 {
+		return nil
 	}
-	return secretfs.LoadOrCreateRawKey(protected, 32)
+	issues := make([]VaultIntegrityIssue, len(v.integrityIssues))
+	copy(issues, v.integrityIssues)
+	return issues
 }
 
-// migrateMetadata upgrades legacy unauthenticated metadata files in place. It
-// validates every legacy record before signing it; unreadable files are left
-// untouched so readMetadata rejects them fail-closed afterwards.
-func (v *Vault) migrateMetadata() error {
-	entries, err := os.ReadDir(v.root)
-	if err != nil {
-		return err
+// blockedReason reports whether an object may not be used because its metadata
+// authentication failed.
+func (v *Vault) blockedReason(id string) (string, bool) {
+	if v.blocked == nil {
+		return "", false
 	}
-	for _, item := range entries {
-		if item.IsDir() || !strings.HasSuffix(item.Name(), ".json") {
-			continue
-		}
-		id := strings.TrimSuffix(item.Name(), ".json")
-		if !validQuarantineID(id) {
-			continue
-		}
-		entry, readErr := v.readMetadataLegacy(id)
-		if readErr != nil {
-			continue
-		}
-		v.metadataAuth = true
-		if writeErr := v.writeMetadata(entry); writeErr != nil {
-			return writeErr
-		}
+	reason, blocked := v.blocked[id]
+	return reason, blocked
+}
+
+func (v *Vault) errIfBlocked(id string) error {
+	if reason, blocked := v.blockedReason(id); blocked {
+		return fmt.Errorf("titan quarantine object %s is blocked after a metadata integrity violation: %s", id, reason)
 	}
 	return nil
 }
@@ -266,6 +261,12 @@ func (v *Vault) add(source, reason, eventID, expectedSHA256 string) (QuarantineE
 	if expectedSHA256 != "" && !strings.EqualFold(hash, expectedSHA256) {
 		return QuarantineEntry{}, errors.New("titan quarantine hash does not match the observed event")
 	}
+	// Capture the Mark-of-the-Web ADS while the source still exists. A capture
+	// failure refuses containment instead of silently losing the internet mark.
+	zoneIdentifier, zoneErr := readSourceZoneIdentifier(source)
+	if zoneErr != nil {
+		return QuarantineEntry{}, fmt.Errorf("titan quarantine Mark-of-the-Web capture failed: %w", zoneErr)
+	}
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -301,8 +302,13 @@ func (v *Vault) add(source, reason, eventID, expectedSHA256 string) (QuarantineE
 	if err := atomicWriteFile(v.objectPath(id), encrypted); err != nil {
 		return QuarantineEntry{}, err
 	}
+	if err := v.writeZoneRecord(id, zoneIdentifier); err != nil {
+		_ = os.Remove(v.objectPath(id))
+		return QuarantineEntry{}, err
+	}
 	if err := v.writeMetadata(entry); err != nil {
 		_ = os.Remove(v.objectPath(id))
+		_ = v.removeZoneRecord(id)
 		return QuarantineEntry{}, err
 	}
 	// Re-open the path and compare the file identity before deleting. The
@@ -312,12 +318,14 @@ func (v *Vault) add(source, reason, eventID, expectedSHA256 string) (QuarantineE
 	if currentErr != nil {
 		_ = os.Remove(v.objectPath(id))
 		_ = os.Remove(v.metadataPath(id))
+		_ = v.removeZoneRecord(id)
 		return QuarantineEntry{}, errors.New("titan quarantine source changed before isolation: " + currentErr.Error())
 	}
 	_ = current.Close()
 	if !sameVaultFile(identity, currentIdentity) {
 		_ = os.Remove(v.objectPath(id))
 		_ = os.Remove(v.metadataPath(id))
+		_ = v.removeZoneRecord(id)
 		return QuarantineEntry{}, errors.New("titan quarantine source was substituted before isolation")
 	}
 	if err := os.Remove(source); err == nil {
@@ -389,6 +397,9 @@ func (v *Vault) Review(id, note string) (QuarantineEntry, error) {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if err := v.errIfBlocked(id); err != nil {
+		return QuarantineEntry{}, err
+	}
 	entry, err := v.readMetadata(id)
 	if err != nil {
 		return QuarantineEntry{}, err
@@ -401,6 +412,13 @@ func (v *Vault) Review(id, note string) (QuarantineEntry, error) {
 	return entry, nil
 }
 
+// Restore re-creates the isolated object at its authenticated original path.
+// The target is created through an exclusively opened, reparse-verified handle
+// (CREATE_NEW|OPEN_REPARSE_POINT on Windows), so it can neither overwrite an
+// existing object nor be redirected through a swapped junction between the
+// checks and the write (FIND-WIN-021). The preserved :Zone.Identifier ADS is
+// restored as well; a legacy object without a captured MOTW record is restored
+// as RESTORED_DEGRADED instead of silently dropping the internet mark.
 func (v *Vault) Restore(id, reason string) (QuarantineEntry, error) {
 	reason = strings.TrimSpace(reason)
 	if len(reason) < 8 || len(reason) > 512 {
@@ -408,11 +426,14 @@ func (v *Vault) Restore(id, reason string) (QuarantineEntry, error) {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if err := v.errIfBlocked(id); err != nil {
+		return QuarantineEntry{}, err
+	}
 	entry, err := v.readMetadata(id)
 	if err != nil {
 		return QuarantineEntry{}, err
 	}
-	if entry.State == "RESTORED" {
+	if entry.State == "RESTORED" || entry.State == "RESTORED_DEGRADED" {
 		return QuarantineEntry{}, errors.New("titan object was already restored")
 	}
 	if !entry.OriginalGone {
@@ -436,19 +457,14 @@ func (v *Vault) Restore(id, reason string) (QuarantineEntry, error) {
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return QuarantineEntry{}, err
 	}
-	objectFile, _, openErr := openVaultSource(v.objectPath(id))
-	if openErr != nil {
-		return QuarantineEntry{}, openErr
+	// Re-validate after directory creation: the chain may have been swapped
+	// between the first check and MkdirAll.
+	if err := validateRestoreTargetChain(target); err != nil {
+		return QuarantineEntry{}, err
 	}
-	encrypted, readErr := io.ReadAll(io.LimitReader(objectFile, maxQuarantineFileBytes+int64(v.aed.NonceSize())+16+1))
-	closeErr := objectFile.Close()
-	if readErr != nil {
-		return QuarantineEntry{}, readErr
-	}
-	if closeErr != nil {
-		return QuarantineEntry{}, closeErr
-	}
-	payload, err := v.decrypt(id, encrypted)
+	// Verify object body and MOTW record before anything is written: a tampered
+	// zone sidecar must block the restore fail-closed.
+	payload, err := v.readObjectPayload(id)
 	if err != nil {
 		return QuarantineEntry{}, err
 	}
@@ -456,42 +472,102 @@ func (v *Vault) Restore(id, reason string) (QuarantineEntry, error) {
 	if hex.EncodeToString(sum[:]) != entry.SHA256 {
 		return QuarantineEntry{}, errors.New("titan restore hash verification failed")
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(target), ".titan-restore-*.tmp")
+	zoneIdentifier, zoneRecordPresent, err := v.readZoneRecord(id)
+	if err != nil {
+		return QuarantineEntry{}, fmt.Errorf("titan restore blocked by Mark-of-the-Web record: %w", err)
+	}
+	targetFile, err := createRestoreTarget(target)
 	if err != nil {
 		return QuarantineEntry{}, err
 	}
-	temporaryPath := temporary.Name()
-	defer func() { _ = os.Remove(temporaryPath) }()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
+	if writeErr := func() error {
+		written, writeErr := targetFile.Write(payload)
+		if writeErr != nil {
+			return writeErr
+		}
+		if written != len(payload) {
+			return errors.New("titan restore short write")
+		}
+		return targetFile.Sync()
+	}(); writeErr != nil {
+		_ = targetFile.Close()
+		_ = os.Remove(target)
+		return QuarantineEntry{}, writeErr
+	}
+	// Re-read through the same exclusive handle and verify the durable target.
+	if _, err := targetFile.Seek(0, io.SeekStart); err != nil {
+		_ = targetFile.Close()
+		_ = os.Remove(target)
 		return QuarantineEntry{}, err
 	}
-	if _, err := temporary.Write(payload); err != nil {
-		_ = temporary.Close()
+	digest := sha256.New()
+	written, copyErr := io.Copy(digest, io.LimitReader(targetFile, int64(len(payload))+1))
+	if copyErr != nil {
+		_ = targetFile.Close()
+		_ = os.Remove(target)
+		return QuarantineEntry{}, copyErr
+	}
+	if written != int64(len(payload)) || hex.EncodeToString(digest.Sum(nil)) != entry.SHA256 {
+		_ = targetFile.Close()
+		_ = os.Remove(target)
+		return QuarantineEntry{}, errors.New("titan restore target verification failed")
+	}
+	if err := targetFile.Close(); err != nil {
+		_ = os.Remove(target)
 		return QuarantineEntry{}, err
 	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return QuarantineEntry{}, err
+	degraded := ""
+	switch {
+	case !zoneRecordPresent:
+		degraded = "Mark-of-the-Web wurde vor dieser Version nicht erfasst; Wiederherstellung ohne MOTW-Garantie"
+	case len(zoneIdentifier) > 0:
+		if err := restoreZoneIdentifier(target, zoneIdentifier); err != nil {
+			degraded = "Mark-of-the-Web ADS konnte nicht wiederhergestellt werden: " + err.Error()
+		}
 	}
-	if err := temporary.Close(); err != nil {
-		return QuarantineEntry{}, err
-	}
-	if _, err := os.Lstat(target); err == nil {
-		return QuarantineEntry{}, errors.New("titan restore target appeared during restore")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return QuarantineEntry{}, err
-	}
-	if err := moveNoReplace(temporaryPath, target); err != nil {
-		return QuarantineEntry{}, err
-	}
-	entry.State = "RESTORED"
 	entry.RestoredUTC = time.Now().UTC()
 	entry.RestoreReason = reason
+	entry.State = "RESTORED"
+	if degraded != "" {
+		entry.State = "RESTORED_DEGRADED"
+		entry.RestoreReason = boundedRestoreReason(reason, degraded)
+	}
 	if err := v.writeMetadata(entry); err != nil {
 		return QuarantineEntry{}, err
 	}
 	return entry, nil
+}
+
+// readObjectPayload opens, bounds and decrypts one retained encrypted object.
+func (v *Vault) readObjectPayload(id string) ([]byte, error) {
+	objectFile, _, openErr := openVaultSource(v.objectPath(id))
+	if openErr != nil {
+		return nil, openErr
+	}
+	encrypted, readErr := io.ReadAll(io.LimitReader(objectFile, maxQuarantineFileBytes+int64(v.aed.NonceSize())+16+1))
+	closeErr := objectFile.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return v.decrypt(id, encrypted)
+}
+
+// boundedRestoreReason keeps the explicit degraded MOTW state inside the
+// documented reason boundary.
+func boundedRestoreReason(reason, degraded string) string {
+	const limit = 512
+	combined := reason + " [DEGRADED: " + degraded + "]"
+	if len(combined) <= limit {
+		return combined
+	}
+	runes := []rune(combined)
+	for len(string(runes)) > limit && len(runes) > 0 {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes)
 }
 
 // PruneRestoredOlderThan removes retained encrypted copies and metadata of
@@ -519,13 +595,22 @@ func (v *Vault) PruneRestoredOlderThan(age time.Duration) (int, error) {
 			continue
 		}
 		entry, readErr := v.readMetadata(id)
-		if readErr != nil || entry.State != "RESTORED" || entry.RestoredUTC.IsZero() || entry.RestoredUTC.After(cutoff) {
+		if readErr != nil {
+			continue
+		}
+		if entry.State != "RESTORED" && entry.State != "RESTORED_DEGRADED" {
+			continue
+		}
+		if entry.RestoredUTC.IsZero() || entry.RestoredUTC.After(cutoff) {
 			continue
 		}
 		if err := os.Remove(v.objectPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return removed, err
 		}
 		if err := os.Remove(v.metadataPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return removed, err
+		}
+		if err := v.removeZoneRecord(id); err != nil {
 			return removed, err
 		}
 		if entry.Size > 0 && v.usageBytes >= entry.Size {
@@ -578,6 +663,24 @@ func (v *Vault) writeMetadata(entry QuarantineEntry) error {
 	return atomicWriteFile(v.metadataPath(entry.ID), append(raw, '\n'))
 }
 
+// verifyMetadataAuthentication enforces the constant-time metadata MAC check
+// that every tolerated/quarantined record must pass (FIND-WIN-012).
+func (v *Vault) verifyMetadataAuthentication(entry QuarantineEntry) error {
+	if entry.MetadataMAC == "" {
+		return errors.New("titan quarantine metadata authentication is missing")
+	}
+	expected, err := v.metadataMAC(entry)
+	if err != nil {
+		return err
+	}
+	provided, providedErr := hex.DecodeString(entry.MetadataMAC)
+	expectedBytes, expectedErr := hex.DecodeString(expected)
+	if providedErr != nil || expectedErr != nil || len(provided) != sha256.Size || !hmac.Equal(provided, expectedBytes) {
+		return errors.New("titan quarantine metadata authentication failed")
+	}
+	return nil
+}
+
 func (v *Vault) readMetadata(id string) (QuarantineEntry, error) {
 	entry, err := v.readMetadataLegacy(id)
 	if err != nil {
@@ -586,17 +689,11 @@ func (v *Vault) readMetadata(id string) (QuarantineEntry, error) {
 	if !v.metadataAuth {
 		return entry, nil
 	}
-	if entry.MetadataMAC == "" {
-		return QuarantineEntry{}, errors.New("titan quarantine metadata authentication is missing")
-	}
-	expected, err := v.metadataMAC(entry)
-	if err != nil {
+	if err := v.verifyMetadataAuthentication(entry); err != nil {
 		return QuarantineEntry{}, err
 	}
-	provided, providedErr := hex.DecodeString(entry.MetadataMAC)
-	expectedBytes, expectedErr := hex.DecodeString(expected)
-	if providedErr != nil || expectedErr != nil || len(provided) != sha256.Size || !hmac.Equal(provided, expectedBytes) {
-		return QuarantineEntry{}, errors.New("titan quarantine metadata authentication failed")
+	if reason, blocked := v.blockedReason(id); blocked {
+		return QuarantineEntry{}, fmt.Errorf("titan quarantine metadata is blocked: %s", reason)
 	}
 	return entry, nil
 }

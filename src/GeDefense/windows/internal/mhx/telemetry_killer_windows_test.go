@@ -4,6 +4,7 @@
 package mhx
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -20,16 +21,117 @@ func TestSystem32BinaryIsAbsolute(t *testing.T) {
 	}
 }
 
-func TestGhostStagingDirectoryIsOutsideSystem32(t *testing.T) {
-	previous := ghostStagingDirOverride
-	ghostStagingDirOverride = ""
-	t.Cleanup(func() { ghostStagingDirOverride = previous })
-	dir := strings.ToLower(ghostStagingDirectory())
-	if strings.Contains(dir, `\windows\system32\`) {
-		t.Fatalf("hosts staging directory must not be inside System32: %q", dir)
+func TestGhostFirewallPowerShellInvocationIsHardened(t *testing.T) {
+	arguments := ghostFirewallPowerShellArguments()
+	joined := strings.Join(arguments, " ")
+	for _, required := range []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy AllSigned", "-Command -"} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("ghost firewall PowerShell arguments are missing %q: %v", required, arguments)
+		}
 	}
-	if dir == "" {
-		t.Fatal("empty staging directory")
+	environment := hardenedPowerShellEnvironment()
+	moduleEntries := make([]string, 0, 1)
+	for _, entry := range environment {
+		if strings.HasPrefix(strings.ToUpper(entry), "PSMODULEPATH=") {
+			moduleEntries = append(moduleEntries, entry)
+		}
+	}
+	if len(moduleEntries) != 1 {
+		t.Fatalf("expected exactly one sanitized PSModulePath entry, got %v", moduleEntries)
+	}
+	expectedModuleRoot := system32Binary(filepath.Join("WindowsPowerShell", "v1.0", "Modules"))
+	if moduleEntries[0] != "PSModulePath="+expectedModuleRoot {
+		t.Fatalf("unexpected PSModulePath entry: %q", moduleEntries[0])
+	}
+}
+
+// TestHostsWritePreservesOriginalDACL is the FIND-WIN-017 regression test: the
+// previous cross-directory rename replaced the hosts DACL with the restrictive
+// staging-directory DACL. The new sibling-file replacement must keep the exact
+// original DACL.
+func TestHostsWritePreservesOriginalDACL(t *testing.T) {
+	stubGhostFirewall(t)
+	previousHosts := hostsFilePath
+	hostsFilePath = filepath.Join(t.TempDir(), "hosts")
+	t.Cleanup(func() { hostsFilePath = previousHosts })
+
+	if err := os.WriteFile(hostsFilePath, []byte("127.0.0.1 localhost\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := hostsFileSecurityDescriptor(hostsFilePath)
+	if err != nil {
+		t.Fatalf("read hosts DACL: %v", err)
+	}
+	store, err := OpenSentinelStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetGhostMode(true, "dacl preservation test"); err != nil {
+		t.Fatalf("enable ghost mode: %v", err)
+	}
+	after, err := hostsFileSecurityDescriptor(hostsFilePath)
+	if err != nil {
+		t.Fatalf("read hosts DACL after write: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("hosts DACL changed after ghost mode write: before=%x after=%x", before, after)
+	}
+	if entries, err := os.ReadDir(filepath.Dir(hostsFilePath)); err == nil {
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".vgt-hosts-") {
+				t.Fatalf("hosts staging file leaked into the target directory: %s", entry.Name())
+			}
+		}
+	} else {
+		t.Fatal(err)
+	}
+}
+
+// TestHostsWriteFailsClosedWithoutTarget proves that a hosts mutation is
+// refused when the target (and therefore its access control) cannot be read;
+// there is no permissive fallback that would create or overwrite hosts.
+func TestHostsWriteFailsClosedWithoutTarget(t *testing.T) {
+	stubGhostFirewall(t)
+	previousHosts := hostsFilePath
+	hostsFilePath = filepath.Join(t.TempDir(), "missing-hosts")
+	t.Cleanup(func() { hostsFilePath = previousHosts })
+	if err := applyGhostModeHostsSinkhole(true); err == nil {
+		t.Fatal("hosts mutation succeeded without an existing hosts target")
+	}
+	if _, err := os.Stat(hostsFilePath); !os.IsNotExist(err) {
+		t.Fatalf("failed hosts mutation created a file: %v", err)
+	}
+}
+
+func TestGhostStagingUsesTargetDirectory(t *testing.T) {
+	stubGhostFirewall(t)
+	previousHosts := hostsFilePath
+	hostsFilePath = filepath.Join(t.TempDir(), "hosts")
+	t.Cleanup(func() { hostsFilePath = previousHosts })
+	if err := os.WriteFile(hostsFilePath, []byte("127.0.0.1 localhost\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyGhostModeHostsSinkhole(true); err != nil {
+		t.Fatalf("enable hosts sinkhole: %v", err)
+	}
+	raw, err := os.ReadFile(hostsFilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), ghostModeHeader) {
+		t.Fatal("ghost mode block missing")
+	}
+	// The staging file must be created next to the target (same directory)
+	// and cleaned up; nothing may be written to the legacy ProgramData cache or
+	// system temp locations.
+	entries, err := os.ReadDir(filepath.Dir(hostsFilePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != filepath.Base(hostsFilePath) {
+			t.Fatalf("unexpected file next to hosts after sinkhole write: %s", entry.Name())
+		}
 	}
 }
 
@@ -37,11 +139,8 @@ func stubGhostFirewall(t *testing.T) {
 	t.Helper()
 	previous := ghostFirewallApply
 	ghostFirewallApply = func(bool) error { return nil }
-	previousStaging := ghostStagingDirOverride
-	ghostStagingDirOverride = t.TempDir()
 	t.Cleanup(func() {
 		ghostFirewallApply = previous
-		ghostStagingDirOverride = previousStaging
 	})
 }
 

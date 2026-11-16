@@ -3,13 +3,19 @@
 param(
     [Parameter(Mandatory)][ValidatePattern('^[A-Za-z]:\\[^\r\n\0"]+$')][string]$PayloadRoot,
     [Parameter(Mandatory)][ValidateSet('Install','Uninstall')][string]$Operation,
-    [Parameter(Mandatory)][ValidatePattern('^[A-Za-z]:\\[^\r\n\0"]+\.exe$')][string]$InstallerPath
+    # Optional: only the standalone (embedded payload) installer passes the outer
+    # setup executable. The Inno Setup transaction does not need a persistent
+    # copy of its own setup executable in {app} (FIND-WIN-014).
+    [ValidatePattern('^$|^[A-Za-z]:\\[^\r\n\0"]+\.exe$')][string]$InstallerPath = ''
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $resolvedPayload = (Resolve-Path -LiteralPath $PayloadRoot -ErrorAction Stop).Path
-$resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath -ErrorAction Stop).Path
+$resolvedInstaller = ''
+if ($InstallerPath) {
+    $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath -ErrorAction Stop).Path
+}
 $certificatePath = Join-Path $resolvedPayload 'vgt-release.cer'
 $catalogPath = Join-Path $resolvedPayload 'vgt-payload.cat'
 if (-not (Test-Path -LiteralPath $certificatePath -PathType Leaf) -or -not (Test-Path -LiteralPath $catalogPath -PathType Leaf)) {
@@ -25,9 +31,11 @@ if ($certificate.NotBefore.ToUniversalTime() -gt $now -or $certificate.NotAfter.
 # The outer executable is the trust anchor. The bootstrap never self-roots an
 # embedded certificate. Development certificates therefore must be explicitly
 # trusted on the target test machine before installation.
-$installerSignature = Get-AuthenticodeSignature -LiteralPath $resolvedInstaller
-if ($installerSignature.Status -ne 'Valid' -or -not $installerSignature.SignerCertificate -or $installerSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
-    throw [Security.SecurityException]::new('Standalone installer signature validation failed.')
+if ($resolvedInstaller) {
+    $installerSignature = Get-AuthenticodeSignature -LiteralPath $resolvedInstaller
+    if ($installerSignature.Status -ne 'Valid' -or -not $installerSignature.SignerCertificate -or $installerSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
+        throw [Security.SecurityException]::new('Standalone installer signature validation failed.')
+    }
 }
 $bootstrapSignature = Get-AuthenticodeSignature -LiteralPath $PSCommandPath
 if ($bootstrapSignature.Status -ne 'Valid' -or -not $bootstrapSignature.SignerCertificate -or $bootstrapSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
@@ -74,7 +82,7 @@ try {
     if (Test-Path -LiteralPath $diagnosticLog -PathType Leaf) { Remove-Item -LiteralPath $diagnosticLog -Force }
 
     $arguments = @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','AllSigned','-File',('"{0}"' -f $targetScript),'-PayloadRoot',('"{0}"' -f $resolvedPayload),'-DiagnosticLogPath',('"{0}"' -f $diagnosticLog))
-    if ($Operation -eq 'Install') { $arguments += @('-InstallerPath',('"{0}"' -f $resolvedInstaller)) }
+    if ($Operation -eq 'Install' -and $resolvedInstaller) { $arguments += @('-InstallerPath',('"{0}"' -f $resolvedInstaller)) }
 
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)

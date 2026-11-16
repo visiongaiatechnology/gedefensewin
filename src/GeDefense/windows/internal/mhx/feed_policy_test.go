@@ -21,8 +21,9 @@ import (
 )
 
 // writeFeedPolicyCachedSource writes a validated last-known-good snapshot for a
-// catalog feed without any network access.
-func writeFeedPolicyCachedSource(t *testing.T, intelRoot, key string, indicators []string) {
+// catalog feed without any network access. FIND-WIN-015: enforcement requires a
+// signed authority attestation, so the fixture embeds the provisioned document.
+func writeFeedPolicyCachedSource(t *testing.T, intelRoot, key string, generated time.Time, indicators []string, authority any) {
 	t.Helper()
 	var source threatintel.Source
 	found := false
@@ -41,11 +42,12 @@ func writeFeedPolicyCachedSource(t *testing.T, intelRoot, key string, indicators
 	payload, err := json.Marshal(map[string]any{
 		"schemaVersion":    threatintel.SchemaVersion,
 		"key":              key,
-		"generatedUtc":     time.Now().UTC().Format(time.RFC3339Nano),
+		"generatedUtc":     generated.Format(time.RFC3339Nano),
 		"action":           string(source.Action),
 		"attribution":      map[string]any{"name": source.Name, "url": source.URL},
 		"generationSha256": hex.EncodeToString(digest[:]),
 		"indicators":       sorted,
+		"authority":        authority,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -102,11 +104,18 @@ func newFeedPolicyEngine(t *testing.T, failWFP bool) (*Engine, *fakeFeedPolicyPr
 	t.Helper()
 	root := t.TempDir()
 	intelRoot := filepath.Join(root, "intelligence")
-	writeFeedPolicyCachedSource(t, intelRoot, "feodo", []string{"45.155.205.0/24"})
-	writeFeedPolicyCachedSource(t, intelRoot, "spamhaus_drop_v4", []string{"46.155.205.0/24"})
-	writeFeedPolicyCachedSource(t, intelRoot, "spamhaus_drop_v6", []string{"2a02:1234::/32"})
-	writeFeedPolicyCachedSource(t, intelRoot, "firehol_l1", []string{"47.155.205.0/24"})
-	writeFeedPolicyCachedSource(t, intelRoot, "cins_army", []string{"48.155.205.0/24"})
+	fixtures := map[string][]string{
+		"feodo":            {"45.155.205.0/24"},
+		"spamhaus_drop_v4": {"46.155.205.0/24"},
+		"spamhaus_drop_v6": {"2a02:1234::/32"},
+		"firehol_l1":       {"47.155.205.0/24"},
+		"cins_army":        {"48.155.205.0/24"},
+	}
+	generated := time.Now().UTC().Add(-time.Minute)
+	authority := provisionSignedFeedAuthority(t, intelRoot, generated, fixtures)
+	for key, indicators := range fixtures {
+		writeFeedPolicyCachedSource(t, intelRoot, key, generated, indicators, authority)
+	}
 	feeds, err := threatintel.NewManager(intelRoot)
 	if err != nil {
 		t.Fatal(err)

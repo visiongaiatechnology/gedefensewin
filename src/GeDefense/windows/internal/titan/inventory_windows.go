@@ -272,11 +272,22 @@ func registryEnumValues(root syscall.Handle, path string) (map[string]registryVa
 	return values, nil
 }
 
-func collectServices() map[string]string {
+// serviceDefinition is the raw registry configuration of one service. It is the
+// deterministic evidence a persistence observation carries: the ImagePath the
+// service is configured to run, its start type, service type and account.
+type serviceDefinition struct {
+	ImagePath string
+	Start     string
+	Type      string
+	Account   string
+}
+
+func collectServices() (map[string]string, map[string]serviceDefinition) {
 	services := make(map[string]string)
+	definitions := make(map[string]serviceDefinition)
 	names, err := registryEnumSubkeys(syscall.HKEY_LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Services`)
 	if err != nil {
-		return services
+		return services, definitions
 	}
 	for _, name := range names {
 		path := `SYSTEM\CurrentControlSet\Services\` + name
@@ -292,8 +303,9 @@ func collectServices() map[string]string {
 		}
 		fingerprint := normalizeServiceFingerprint(imagePath.Text, start.Text, serviceType.Text, objectName.Text)
 		services[name] = fingerprint
+		definitions[name] = serviceDefinition{ImagePath: imagePath.Text, Start: start.Text, Type: serviceType.Text, Account: objectName.Text}
 	}
-	return services
+	return services, definitions
 }
 
 // normalizeServiceFingerprint removes representation-only drift such as
@@ -452,7 +464,7 @@ func (e *Engine) scanPersistence(ctx context.Context) {
 	baseline, err := e.loadBaseline()
 	if errors.Is(err, os.ErrNotExist) {
 		baseline = newPersistenceBaseline()
-		baseline.Services = collectServices()
+		baseline.Services, _ = collectServices()
 		baseline.RunValues = collectRunValues()
 		controls, fingerprints := collectSecurityControls()
 		baseline.Security = fingerprints
@@ -480,7 +492,7 @@ func (e *Engine) scanPersistence(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	currentServices := collectServices()
+	currentServices, currentDefinitions := collectServices()
 	currentRun := collectRunValues()
 	controls, currentSecurity := collectSecurityControls()
 	e.setSecurityControls(controls)
@@ -493,23 +505,22 @@ func (e *Engine) scanPersistence(ctx context.Context) {
 		previous, exists := baseline.Services[name]
 		if !exists {
 			changed = true
-			record(Observation{Type: EventPersistenceAdded, Severity: SeverityHigh,
-				Object: Object{Kind: ObjectService, Path: `HKLM\SYSTEM\CurrentControlSet\Services\` + name, Name: name, SHA256: fingerprintSHA(current)},
-				Source: "titan-persistence", Health: "HEALTHY"})
+			record(newServiceObservation(EventPersistenceAdded, SeverityHigh, name, current, "", currentDefinitions[name]))
 			continue
 		}
 		if previous != current {
 			changed = true
-			record(Observation{Type: EventPersistenceChanged, Severity: SeverityMedium,
-				Object: Object{Kind: ObjectService, Path: `HKLM\SYSTEM\CurrentControlSet\Services\` + name, Name: name, SHA256: fingerprintSHA(current), Change: serviceChange(previous, current)},
-				Source: "titan-persistence", Health: "HEALTHY"})
+			record(newServiceObservation(EventPersistenceChanged, SeverityMedium, name, current, serviceChange(previous, current), currentDefinitions[name]))
 		}
 	}
 	for name := range baseline.Services {
 		if _, exists := currentServices[name]; !exists {
 			changed = true
+			// The removed service no longer has a configuration to verify: the
+			// observation stays fail-closed instead of pretending an image proof.
 			record(Observation{Type: EventPersistenceRemoved, Severity: SeverityMedium,
 				Object: Object{Kind: ObjectService, Path: `HKLM\SYSTEM\CurrentControlSet\Services\` + name, Name: name},
+				Actor:  Actor{CorrelationQuality: CorrelationNone, CorrelationNote: "Dienst war zur Beobachtungszeit bereits entfernt; kein ImagePath und keine Signatur belegbar."},
 				Source: "titan-persistence", Health: "HEALTHY"})
 		}
 	}
@@ -517,9 +528,7 @@ func (e *Engine) scanPersistence(ctx context.Context) {
 		previous, exists := baseline.RunValues[name]
 		if !exists || previous != current {
 			changed = true
-			record(Observation{Type: EventPersistenceAdded, Severity: SeverityHigh,
-				Object: Object{Kind: ObjectRegistryValue, Path: name, Name: name, SHA256: fingerprintSHA(current)},
-				Source: "titan-persistence", Health: "HEALTHY"})
+			record(newRunValueObservation(EventPersistenceAdded, SeverityHigh, name, current))
 		}
 	}
 	for name := range baseline.RunValues {
@@ -527,6 +536,7 @@ func (e *Engine) scanPersistence(ctx context.Context) {
 			changed = true
 			record(Observation{Type: EventPersistenceRemoved, Severity: SeverityMedium,
 				Object: Object{Kind: ObjectRegistryValue, Path: name, Name: name},
+				Actor:  Actor{CorrelationQuality: CorrelationNone, CorrelationNote: "Run-Wert war zur Beobachtungszeit bereits entfernt; kein ImagePath und keine Signatur belegbar."},
 				Source: "titan-persistence", Health: "HEALTHY"})
 		}
 	}
@@ -580,6 +590,65 @@ func (e *Engine) scanPersistence(ctx context.Context) {
 	e.markSensor("security", SensorHealthy, "")
 	e.markSensor("boot", SensorHealthy, "")
 	e.sensorEvent("persistence")
+}
+
+// newServiceObservation builds a persistence observation that carries the
+// deterministic evidence of the configured service image: resolved ImagePath,
+// configured start type and the Authenticode status of the binary body. The
+// writing process is not invented; the evidence fields describe the service
+// definition that was actually read from the registry (FIND-WIN-010).
+func newServiceObservation(eventType EventType, severity Severity, name, fingerprint, change string, definition serviceDefinition) Observation {
+	observation := Observation{
+		Type: eventType, Severity: severity,
+		Object: Object{Kind: ObjectService, Path: `HKLM\SYSTEM\CurrentControlSet\Services\` + name, Name: name,
+			SHA256: fingerprintSHA(fingerprint), Change: change},
+		Source: "titan-persistence", Health: "HEALTHY",
+	}
+	note := fmt.Sprintf("Dienstkonfiguration aus der Registry belegt (Start=%q Type=%q Konto=%q); der schreibende Prozess wurde nicht direkt beobachtet.",
+		definition.Start, definition.Type, definition.Account)
+	executable := titanResolveServiceExecutable(definition.ImagePath)
+	if executable == "" {
+		observation.Actor = Actor{CorrelationQuality: CorrelationNone, CorrelationNote: note + " Der ImagePath ist nicht auflösbar."}
+		observation.Object.SignatureStatus = signatureStatusUnavailable
+		return observation
+	}
+	observation.Actor = Actor{Image: titanPathBase(executable), Path: executable, CorrelationQuality: CorrelationNone, CorrelationNote: note}
+	observation.Actor.SHA256 = titanPersistenceImageHash(executable)
+	observation.Object.SignatureStatus = titanFileSignatureStatus(executable)
+	return observation
+}
+
+// newRunValueObservation enriches a Run/RunOnce persistence observation with the
+// executable referenced by the stored command, bounded and without inventing a
+// writer process.
+func newRunValueObservation(eventType EventType, severity Severity, name, command string) Observation {
+	observation := Observation{
+		Type: eventType, Severity: severity,
+		Object: Object{Kind: ObjectRegistryValue, Path: name, Name: name, SHA256: fingerprintSHA(command)},
+		Source: "titan-persistence", Health: "HEALTHY",
+	}
+	note := "Run-Wert aus der Registry belegt; der schreibende Prozess wurde nicht direkt beobachtet."
+	executable := titanResolveCommandExecutable(command)
+	if executable == "" {
+		observation.Actor = Actor{CorrelationQuality: CorrelationNone, CorrelationNote: note + " Der Befehl enthält keinen auflösbaren absoluten ImagePath."}
+		observation.Object.SignatureStatus = signatureStatusUnavailable
+		return observation
+	}
+	observation.Actor = Actor{Image: titanPathBase(executable), Path: executable, CorrelationQuality: CorrelationNone, CorrelationNote: note}
+	observation.Actor.SHA256 = titanPersistenceImageHash(executable)
+	observation.Object.SignatureStatus = titanFileSignatureStatus(executable)
+	return observation
+}
+
+// titanPersistenceImageHash hashes the evidenced image through the reparse-safe
+// bounded inspector; oversized or unreadable images stay unhashed instead of
+// blocking the persistence sensor.
+func titanPersistenceImageHash(path string) string {
+	hash, _, _, tooLarge, err := inspectTitanFile(path)
+	if err != nil || tooLarge {
+		return ""
+	}
+	return hash
 }
 
 func fingerprintSHA(value string) string {

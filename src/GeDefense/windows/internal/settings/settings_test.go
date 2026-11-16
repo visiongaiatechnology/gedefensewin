@@ -97,8 +97,8 @@ func TestCatalogIsCompleteAndSafe(t *testing.T) {
 	if catalog.SchemaVersion != SchemaVersion || catalog.CatalogVersion != CatalogVersion {
 		t.Fatalf("unexpected catalog metadata: %+v", catalog)
 	}
-	if len(catalog.Sections) != 8 {
-		t.Fatalf("expected 8 sections, got %d", len(catalog.Sections))
+	if len(catalog.Sections) != 9 {
+		t.Fatalf("expected 9 sections, got %d", len(catalog.Sections))
 	}
 	if len(catalog.Levels) != 4 {
 		t.Fatalf("expected 4 levels, got %d", len(catalog.Levels))
@@ -130,6 +130,8 @@ func TestCatalogIsCompleteAndSafe(t *testing.T) {
 		"threatIntelligence.protectedNetworks", "threatIntelligence.blockingEnabled",
 		"startup.autoStartService", "startup.readinessCheck",
 		"notifications.enabled", "notifications.verbosity",
+		"v6.spywareEnabled", "v6.spywareByovd", "v6.spywareCapability",
+		"v6.spywarePersistence", "v6.spywareLsass", "v6.witnessEnabled",
 	}
 	seen := make(map[string]struct{}, len(catalog.Controls))
 	typeCount := make(map[string]int)
@@ -268,7 +270,7 @@ func TestSnapshotDefaultsWithoutFile(t *testing.T) {
 	if !valuesEqual(snapshot.Values, defaultValues()) {
 		t.Fatalf("default snapshot values do not match catalog defaults")
 	}
-	if len(snapshot.Profiles) != 3 || len(snapshot.Levels) != 4 || len(snapshot.Sections) != 8 {
+	if len(snapshot.Profiles) != 3 || len(snapshot.Levels) != 4 || len(snapshot.Sections) != 9 {
 		t.Fatalf("default snapshot misses catalog metadata: %+v", snapshot)
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {

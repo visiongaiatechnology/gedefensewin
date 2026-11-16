@@ -231,32 +231,64 @@ function selectLevelOptions(){
   if([...select.options].some(option=>option.value===current))select.value=current;
 }
 
+/* The settings authority publishes controls as {id:"section.field",section,
+ * type:"bool"|"int"|"enum"|"stringList",options,min,max,...}. The profile studio
+ * must not assume a different, older schema: normalise every field defensively
+ * and skip anything that cannot be edited safely instead of throwing. */
+function controlType(raw){
+  const type=String(pick(raw,'type','controlType')||'').toLowerCase();
+  switch(type){
+    case 'bool':case 'boolean':return 'boolean';
+    case 'enum':case 'select':return 'enum';
+    case 'int':case 'integer':case 'number':case 'uint':return 'int';
+    default:return '';
+  }
+}
+
+function controlKeyParts(raw){
+  const fullId=String(pick(raw,'id','ID')||'').trim();
+  const configuredKey=String(pick(raw,'key','Key')||'').trim();
+  const sectionFromPayload=String(pick(raw,'section','Section')||'').trim().toLowerCase();
+  const dot=fullId.indexOf('.');
+  const section=sectionFromPayload||(dot>0?fullId.slice(0,dot).toLowerCase():'');
+  let key=configuredKey;
+  if(!key)key=dot>0?fullId.slice(dot+1):(configuredKey||fullId);
+  else if(key.includes('.'))key=key.split('.').slice(1).join('.');
+  return {fullId,section,key};
+}
+
 function profileControlsModel(){
   const controls=listFrom(state.controls);
   if(!controls.length)return FALLBACK_CONTROLS.map(field=>({...field,id:field.key}));
   const result=[];
+  const seen=new Set();
   for(const raw of controls){
     if(!raw||typeof raw!=='object')continue;
-    const key=String(raw.key||raw.id||'');
+    const {fullId,section,key}=controlKeyParts(raw);
     if(!key)continue;
-    const section=String(raw.section||key.split('.')[0]||'defender');
-    const id=key.includes('.')?key.split('.').slice(1).join('.'):key;
-    const type=String(raw.type||'');
-    if(type==='array')continue;
-    if(!['boolean','enum','int','integer'].includes(type))continue;
+    const type=controlType(raw);
+    if(!type)continue;
+    const unique=`${section}|${key}`;
+    if(seen.has(unique))continue;
+    const options=listFrom(pick(raw,'options','Options','values','Values')).map(value=>String(value));
+    const minimum=Number(pick(raw,'min','Min','minimum','Minimum'));
+    const maximum=Number(pick(raw,'max','Max','maximum','Maximum'));
+    seen.add(unique);
     result.push({
-      id,
-      section,
+      id:key,
+      fullId:fullId||(section?`${section}.${key}`:key),
+      section:section||'defender',
       key,
-      label:String(raw.label||key),
-      description:String(raw.description||''),
-      type:type==='enum'?'enum':type==='boolean'?'boolean':'int',
-      values:listFrom(raw.values),
-      default:raw.default,
-      minimum:Number(raw.minimum),
-      maximum:Number(raw.maximum),
-      risk:String(raw.risk||''),
-      requiresRestart:Boolean(raw.requiresRestart),
+      label:String(pick(raw,'label','Label')||key),
+      description:String(pick(raw,'description','Description')||''),
+      type,
+      values:type==='enum'?options:[],
+      default:pick(raw,'default','Default'),
+      minimum:Number.isFinite(minimum)?minimum:undefined,
+      maximum:Number.isFinite(maximum)?maximum:undefined,
+      unit:String(pick(raw,'unit','Unit')||''),
+      risk:String(pick(raw,'risk','Risk')||''),
+      requiresRestart:Boolean(pick(raw,'requiresRestart','RequiresRestart')),
     });
     if(result.length>=18)break;
   }
@@ -268,11 +300,12 @@ function renderProfileControls(){
   if(!host)return;
   host.replaceChildren();
   for(const control of profileControlsModel()){
+    const inputId=`profileControl-${control.section}-${control.key}`;
     if(control.type==='boolean'){
       const label=node('label','switch');
       const input=document.createElement('input');
       input.type='checkbox';
-      input.id=`profileControl-${control.key}`;
+      input.id=inputId;
       input.dataset.controlKey=control.key;
       input.dataset.controlSection=control.section;
       input.checked=Boolean(control.default);
@@ -287,7 +320,7 @@ function renderProfileControls(){
       const label=node('label');
       const title=node('span','',control.label);
       const select=document.createElement('select');
-      select.id=`profileControl-${control.key}`;
+      select.id=inputId;
       select.dataset.controlKey=control.key;
       select.dataset.controlSection=control.section;
       for(const value of control.values){
@@ -311,12 +344,12 @@ function renderProfileControls(){
       label.append(node('span','',control.label));
       const input=document.createElement('input');
       input.type='number';
-      input.id=`profileControl-${control.key}`;
+      input.id=inputId;
       input.dataset.controlKey=control.key;
       input.dataset.controlSection=control.section;
       if(Number.isFinite(control.minimum))input.min=String(control.minimum);
       if(Number.isFinite(control.maximum))input.max=String(control.maximum);
-      input.value=control.default!==undefined?String(control.default):'';
+      input.value=control.default!==undefined&&control.default!==null?String(control.default):'';
       label.append(input);
       if(control.description)label.append(node('small','field-hint',control.description));
       host.append(label);
@@ -737,23 +770,55 @@ function setSelect(id,value){
   if([...select.options].some(option=>option.value===wanted))select.value=wanted;
 }
 
-function syncAggressiveness(event){
-  const value=event.currentTarget.value;
+/* Keep the three aggressiveness selects consistent. The change event may be
+ * missing (programmatic save, re-render) and a select may be disabled or
+ * removed; the helper therefore never dereferences a missing event target and
+ * never throws. It returns the value that is now selected, or '' when no
+ * aggressiveness select exists. */
+function syncAggressiveness(source){
+  const origin=source&&source.currentTarget&&typeof source.currentTarget.value==='string'
+    ? source.currentTarget
+    : (source&&typeof source.id==='string'&&typeof source.value==='string'?source:byId('mhxProcessLevel'));
+  const value=origin&&typeof origin.value==='string'?origin.value:'';
+  if(!value)return '';
   for(const id of ['mhxProcessLevel','mhxNetworkLevel','mhxApplicationLevel']){
     const select=byId(id);
-    if(select&&select.value!==value)select.value=value;
+    if(!select||select.disabled)continue;
+    if([...select.options].some(option=>option.value===value)&&select.value!==value)select.value=value;
   }
+  return value;
 }
 
 export async function loadMhxSettingsPanel(options={}){
   renderSettingsBadge('mhxSettingsBadge');
-  const [settingsResult]=await Promise.all([getMhxSettings(),ensureSettingsProbe()]);
+  const status=byId('mhxSettingsStatus');
+  let settingsResult;
+  try{
+    [settingsResult]=await Promise.all([getMhxSettings(),ensureSettingsProbe()]);
+  }catch(error){
+    // A rejected request must not break the panel: disable inputs, show the
+    // real cause and keep the retry action available.
+    const reason=String(error?.message||error||'Abruf fehlgeschlagen');
+    setMhxFormState(false,reason);
+    setFormStatus(status,`Abruf fehlgeschlagen: ${reason}`,'bad');
+    setPill('mhxSettingsBadge','MHX-SETTINGS NICHT VERFÜGBAR','warn');
+    toast(`XDR-Einstellungen konnten nicht geladen werden: ${reason}`,'bad');
+    return false;
+  }
   if(settingsResult.ok){
-    fillMhxForm(settingsResult.data);
-    setMhxFormState(true);
-    const source=String(pick(asObject(settingsResult.data),'source','configSource')||'');
-    if(source&&!options.preserveStatus)setText('mhxSettingsStatus',`Quelle: ${humanSource(source)}`);
-    setPill('mhxSettingsBadge','MHX-SETTINGS VERFÜGBAR','good');
+    try{
+      fillMhxForm(settingsResult.data);
+      setMhxFormState(true);
+      const source=String(pick(asObject(settingsResult.data),'source','configSource')||'');
+      if(source&&!options.preserveStatus)setText('mhxSettingsStatus',`Quelle: ${humanSource(source)}`);
+      setPill('mhxSettingsBadge','MHX-SETTINGS VERFÜGBAR','good');
+    }catch(error){
+      const reason=String(error?.message||error||'Antwort nicht auswertbar');
+      console.error('MHX-Settings konnten nicht dargestellt werden',error);
+      setMhxFormState(false,`Serverantwort nicht auswertbar: ${reason}`);
+      setFormStatus(status,`Serverantwort nicht auswertbar: ${reason}`,'bad');
+      setPill('mhxSettingsBadge','MHX-SETTINGS NICHT VERFÜGBAR','warn');
+    }
   }else{
     setMhxFormState(false,settingsResult.message);
     setPill('mhxSettingsBadge','MHX-SETTINGS NICHT VERFÜGBAR','warn');
@@ -766,7 +831,7 @@ export function bindMhxSettingsPanel(){
   if(mhxBound)return;
   mhxBound=true;
   for(const id of ['mhxProcessLevel','mhxNetworkLevel','mhxApplicationLevel']){
-    byId(id)?.addEventListener('change',()=>{syncAggressiveness();scheduleMhxAutoSave()});
+    byId(id)?.addEventListener('change',event=>{syncAggressiveness(event);scheduleMhxAutoSave()});
   }
   for(const id of ['mhxAutoTerminate','mhxNotifyEvents','mhxNotifyCritical','mhxToastEnabled','mhxToastSeverity','mhxUnknownAppPolicy']){
     byId(id)?.addEventListener('change',scheduleMhxAutoSave);
@@ -838,6 +903,10 @@ async function persistMhxSettings(options={}){
       setFormStatus(status,`Abgelehnt: ${result.message}`,'bad');
       if(!options.auto)toast(`XDR-Richtlinie abgelehnt: ${result.message}`,'bad');
     }
+  }catch(error){
+    const reason=String(error?.message||error||'unbekannter Fehler');
+    setFormStatus(status,`Speichern fehlgeschlagen: ${reason}`,'bad');
+    toast(`XDR-Richtlinie nicht gespeichert: ${reason}`,'bad');
   }finally{
     mhxAutoSaving=false;
     if(button){button.disabled=false;button.classList.remove('loading');button.textContent='XDR-Richtlinie speichern'}

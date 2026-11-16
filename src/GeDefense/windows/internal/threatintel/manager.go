@@ -63,10 +63,12 @@ type Manager struct {
 	authorityError      string
 	authorityState      feedAuthorityState
 
-	// Wall-clock trust anchor (DP-FIND-014).
-	clockMu        sync.RWMutex
-	clockHighWater time.Time
-	clockRollback  bool
+	// Wall-clock trust anchor (DP-FIND-014 / FIND-WIN-015).
+	clockMu         sync.RWMutex
+	clockHighWater  time.Time
+	clockRollback   bool
+	clockKey        []byte
+	clockStateError string
 
 	// Service-local MAC key for the feed override store (DP-FIND-004).
 	feedPolicyKey []byte
@@ -126,16 +128,62 @@ func NewManager(root string) (*Manager, error) {
 		status:            Status{State: "INITIALIZING", Feeds: make([]FeedState, 0, len(catalog)), ProtectedPrefixes: len(protectedPolicy.Prefixes), ProtectionGeneration: protectedPolicy.GenerationSHA256},
 	}
 	manager.loadFeedAuthority()
-	if highWater, clockErr := loadFeedClock(root); clockErr == nil && !highWater.IsZero() {
-		manager.clockHighWater = highWater
-		if time.Now().UTC().Add(feedClockTolerance).Before(highWater) {
-			manager.clockRollback = true
-		}
-	}
+	manager.clockKey = feedClockMACKey(feedPolicyKey)
+	manager.loadClockState()
 	manager.loadPollingConfig()
 	manager.loadFeedPolicy()
 	manager.loadCached()
 	return manager, nil
+}
+
+// loadClockState restores the authenticated wall-clock high-water mark
+// (FIND-WIN-015). A missing file is a first-run state. A present but invalid
+// file is never trusted: it sets an evident error and a fail-closed rollback
+// state, and no date from it is adopted. A valid but implausibly far-future value
+// is treated as tamper/rollback evidence as well and is not adopted either.
+func (m *Manager) loadClockState() {
+	highWater, err := loadFeedClock(m.root, m.clockKey)
+	if err != nil {
+		m.clockMu.Lock()
+		m.clockStateError = "feed clock high-water anchor rejected: " + boundedClockError(err)
+		m.clockRollback = true
+		m.clockHighWater = time.Time{}
+		m.clockMu.Unlock()
+		return
+	}
+	if highWater.IsZero() {
+		return
+	}
+	now := time.Now().UTC()
+	m.clockMu.Lock()
+	defer m.clockMu.Unlock()
+	if highWater.After(now.Add(feedClockMaximumFutureSkew)) {
+		// Implausible future value: do not adopt it as truth, but treat the state
+		// as untrusted so enforcement/freshness fail closed with an evident error.
+		m.clockStateError = "feed clock high-water anchor is implausibly far in the future; value was not adopted"
+		m.clockRollback = true
+		m.clockHighWater = time.Time{}
+		return
+	}
+	if highWater.After(now.Add(feedClockTolerance)) {
+		// A plausible future value means the wall clock moved backwards after the
+		// mark was written: genuine rollback, fail closed and keep freshness
+		// monotonically advancing from the trusted mark.
+		m.clockRollback = true
+	}
+	m.clockHighWater = highWater
+}
+
+// boundedClockError keeps the operator-facing clock error bounded.
+func boundedClockError(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := err.Error()
+	if len(text) > 200 {
+		text = text[:200]
+	}
+	return text
 }
 
 func (m *Manager) Sync(ctx context.Context) error {
@@ -299,7 +347,14 @@ func (m *Manager) Sync(ctx context.Context) error {
 		m.fail(attempt, err)
 		return err
 	}
-	if index.blocking == 0 {
+	authorityAvailable := m.authorityEnforcementAvailable()
+	if !authorityAvailable {
+		// FIND-WIN-015: no verified signed-authority key ring, so no unsigned feed
+		// may become an enforcement basis. The data stays available for display and
+		// audit (ANNOTATE_ONLY); any previously written enforcement projection is
+		// withdrawn and the state is explicit.
+		_ = os.Remove(enforcementSnapshotPath(m.root))
+	} else if index.blocking == 0 {
 		// Fail closed: no authenticated/fresh blocking generation exists, so the
 		// on-disk enforcement projection must not be reused by any consumer.
 		_ = os.Remove(enforcementSnapshotPath(m.root))
@@ -312,21 +367,36 @@ func (m *Manager) Sync(ctx context.Context) error {
 		m.fail(attempt, err)
 		return err
 	}
-	if err := writeEnforcementSnapshot(m.root, attempt, index, blockingReady, protectedPolicy); err != nil {
-		m.fail(attempt, err)
-		return err
+	if authorityAvailable {
+		if err := writeEnforcementSnapshot(m.root, attempt, index, blockingReady, protectedPolicy); err != nil {
+			m.fail(attempt, err)
+			return err
+		}
 	}
 
 	m.snapshots = candidate
 	m.index.Store(index)
-	m.persistFeedClock(attempt)
+	clockErr := m.persistFeedClock(attempt)
+	if clockErr != nil {
+		m.clockMu.Lock()
+		m.clockStateError = "feed clock high-water persistence failed: " + boundedClockError(clockErr)
+		m.clockMu.Unlock()
+	}
 	state := "CURRENT"
 	errorText := ""
 	nextSync := attempt.Add(m.pollInterval())
+	if !authorityAvailable {
+		state = "DEGRADED"
+		_, _, authorityDetail, _, _ := m.authorityStatus()
+		errorText = authorityDetail
+	}
 	if fresh != len(catalog) {
 		state = "DEGRADED"
 		errorText = fmt.Sprintf("%d of %d feeds refreshed; last-known-good data retained where available", fresh, len(catalog))
 		nextSync = attempt.Add(FailureRetryInterval)
+	}
+	if clockErr != nil && errorText == "" {
+		errorText = "feed clock high-water persistence failed; rollback detection is degraded"
 	}
 	m.setStatus(Status{
 		LastAttemptUTC:        attempt,
@@ -391,7 +461,7 @@ func (m *Manager) Status() Status {
 		status.Error = pollingLoadError
 	}
 	overrides, policySource, policyUpdatedUTC, policyStoreError := m.feedPolicyView()
-	status.Feeds = enrichFeedStates(status.Feeds, overrides)
+	status.Feeds = m.enrichFeedStates(status.Feeds, overrides)
 	status.FeedPolicySource = policySource
 	status.FeedPolicyUpdatedUTC = policyUpdatedUTC
 	status.FeedPolicyOverrides = len(overrides)
@@ -413,7 +483,9 @@ func (m *Manager) Status() Status {
 	return m.applyFreshnessAndAuthenticity(status)
 }
 
-// effectiveAction resolves a feed key against the override layer.
+// effectiveAction resolves a feed key against the override layer and applies the
+// central fail-closed enforcement caps (ANNOTATE_ONLY ceiling plus verified
+// signed-authority requirement).
 func (m *Manager) effectiveAction(key string) Action {
 	m.policyMu.RLock()
 	defer m.policyMu.RUnlock()
@@ -421,31 +493,38 @@ func (m *Manager) effectiveAction(key string) Action {
 }
 
 // applyEffectiveActions clones the last-known-good snapshots and replaces each
-// authority with the effective action before the index is built.
+// authority with the effective enforcement action before the index is built.
 func (m *Manager) applyEffectiveActions(snapshots map[string]sourceSnapshot) map[string]sourceSnapshot {
 	overrides, _, _, _ := m.feedPolicyView()
-	return applyEffectiveActionsToSnapshots(snapshots, overrides)
+	return applyEffectiveActionsToSnapshots(snapshots, overrides, m.authorityEnforcementAvailable())
 }
 
 // newFeedState projects one catalog source together with its effective action.
+// The catalog declaration and the operator override stay separately visible;
+// EffectiveAction is the authority the compiler actually applies.
 func (m *Manager) newFeedState(source Source, attempt time.Time) FeedState {
-	state := FeedState{Key: source.Key, Name: source.Name, Action: source.Action, DefaultAction: source.Action, ConfiguredAction: source.Action, EffectiveAction: source.Action, ActionSource: feedPolicySourceDefault, LastAttemptUTC: attempt}
+	state := FeedState{Key: source.Key, Name: source.Name, Action: source.Action, DefaultAction: source.Action, ConfiguredAction: source.Action, ActionSource: feedPolicySourceDefault, LastAttemptUTC: attempt}
+	configured := source.Action
 	m.policyMu.RLock()
 	if override, exists := m.overrides[source.Key]; exists {
+		configured = override.Action
 		state.ConfiguredAction = override.Action
-		state.EffectiveAction = override.Action
 		state.ActionSource = feedPolicyEntrySource
 	}
 	m.policyMu.RUnlock()
+	state.EffectiveAction = capEnforcementAction(source.Action, configured, m.authorityEnforcementAvailable())
 	return state
 }
 
 // enrichFeedStates attaches default/configured/effective authority to status
-// entries that were built before an override was applied.
-func enrichFeedStates(states []FeedState, overrides map[string]FeedPolicyOverride) []FeedState {
+// entries that were built before an override was applied. EffectiveAction is
+// recomputed through the central enforcement caps so the status projection can
+// never advertise an enforcement authority the compiler would not apply.
+func (m *Manager) enrichFeedStates(states []FeedState, overrides map[string]FeedPolicyOverride) []FeedState {
 	if len(states) == 0 {
 		return states
 	}
+	authorityAvailable := m.authorityEnforcementAvailable()
 	for index := range states {
 		source, exists := sourceByKey(states[index].Key)
 		if !exists {
@@ -459,7 +538,7 @@ func enrichFeedStates(states []FeedState, overrides map[string]FeedPolicyOverrid
 		}
 		states[index].DefaultAction = source.Action
 		states[index].ConfiguredAction = configured
-		states[index].EffectiveAction = configured
+		states[index].EffectiveAction = capEnforcementAction(source.Action, configured, authorityAvailable)
 		states[index].ActionSource = actionSource
 	}
 	return states
@@ -496,12 +575,13 @@ func (m *Manager) SetProtectedPrefixes(values []string) (ProtectedNetworkPolicy,
 	previousPolicy, previousPrefixes := m.protectedSnapshot()
 	updatedUTC := time.Now().UTC()
 	overrides, _, _, _ := m.feedPolicyView()
-	index := buildIndex(applyEffectiveActionsToSnapshots(m.snapshots, overrides))
+	authorityAvailable := m.authorityEnforcementAvailable()
+	index := buildIndex(applyEffectiveActionsToSnapshots(m.snapshots, overrides, authorityAvailable))
 	if err := index.compileEnforcement(prefixes); err != nil {
 		return ProtectedNetworkPolicy{}, err
 	}
-	_, blockingReady := effectiveBlockingCoverage(m.snapshots, overrides)
-	if index.indicators > 0 && (index.blocking == 0 || blockingReady == 0) {
+	_, blockingReady := effectiveBlockingCoverage(m.snapshots, overrides, authorityAvailable)
+	if authorityAvailable && index.indicators > 0 && (index.blocking == 0 || blockingReady == 0) {
 		return ProtectedNetworkPolicy{}, errors.New("protected network policy would remove all blocking enforcement indicators")
 	}
 
@@ -509,7 +589,7 @@ func (m *Manager) SetProtectedPrefixes(values []string) (ProtectedNetworkPolicy,
 	if err != nil {
 		return ProtectedNetworkPolicy{}, err
 	}
-	if index.indicators > 0 {
+	if authorityAvailable && index.indicators > 0 {
 		if err := writeEnforcementSnapshot(m.root, updatedUTC, index, blockingReady, persistedPolicy); err != nil {
 			rollbackErr := restoreProtectedPolicy(m.root, m.protectedKey, previousPolicy, previousPrefixes)
 			m.markProtectionPolicyStatus(previousPolicy, err)
@@ -518,6 +598,10 @@ func (m *Manager) SetProtectedPrefixes(values []string) (ProtectedNetworkPolicy,
 			}
 			return previousPolicy, err
 		}
+	}
+	if !authorityAvailable {
+		// No enforcement projection may survive in annotation-only mode.
+		_ = os.Remove(enforcementSnapshotPath(m.root))
 	}
 
 	m.protectedMu.Lock()
@@ -685,6 +769,7 @@ func (m *Manager) loadCached() {
 		m.setStatus(Status{State: "FAILED", Error: "cached blocking threat intelligence boundary rejected", BlockingFeedsTotal: blockingTotal, Feeds: states})
 		return
 	}
+	authorityAvailable := m.authorityEnforcementAvailable()
 	if index.indicators == 0 {
 		_ = os.Remove(enforcementSnapshotPath(m.root))
 		state := "INITIALIZING"
@@ -701,7 +786,16 @@ func (m *Manager) loadCached() {
 	nextSync := latest.Add(m.pollInterval())
 	state := "CACHED"
 	errorText := ""
-	if blockingReady != blockingTotal || index.blocking == 0 {
+	if !authorityAvailable {
+		// FIND-WIN-015: cached unsigned generations remain usable for display and
+		// audit only. Any enforcement projection is withdrawn and the state is
+		// explicit instead of silently blocking on unverified data.
+		_ = os.Remove(enforcementSnapshotPath(m.root))
+		state = "DEGRADED"
+		_, _, authorityDetail, _, _ := m.authorityStatus()
+		errorText = authorityDetail
+		nextSync = time.Now().UTC()
+	} else if blockingReady != blockingTotal || index.blocking == 0 {
 		nextSync = time.Now().UTC()
 		state = "DEGRADED"
 		errorText = "blocking coverage incomplete; immediate synchronization required"
@@ -791,6 +885,11 @@ func validFetchAddress(address netip.Addr) bool {
 		return false
 	}
 	prefix := netip.PrefixFrom(address, address.BitLen())
+	for _, selfProtection := range selfProtectionRanges {
+		if prefixesOverlap(prefix, selfProtection) {
+			return false
+		}
+	}
 	for _, protected := range protectedThreatRanges {
 		if prefixesOverlap(prefix, protected) {
 			return false

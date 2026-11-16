@@ -4,30 +4,39 @@
 package server
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/trust"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 )
 
 // This file implements the local OS-identity verification used by the operator
 // session broker (UI-FIND-001 / AN-FIND-001 / AN-FIND-004). It inspects the
-// Windows access token of the process that owns a loopback TCP connection; it
-// never trusts a client-supplied account name or SID. All handles are closed and
-// all buffers are bounded. If anything is unavailable the caller fails closed.
+// Windows access token of the process that owns a loopback TCP connection and
+// the kernel-reported image path of that process; it never trusts a
+// client-supplied account name, SID or executable path. All handles are closed
+// and all buffers are bounded. If anything is unavailable the caller fails
+// closed.
 
 const (
-	processQueryLimitedInformation = 0x1000
-	tokenQueryAccess               = 0x0008
+	tokenQueryAccess = 0x0008
 
-	tokenUserClass   = 1
-	tokenGroupsClass = 2
+	tokenUserClass      = 1
+	tokenGroupsClass    = 2
+	tokenElevationClass = 20
+	maxTokenInfoBytes   = 1 << 20
 
 	seGroupEnabled        = 0x00000004
 	seGroupUseForDenyOnly = 0x00000010
-	maxTokenInfoBytes     = 1 << 20
+	// maxImagePathBytes bounds every image path string before a Win32 call. It
+	// matches the Win32 long-path ceiling; larger paths are rejected closed.
+	maxImagePathBytes = 32768
 
 	administratorsSID = "S-1-5-32-544"
 	operatorGroupName = "VGT GeDefense Operators"
@@ -74,6 +83,7 @@ var (
 	procConvertSidToStringSidOperator = operatorAdvapi32.NewProc("ConvertSidToStringSidW")
 	procConvertStringSidToSidOperator = operatorAdvapi32.NewProc("ConvertStringSidToSidW")
 	procLocalFreeOperator             = operatorKernel32.NewProc("LocalFree")
+	procGetLongPathNameW              = operatorKernel32.NewProc("GetLongPathNameW")
 
 	// netapi32 bindings for the SAM membership fallback. NewLazyProc.Call
 	// panics when the procedure cannot be resolved, so every call site resolves
@@ -95,18 +105,27 @@ type sidAndAttributes struct {
 // operatorPeerFromPID resolves pid to a verified Windows identity. It requires
 // PROCESS_QUERY_LIMITED_INFORMATION, which a LocalSystem service holds for a
 // same-machine user process without elevation of the caller.
+//
+// Besides the token identity it captures two properties the broker needs to
+// stop an arbitrary medium-IL process from taking over the control plane
+// (FIND-WIN-006):
+//
+//   - the kernel-reported image path (QueryFullProcessImageNameW), never a
+//     value from the request,
+//   - the Authenticode/tree verdict of that installed image. The broker's exact
+//     executable-name check then binds the client role to the real binary.
 func operatorPeerFromPID(pid uint32) (operatorPeer, error) {
 	if pid == 0 {
 		return operatorPeer{}, errors.New("invalid peer process id")
 	}
-	process, err := syscall.OpenProcess(processQueryLimitedInformation, false, pid)
+	identity, err := winapi.OpenProcessIdentity(pid, false)
 	if err != nil {
 		return operatorPeer{}, fmt.Errorf("open peer process: %w", err)
 	}
-	defer func() { _ = syscall.CloseHandle(process) }()
+	defer func() { _ = identity.Close() }()
 	var token syscall.Token
 	result, _, callErr := procOpenProcessTokenOperator.Call(
-		uintptr(process), uintptr(tokenQueryAccess), uintptr(unsafe.Pointer(&token)))
+		uintptr(identity.Handle), uintptr(tokenQueryAccess), uintptr(unsafe.Pointer(&token)))
 	if result == 0 {
 		return operatorPeer{}, fmt.Errorf("open peer process token: %w", callError(callErr))
 	}
@@ -122,14 +141,84 @@ func operatorPeerFromPID(pid uint32) (operatorPeer, error) {
 	}
 	operatorGroup := lookupOperatorGroupSID()
 	administrator, operator := operatorPeerFlags(authorisingGroups, tokenGroups, userSID, operatorGroup)
+	// Store the canonical (long-name) image path: QueryFullProcessImageNameW can
+	// report the 8.3 form of the process parameters, which must not defeat the
+	// exact executable-name binding or the install-tree/Authenticode checks.
+	imagePath := canonicalImagePath(identity.ImagePath)
 	peer := operatorPeer{
 		PID:           pid,
 		Account:       account,
 		SID:           userSID,
 		Administrator: administrator,
 		Operator:      operator,
+		Elevated:      tokenIsElevated(token),
+		ImagePath:     imagePath,
 	}
+	peer.ImageTrusted, peer.ImageSignatureVerified = operatorImageTrust(imagePath)
 	return peer, nil
+}
+
+// tokenIsElevated reads TOKEN_ELEVATION from the peer token. A query failure is
+// treated as "not elevated": that is the fail-closed direction for authority
+// (it can only narrow the granted scopes, never widen them).
+func tokenIsElevated(token syscall.Token) bool {
+	buffer, err := tokenInformation(token, tokenElevationClass)
+	if err != nil || len(buffer) < 4 {
+		return false
+	}
+	return binary.LittleEndian.Uint32(buffer[:4]) != 0
+}
+
+// operatorImageTrust classifies the peer image for the broker:
+//
+//   - trusted: the path is inside the machine-owned installed product tree and
+//     resolves without a reparse point (trust.Default().TrustedTreePath),
+//   - signed: that same file passes WinVerifyTrust (Authenticode).
+//
+// The policy is deliberately fail-closed. An unsigned development build of
+// Center/Tray therefore cannot obtain a broker session through this path; local
+// development must use the explicitly master-authorised bootstrap/compat route.
+// There is no environment switch and no silent bypass.
+func operatorImageTrust(imagePath string) (trusted, signed bool) {
+	canonical := canonicalImagePath(imagePath)
+	if strings.TrimSpace(canonical) == "" {
+		return false, false
+	}
+	verifier := trust.Default()
+	if verifier == nil || !verifier.TrustedTreePath(canonical) {
+		return false, false
+	}
+	if err := winapi.VerifyAuthenticode(canonical); err != nil {
+		return true, false
+	}
+	return true, true
+}
+
+// canonicalImagePath expands 8.3 short name components of the kernel-reported
+// image path to their long form. QueryFullProcessImageNameW returns the image
+// path of the process parameters, which can contain short names (for example
+// C:\PROGRA~1\...); the install-tree and Authenticode checks compare canonical
+// paths and would otherwise deny a legitimate signed binary. A path that cannot
+// be expanded is returned unchanged, so the trust decision still fails closed.
+func canonicalImagePath(imagePath string) string {
+	trimmed := strings.TrimSpace(imagePath)
+	if trimmed == "" || len(trimmed) > maxImagePathBytes {
+		return trimmed
+	}
+	pointer, err := syscall.UTF16PtrFromString(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	buffer := make([]uint16, maxImagePathBytes)
+	length, _, _ := procGetLongPathNameW.Call(
+		uintptr(unsafe.Pointer(pointer)),
+		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(len(buffer)),
+	)
+	if length == 0 || int(length) > len(buffer) {
+		return trimmed
+	}
+	return syscall.UTF16ToString(buffer[:length])
 }
 
 // operatorPeerFlags derives the broker authorization flags from the token group

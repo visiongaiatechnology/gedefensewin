@@ -2,6 +2,16 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# FIND-WIN-005: service-owned state lives below %ProgramData%\VGT. The product
+# root and SecurityCenter root are hardened to LocalSystem/Administrators only
+# and the result is verified by reading the effective DACL back. The cache only
+# avoids re-applying the (idempotent) ACL on every log line within one process.
+$script:VgtSystemSid = 'S-1-5-18'
+$script:VgtAdministratorsSid = 'S-1-5-32-544'
+$script:VgtUsersSid = 'S-1-5-32-545'
+$script:VgtDataRootCache = ''
+$script:VgtBaselineKeyCache = $null
+
 function Assert-VgtAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -10,11 +20,162 @@ function Assert-VgtAdministrator {
     }
 }
 
-function Get-VgtDataRoot {
-    $root = Join-Path $env:ProgramData 'VGT\SecurityCenter'
-    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
-        New-Item -Path $root -ItemType Directory -Force | Out-Null
+function Get-VgtNormalizedPath {
+    param([Parameter(Mandatory)][string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { throw [IO.InvalidDataException]::new('Path must not be empty.') }
+    if ($Path.IndexOfAny([char[]]@([char]0,[char]10,[char]13)) -ge 0) { throw [IO.InvalidDataException]::new('Path contains control characters.') }
+    return [IO.Path]::GetFullPath($Path)
+}
+
+function Test-VgtReparsePoint {
+    param([Parameter(Mandatory)][string]$Path)
+    $full = Get-VgtNormalizedPath -Path $Path
+    if (-not [IO.File]::Exists($full) -and -not [IO.Directory]::Exists($full)) { return $false }
+    return [bool]([IO.File]::GetAttributes($full) -band [IO.FileAttributes]::ReparsePoint)
+}
+
+function Assert-VgtNoReparseTraversal {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$AllowedRoot
+    )
+    $full = Get-VgtNormalizedPath -Path $Path
+    $root = Get-VgtNormalizedPath -Path $AllowedRoot
+    if ($root.Length -gt 3) { $root = $root.TrimEnd('\') }
+    $rootPrefix = if ($root.EndsWith('\')) { $root } else { $root + '\' }
+    if ($full -ne $root) {
+        if (-not $full.StartsWith($rootPrefix,[StringComparison]::OrdinalIgnoreCase)) {
+            throw [Security.SecurityException]::new(('Path escaped the allowed root: {0}' -f $full))
+        }
     }
+    $current = $full
+    $guard = 0
+    while ($true) {
+        if ($current -eq $root) { break }
+        if (Test-VgtReparsePoint -Path $current) {
+            throw [Security.SecurityException]::new(('Reparse point in the protected path chain: {0}' -f $current))
+        }
+        $parent = [IO.Path]::GetDirectoryName($current)
+        if ([string]::IsNullOrEmpty($parent) -or $parent -eq $current) { break }
+        $current = $parent
+        $guard++
+        if ($guard -gt 64) { throw [Security.SecurityException]::new('Path traversal evaluation exceeded the safety bound.') }
+    }
+}
+
+function Resolve-VgtIdentitySid {
+    param([Parameter(Mandatory)][object]$Identity)
+    if ($Identity -is [Security.Principal.SecurityIdentifier]) { return $Identity.Value }
+    $text = [string]$Identity
+    try {
+        $sid = ([Security.Principal.NTAccount]::new($text)).Translate([Security.Principal.SecurityIdentifier])
+        if ($null -ne $sid) { return $sid.Value }
+    } catch {}
+    try { return ([Security.Principal.SecurityIdentifier]::new($text)).Value } catch { return '' }
+}
+
+# Test-VgtServiceAcl verifies an effective ACL: inheritance disabled, no
+# inherited ACE, allow ACEs limited to the expected service principals and the
+# owner held by LocalSystem or Administrators.
+function Test-VgtServiceAcl {
+    param(
+        [Parameter(Mandatory)][object]$Acl,
+        [switch]$AllowsUsersRead,
+        [switch]$SkipOwnerCheck
+    )
+    if (-not $Acl.AreAccessRulesProtected) { return [pscustomobject][ordered]@{ Passed = $false; Detail = 'DACL inheritance is still enabled' } }
+    $allowedSids = @($script:VgtSystemSid,$script:VgtAdministratorsSid)
+    if ($AllowsUsersRead) { $allowedSids += $script:VgtUsersSid }
+    foreach ($rule in @($Acl.Access)) {
+        if ($rule.IsInherited) { return [pscustomobject][ordered]@{ Passed = $false; Detail = 'inherited ACE remains in the effective DACL' } }
+        if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+        $sid = Resolve-VgtIdentitySid -Identity $rule.IdentityReference
+        if ($allowedSids -notcontains $sid) {
+            return [pscustomobject][ordered]@{ Passed = $false; Detail = ('allow ACE grants a non-service principal: {0}' -f $sid) }
+        }
+    }
+    if (-not $SkipOwnerCheck) {
+        $ownerSid = Resolve-VgtIdentitySid -Identity $Acl.Owner
+        if ($ownerSid -ne $script:VgtSystemSid -and $ownerSid -ne $script:VgtAdministratorsSid) {
+            return [pscustomobject][ordered]@{ Passed = $false; Detail = ('object owner is not a service principal: {0}' -f $ownerSid) }
+        }
+    }
+    return [pscustomobject][ordered]@{ Passed = $true; Detail = 'explicit DACL grants only LocalSystem/Administrators' }
+}
+
+# Invoke-VgtIcaclsMutation applies one native DACL mutation and fails closed on a
+# non-zero exit code. Only DACL operations are used, so the service never needs
+# SeSecurityPrivilege and repeated hardening stays idempotent.
+function Invoke-VgtIcaclsMutation {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$Operation
+    )
+    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+    if (-not (Test-Path -LiteralPath $icacls -PathType Leaf)) { throw [IO.FileNotFoundException]::new('Windows icacls.exe is unavailable.') }
+    $nativeOutput = (& $icacls $Path @Arguments 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw [Security.SecurityException]::new(('ACL {0} failed for {1}: {2}' -f $Operation,$Path,$nativeOutput))
+    }
+}
+
+# Set-VgtServiceAcl applies an inheritance-protected explicit DACL, moves the
+# owner to a service principal and verifies the read-back result fail-closed.
+# LocalSystem/Administrators only by default; Windows-readable non-secret content
+# (Branding) may opt into Users read/execute. The reset+grant sequence is
+# idempotent and never leaves foreign explicit ACEs behind.
+function Set-VgtServiceAcl {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$AllowsUsersRead,
+        [switch]$SkipOwnerCheck
+    )
+    $full = Get-VgtNormalizedPath -Path $Path
+    $isDirectory = [IO.Directory]::Exists($full)
+    if (-not $isDirectory -and -not [IO.File]::Exists($full)) { throw [IO.FileNotFoundException]::new(('ACL target is missing: {0}' -f $full)) }
+    $inheritFlags = if ($isDirectory) { '(OI)(CI)' } else { '' }
+    Invoke-VgtIcaclsMutation -Path $full -Arguments @('/reset') -Operation 'reset'
+    Invoke-VgtIcaclsMutation -Path $full -Arguments @('/inheritance:r') -Operation 'inheritance-remove'
+    Invoke-VgtIcaclsMutation -Path $full -Arguments @('/grant:r',("*S-1-5-18:{0}F" -f $inheritFlags),("*S-1-5-32-544:{0}F" -f $inheritFlags)) -Operation 'grant-service'
+    if ($AllowsUsersRead) {
+        $userRights = if ($isDirectory) { '(OI)(CI)RX' } else { 'R' }
+        Invoke-VgtIcaclsMutation -Path $full -Arguments @('/grant:r',("*S-1-5-32-545:{0}" -f $userRights)) -Operation 'grant-users-read'
+    }
+    if (-not $SkipOwnerCheck) {
+        $ownerSid = Resolve-VgtIdentitySid -Identity (Get-Acl -LiteralPath $full).Owner
+        if ($ownerSid -ne $script:VgtSystemSid -and $ownerSid -ne $script:VgtAdministratorsSid) {
+            Invoke-VgtIcaclsMutation -Path $full -Arguments @('/setowner','*S-1-5-32-544') -Operation 'setowner'
+            $hardenedOwner = Resolve-VgtIdentitySid -Identity (Get-Acl -LiteralPath $full).Owner
+            if ($hardenedOwner -ne $script:VgtAdministratorsSid) {
+                throw [Security.SecurityException]::new(('ACL owner hardening failed for {0}: owner={1}' -f $full,$hardenedOwner))
+            }
+        }
+    }
+    $verification = Test-VgtServiceAcl -Acl (Get-Acl -LiteralPath $full) -AllowsUsersRead:$AllowsUsersRead -SkipOwnerCheck:$SkipOwnerCheck
+    if (-not [bool]$verification.Passed) {
+        throw [Security.SecurityException]::new(('ACL verification failed for {0}: {1}' -f $full,$verification.Detail))
+    }
+    return $verification
+}
+
+function Get-VgtDataRoot {
+    if ($script:VgtDataRootCache) {
+        if ([IO.Directory]::Exists($script:VgtDataRootCache) -and -not (Test-VgtReparsePoint -Path $script:VgtDataRootCache)) { return $script:VgtDataRootCache }
+        $script:VgtDataRootCache = ''
+    }
+    $programDataRoot = [IO.Path]::GetFullPath($env:ProgramData)
+    $vgtRoot = Join-Path $programDataRoot 'VGT'
+    Assert-VgtNoReparseTraversal -Path $vgtRoot -AllowedRoot $programDataRoot
+    if ([IO.File]::Exists($vgtRoot)) { throw [IO.InvalidDataException]::new('%ProgramData%\VGT is a file, not a directory.') }
+    if (-not [IO.Directory]::Exists($vgtRoot)) { New-Item -Path $vgtRoot -ItemType Directory -Force | Out-Null }
+    Set-VgtServiceAcl -Path $vgtRoot | Out-Null
+    $root = Join-Path $vgtRoot 'SecurityCenter'
+    Assert-VgtNoReparseTraversal -Path $root -AllowedRoot $programDataRoot
+    if ([IO.File]::Exists($root)) { throw [IO.InvalidDataException]::new('%ProgramData%\VGT\SecurityCenter is a file, not a directory.') }
+    if (-not [IO.Directory]::Exists($root)) { New-Item -Path $root -ItemType Directory -Force | Out-Null }
+    Set-VgtServiceAcl -Path $root | Out-Null
+    $script:VgtDataRootCache = $root
     return $root
 }
 
@@ -26,7 +187,9 @@ function Write-VgtEvent {
     $logDirectory = Join-Path (Get-VgtDataRoot) 'Logs'
     if (-not (Test-Path -LiteralPath $logDirectory -PathType Container)) {
         New-Item -Path $logDirectory -ItemType Directory -Force | Out-Null
+        Set-VgtServiceAcl -Path $logDirectory | Out-Null
     }
+    Assert-VgtNoReparseTraversal -Path $logDirectory -AllowedRoot (Get-VgtDataRoot)
     $safeMessage = $Message -replace '[\r\n\0]', ' '
     $record = '{0:o}`t{1}`t{2}' -f [DateTime]::UtcNow,$Level,$safeMessage
     Add-Content -LiteralPath (Join-Path $logDirectory 'hardening.log') -Value $record -Encoding UTF8
@@ -134,7 +297,10 @@ function Test-VgtBaselineDefenderPreference {
         EnableControlledFolderAccess = @(0,1,2)
     }
     foreach ($settingName in $enums.Keys) {
-        $values = Get-VgtBaselinePropertyValues -Object $Defender -Name $settingName
+        # Enforce an array: a single scalar would not expose .Count under
+        # Set-StrictMode -Version Latest (PowerShell 5.1) and would break the
+        # baseline schema validation.
+        $values = @(Get-VgtBaselinePropertyValues -Object $Defender -Name $settingName)
         if ($values.Count -ne 1) { return $false }
         $number = 0L
         if (-not [long]::TryParse([string]$values[0],[ref]$number)) { return $false }
@@ -177,49 +343,149 @@ function Test-VgtBaselineAuditPolicyPath {
     return $true
 }
 
+# FIND-WIN-005: audit-policy.csv content (not just its path) is bound into the
+# authenticated baseline material, so replacing the CSV is detected.
+function Get-VgtAuditPolicyContentHash {
+    param([AllowEmptyString()][string]$Path = '')
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return '' }
+    if (Test-VgtReparsePoint -Path $Path) { return '' }
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-VgtBaselineKeyDirectory {
+    return (Join-Path $env:ProgramData 'VGT\GeDefense\keys')
+}
+
+# Get-VgtBaselineKeyBytes returns the 32-byte HMAC key for the baseline anchor.
+# The production key lives below %ProgramData%\VGT\GeDefense\keys and is created
+# empty, receives the SYSTEM/Administrators-only DACL and only then stores the
+# key material (no readable window for secret bytes). The explicit -KeyDirectory
+# parameter exists for the unit tests; production callers never pass it.
+function Get-VgtBaselineKeyBytes {
+    param([AllowEmptyString()][string]$KeyDirectory = '')
+    $isProduction = [string]::IsNullOrWhiteSpace($KeyDirectory)
+    if ($isProduction -and $null -ne $script:VgtBaselineKeyCache) { return $script:VgtBaselineKeyCache }
+    $targetDirectory = if ($isProduction) { [IO.Path]::GetFullPath((Get-VgtBaselineKeyDirectory)) } else { [IO.Path]::GetFullPath($KeyDirectory) }
+    if ([IO.File]::Exists($targetDirectory)) { throw [IO.InvalidDataException]::new('Baseline key path is a file, not a directory.') }
+    if (-not [IO.Directory]::Exists($targetDirectory)) { New-Item -Path $targetDirectory -ItemType Directory -Force | Out-Null }
+    if ($isProduction) { Set-VgtServiceAcl -Path $targetDirectory | Out-Null }
+    $keyPath = Join-Path $targetDirectory 'baseline-hmac.key'
+    Assert-VgtNoReparseTraversal -Path $keyPath -AllowedRoot $targetDirectory
+    if (Test-Path -LiteralPath $keyPath -PathType Leaf) {
+        if (Test-VgtReparsePoint -Path $keyPath) { throw [Security.SecurityException]::new('Baseline key file is a reparse point.') }
+        $encoded = (Get-Content -LiteralPath $keyPath -Raw -Encoding ASCII).Trim()
+        $key = $null
+        try { $key = [Convert]::FromBase64String($encoded) } catch { throw [Security.SecurityException]::new('Baseline key file is corrupt.') }
+        if ($null -eq $key -or $key.Length -ne 32) { throw [Security.SecurityException]::new('Baseline key material is invalid.') }
+        if ($isProduction) { Set-VgtServiceAcl -Path $keyPath | Out-Null }
+        if ($isProduction) { $script:VgtBaselineKeyCache = $key }
+        return $key
+    }
+    $null = New-Item -Path $keyPath -ItemType File -Force
+    # DACL before the first secret byte: the file exists but is still empty.
+    if ($isProduction) { Set-VgtServiceAcl -Path $keyPath | Out-Null }
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $key = New-Object byte[] 32
+        $rng.GetBytes($key)
+    } finally { $rng.Dispose() }
+    $encodedBytes = [Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($key))
+    $stream = [IO.File]::Open($keyPath,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try {
+        $stream.Write($encodedBytes,0,$encodedBytes.Length)
+        $stream.Flush($true)
+    } finally { $stream.Dispose() }
+    if ($isProduction) { Set-VgtServiceAcl -Path $keyPath | Out-Null }
+    if ($isProduction) { $script:VgtBaselineKeyCache = $key }
+    return $key
+}
+
+function Get-VgtBaselineKeyId {
+    param([Parameter(Mandatory)][byte[]]$Key)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($Key))).Replace('-','').Substring(0,16).ToLowerInvariant()
+    } finally { $sha.Dispose() }
+}
+
+function Test-VgtConstantTimeHexEqual {
+    param([AllowEmptyString()][string]$Left = '',[AllowEmptyString()][string]$Right = '')
+    if ($Left.Length -ne $Right.Length -or $Left.Length -eq 0) { return $false }
+    $difference = 0
+    for ($index = 0; $index -lt $Left.Length; $index++) {
+        $difference = $difference -bor ([int][char]$Left[$index] -bxor [int][char]$Right[$index])
+    }
+    return ($difference -eq 0)
+}
+
 function Get-VgtBaselineIntegrityMaterial {
     param([Parameter(Mandatory)][object]$State)
     # Only the security-relevant content is bound; createdUtc and the integrity
-    # field itself are excluded so the hash is reproducible after a JSON
-    # round-trip.
+    # field itself are excluded so the HMAC is reproducible after a JSON
+    # round-trip. The audit policy CSV content hash binds the file content, not
+    # just the path.
+    $auditPolicyPath = [string]$State.auditPolicy
     $material = [ordered]@{
         format = [int]$State.format
         registry = @($State.registry)
         firewall = @($State.firewall)
         defender = $State.defender
         smb1State = [string]$State.smb1State
-        auditPolicy = [string]$State.auditPolicy
+        auditPolicy = $auditPolicyPath
+        auditPolicySha256 = (Get-VgtAuditPolicyContentHash -Path $auditPolicyPath)
     }
     return ($material | ConvertTo-Json -Depth 6 -Compress)
 }
 
+# Get-VgtBaselineIntegrityHash returns the keyed HMAC-SHA256 over the canonical
+# baseline material. The legacy unkeyed SHA-256 does not authenticate content and
+# is never produced or accepted as 'Valid'.
 function Get-VgtBaselineIntegrityHash {
-    param([Parameter(Mandatory)][object]$State)
+    param([Parameter(Mandatory)][object]$State,[byte[]]$Key,[AllowEmptyString()][string]$KeyDirectory = '')
+    if ($null -eq $Key) { $Key = Get-VgtBaselineKeyBytes -KeyDirectory $KeyDirectory }
+    if ($null -eq $Key -or $Key.Length -ne 32) { throw [Security.SecurityException]::new('Baseline HMAC key is invalid.') }
     $material = Get-VgtBaselineIntegrityMaterial -State $State
-    $sha = [Security.Cryptography.SHA256]::Create()
+    $hmac = [Security.Cryptography.HMACSHA256]::new($Key)
     try {
-        return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($material)))).Replace('-','').ToLowerInvariant()
-    } finally {
-        $sha.Dispose()
-    }
+        return ([BitConverter]::ToString($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($material)))).Replace('-','').ToLowerInvariant()
+    } finally { $hmac.Dispose() }
 }
 
-# Returns 'Valid' when the stored SHA-256 matches the canonical content,
-# 'Legacy' when the baseline predates integrity metadata and 'Mismatch' when
-# the content was altered after it was captured.
+# Returns 'Valid' only when the keyed HMAC and the bound audit-policy content
+# hash match. 'Legacy' (unkeyed SHA-256 or no integrity metadata) and 'Mismatch'
+# are integrity violations: callers must fail closed instead of treating them as
+# OK (FIND-WIN-005).
 function Test-VgtBaselineIntegrity {
-    param([Parameter(Mandatory)][object]$State)
+    param([Parameter(Mandatory)][object]$State,[byte[]]$Key,[AllowEmptyString()][string]$KeyDirectory = '')
     $integrityProperty = $State.PSObject.Properties['integrity']
     if ($null -eq $integrityProperty -or $null -eq $integrityProperty.Value) { return 'Legacy' }
     $integrity = $integrityProperty.Value
     $algorithmProperty = $integrity.PSObject.Properties['algorithm']
-    $hashProperty = $integrity.PSObject.Properties['baselineSha256']
-    if ($null -eq $algorithmProperty -or $null -eq $hashProperty) { return 'Mismatch' }
-    if ([string]$algorithmProperty.Value -ne 'SHA256') { return 'Mismatch' }
-    $stored = ([string]$hashProperty.Value).Trim().ToLowerInvariant()
+    if ($null -eq $algorithmProperty) { return 'Mismatch' }
+    if ([string]$algorithmProperty.Value -ne 'HMAC-SHA256') {
+        # Unkeyed legacy integrity (SHA256) cannot be authenticated and must
+        # never be treated as valid; it is reported as an integrity violation.
+        if ([string]$algorithmProperty.Value -eq 'SHA256') { return 'Legacy' }
+        return 'Mismatch'
+    }
+    $hmacProperty = $integrity.PSObject.Properties['baselineHmac']
+    if ($null -eq $hmacProperty) { return 'Mismatch' }
+    $stored = ([string]$hmacProperty.Value).Trim().ToLowerInvariant()
     if ($stored -notmatch '^[0-9a-f]{64}$') { return 'Mismatch' }
-    $computed = Get-VgtBaselineIntegrityHash -State $State
-    if (-not [string]::Equals($stored,$computed,[StringComparison]::Ordinal)) { return 'Mismatch' }
+    $auditPolicyProperty = $State.PSObject.Properties['auditPolicy']
+    if ($null -eq $auditPolicyProperty) { return 'Mismatch' }
+    $auditPolicySha256 = Get-VgtAuditPolicyContentHash -Path ([string]$auditPolicyProperty.Value)
+    if ([string]::IsNullOrWhiteSpace($auditPolicySha256)) { return 'Mismatch' }
+    $storedAuditProperty = $integrity.PSObject.Properties['auditPolicySha256']
+    if ($null -eq $storedAuditProperty) { return 'Mismatch' }
+    if (([string]$storedAuditProperty.Value).Trim().ToLowerInvariant() -ne $auditPolicySha256) { return 'Mismatch' }
+    if ($null -eq $Key) {
+        try { $Key = Get-VgtBaselineKeyBytes -KeyDirectory $KeyDirectory } catch { return 'Mismatch' }
+    }
+    if ($null -eq $Key -or $Key.Length -ne 32) { return 'Mismatch' }
+    $computed = Get-VgtBaselineIntegrityHash -State $State -Key $Key
+    if (-not (Test-VgtConstantTimeHexEqual -Left $stored -Right $computed)) { return 'Mismatch' }
     return 'Valid'
 }
 
@@ -257,11 +523,22 @@ function Test-VgtBaselineState {
     return $true
 }
 
-function Save-VgtBaseline {
+# Get-VgtStateDirectory returns the authenticated-state directory below
+# SecurityCenter. The directory is created through the reparse-safe path chain
+# and receives an explicit service-only DACL so the baseline anchor and the
+# audit policy copy cannot be replaced by a non-privileged principal.
+function Get-VgtStateDirectory {
     $stateDirectory = Join-Path (Get-VgtDataRoot) 'State'
-    if (-not (Test-Path -LiteralPath $stateDirectory -PathType Container)) {
-        New-Item -Path $stateDirectory -ItemType Directory -Force | Out-Null
-    }
+    $dataRoot = Get-VgtDataRoot
+    Assert-VgtNoReparseTraversal -Path $stateDirectory -AllowedRoot $dataRoot
+    if ([IO.File]::Exists($stateDirectory)) { throw [IO.InvalidDataException]::new('VGT state path is a file, not a directory.') }
+    if (-not [IO.Directory]::Exists($stateDirectory)) { New-Item -Path $stateDirectory -ItemType Directory -Force | Out-Null }
+    Set-VgtServiceAcl -Path $stateDirectory | Out-Null
+    return $stateDirectory
+}
+
+function Save-VgtBaseline {
+    $stateDirectory = Get-VgtStateDirectory
     $target = Join-Path $stateDirectory 'baseline.json'
     if (Test-Path -LiteralPath $target -PathType Leaf) {
         # The rollback anchor stays write-once, but an existing anchor must be
@@ -292,7 +569,17 @@ function Save-VgtBaseline {
             if ($existingIntegrity -eq 'Mismatch') {
                 throw [Security.SecurityException]::new('Existing VGT baseline failed integrity verification.')
             }
-            return $target
+            if ($existingIntegrity -eq 'Legacy') {
+                # An unkeyed/absent HMAC cannot authenticate the anchor. It is
+                # never treated as valid: the untrusted file is preserved for
+                # forensics and a fresh keyed baseline is captured from the live
+                # system below (the untrusted content is never re-signed).
+                $untrustedArchive = Join-Path $stateDirectory ('baseline.untrusted-{0}.json' -f [DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))
+                Move-Item -LiteralPath $target -Destination $untrustedArchive -Force
+                Write-VgtEvent -Level SECURITY -Message ('Unauthenticated hardening baseline archived (missing/invalid HMAC); capturing a fresh keyed baseline: {0}' -f (Split-Path -Leaf $untrustedArchive))
+            } else {
+                return $target
+            }
         }
     }
 
@@ -361,6 +648,9 @@ function Save-VgtBaseline {
         Move-Item -LiteralPath $auditPolicy -Destination $legacyAudit -Force
     }
     Move-Item -LiteralPath $auditTemporary -Destination $auditPolicy -Force
+    Set-VgtServiceAcl -Path $auditPolicy | Out-Null
+    $auditPolicySha256 = Get-VgtAuditPolicyContentHash -Path $auditPolicy
+    if ([string]::IsNullOrWhiteSpace($auditPolicySha256)) { throw [Security.SecurityException]::new('Audit policy baseline content hash is unavailable.') }
     $state = [ordered]@{
         format = 2
         createdUtc = [DateTime]::UtcNow.ToString('o')
@@ -370,13 +660,17 @@ function Save-VgtBaseline {
         smb1State = $smb1State
         auditPolicy = $auditPolicy
     }
+    $integrityKey = Get-VgtBaselineKeyBytes
     $state['integrity'] = [ordered]@{
-        algorithm = 'SHA256'
-        baselineSha256 = (Get-VgtBaselineIntegrityHash -State ([pscustomobject]$state))
+        algorithm = 'HMAC-SHA256'
+        baselineHmac = (Get-VgtBaselineIntegrityHash -State ([pscustomobject]$state) -Key $integrityKey)
+        auditPolicySha256 = $auditPolicySha256
+        keyId = (Get-VgtBaselineKeyId -Key $integrityKey)
     }
     $temporary = "$target.$PID.tmp"
     $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $temporary -Encoding UTF8
     Move-Item -LiteralPath $temporary -Destination $target -Force
+    Set-VgtServiceAcl -Path $target | Out-Null
     return $target
 }
 
@@ -433,19 +727,19 @@ function Test-VgtBaselineRestoredState {
 }
 
 function Restore-VgtBaseline {
-    $stateDirectory = Join-Path (Get-VgtDataRoot) 'State'
+    $stateDirectory = Get-VgtStateDirectory
     $target = Join-Path $stateDirectory 'baseline.json'
     if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw [IO.FileNotFoundException]::new('VGT baseline is unavailable.') }
     $state = Get-Content -LiteralPath $target -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not (Test-VgtBaselineState -State $state -StateDirectory $stateDirectory)) {
         throw [Security.SecurityException]::new('VGT baseline validation failed.')
     }
+    # FIND-WIN-005: a missing, legacy (unkeyed) or mismatching HMAC is an
+    # integrity violation. Rollback must never proceed on an unauthenticated
+    # anchor.
     $integrity = Test-VgtBaselineIntegrity -State $state
-    if ($integrity -eq 'Mismatch') {
-        throw [Security.SecurityException]::new('VGT baseline integrity verification failed.')
-    }
-    if ($integrity -eq 'Legacy') {
-        Write-VgtEvent -Level WARN -Message 'Baseline lacks integrity metadata (legacy format); content validation passed.'
+    if ($integrity -ne 'Valid') {
+        throw [Security.SecurityException]::new(('VGT baseline integrity verification failed ({0}); rollback rejected.' -f $integrity))
     }
     foreach ($entry in @($state.registry)) {
         if ([bool]$entry.existed) {
@@ -487,5 +781,5 @@ function Restore-VgtBaseline {
     Write-VgtEvent -Level INFO -Message 'Baseline restored and verified.'
 }
 
-Export-ModuleMember -Function Assert-VgtAdministrator,Get-VgtDataRoot,Write-VgtEvent,Set-VgtRegistryDword,Save-VgtBaseline,Restore-VgtBaseline
+Export-ModuleMember -Function Assert-VgtAdministrator,Get-VgtDataRoot,Write-VgtEvent,Set-VgtRegistryDword,Save-VgtBaseline,Restore-VgtBaseline,Get-VgtStateDirectory,Test-VgtBaselineState,Test-VgtBaselineIntegrity,Get-VgtBaselineIntegrityMaterial,Get-VgtBaselineIntegrityHash,Get-VgtBaselineKeyBytes,Get-VgtAuditPolicyContentHash,Get-VgtBaselineKeyDirectory,Test-VgtServiceAcl
 

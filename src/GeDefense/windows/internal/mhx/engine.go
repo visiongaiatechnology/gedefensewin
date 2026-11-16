@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -89,6 +88,10 @@ type Engine struct {
 	amsiOffset                 uintptr
 	sentinelLogMu              sync.Mutex
 	sentinelLogAt              map[string]time.Time
+	threatHits                 map[uint32]time.Time
+	styx                       *StyxBeaconEngine
+	styxCollector              *StyxCollector
+	styxIncidents              []StyxIncident
 }
 
 func NewEngine(root, protectionScript, firewallScript, allowScript, denyScript, appControlScript, operationRoot string, ledger *evidence.Ledger) (*Engine, error) {
@@ -115,6 +118,7 @@ func NewEngine(root, protectionScript, firewallScript, allowScript, denyScript, 
 	_ = engine.loadMode()
 	engine.loadKineticState()
 	engine.loadPolicySettings()
+	engine.startStyxRuntime()
 	return engine, nil
 }
 
@@ -151,6 +155,7 @@ func (e *Engine) Run(stop <-chan struct{}) {
 	launch(func() { (defenderWatcher{}).Run(ctx, defenderEvents, faults) })
 	launch(func() { (networkWatcher{}).Run(ctx, networkEvents, networkHealth, networkFaults) })
 	launch(func() { (wfpBlockWatcher{}).Run(ctx, wfpEvents, wfpHealth, wfpFaults) })
+	launch(func() { e.styxLoop(ctx) })
 	launch(func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
@@ -323,7 +328,7 @@ func (e *Engine) evaluate(event ProcessEvent) {
 		// 3. Real-time AMSI Memory Inspection
 		amsiPatched := false
 		if cfg.AmsiShieldEnforced && IsTargetLotL(event.Image) {
-			patched, err := isAmsiPatched(event.PID, e.amsiOffset)
+			patched, err := isAmsiPatched(event, e.amsiOffset)
 			if err != nil {
 				e.logSentinelThrottled("killerdom.amsi", fmt.Sprintf("AMSI scan failed for %s", event.Image), "scan-error: "+err.Error())
 			} else if patched {
@@ -345,9 +350,15 @@ func (e *Engine) evaluate(event ProcessEvent) {
 			}
 		}
 
-		// 5. Fair Behavioral Scoring for Whitelisted / Observed processes
+		// 5. Fair Behavioral Scoring for Whitelisted / Observed processes.
+		// lineageBreach is false here because an enforced lineage breach already
+		// returned above; threatHit is a real per-PID network correlation from
+		// the threat-intelligence engine. titanCompromised stays false until the
+		// V6 cross-engine correlation bridge feeds it (documented gap: MHX does
+		// not own Titan state).
 		if isAllowed {
-			scoreRes := CalculateFairScoreForEvent(event, isAllowed, appName, sigMatched, sigID, amsiPatched, false, false, false)
+			threatHit := e.pidHasRecentThreatHit(event.PID)
+			scoreRes := CalculateFairScoreForEvent(event, isAllowed, appName, sigMatched, sigID, amsiPatched, false, threatHit, false)
 			if scoreRes.StrikeEvent {
 				detection := fmt.Sprintf("FAIR SCORE ESCALATION [%d/100]: %s überschritt Sicherheitsgrenze", scoreRes.Score, appName)
 				e.strikeAndRecord(event, "sentinel.score_escalation", detection, "Sentinel Score Escalation", SeverityCritical)
@@ -402,52 +413,6 @@ func (e *Engine) terminateObserved(event ProcessEvent) error {
 		return e.terminate(event)
 	}
 	return terminateProcess(event)
-}
-
-func isGeDefenseSelfOrChild(event ProcessEvent) bool {
-	currentPID := uint32(os.Getpid())
-	if currentPID != 0 && (event.PID == currentPID || event.ParentPID == currentPID) {
-		return true
-	}
-	for _, ancestor := range event.Ancestry {
-		if currentPID != 0 && ancestor.PID == currentPID {
-			return true
-		}
-		if isGeDefenseBinary(ancestor.Image, ancestor.Path) {
-			return true
-		}
-	}
-	if isGeDefenseBinary(event.Image, event.ImagePath) {
-		return true
-	}
-	if isGeDefenseBinary(event.ParentImage, event.ParentPath) {
-		return true
-	}
-	// Last resort for the self-healing audit when Windows telemetry did not
-	// capture the parent PID: only the shipped hardening script invoked via
-	// -File is exempt. Inline/encoded/command execution and arbitrary cmdlines
-	// containing the marker string remain subject to all engines.
-	cmdLower := strings.ToLower(event.CommandLine)
-	if strings.Contains(cmdLower, `-file "c:\program files\vgt\gedefense\`) &&
-		strings.Contains(cmdLower, "invoke-vgthardening.ps1") &&
-		!strings.Contains(cmdLower, "-command") &&
-		!strings.Contains(cmdLower, "-encodedcommand") &&
-		!strings.Contains(cmdLower, "-c ") {
-		return true
-	}
-	return false
-}
-
-// isGeDefenseBinary authorizes only processes that demonstrably live inside the
-// installed GeDefense tree. A bare basename match is NOT sufficient: otherwise
-// any attacker could rename a payload to gedefense-windows.exe and inherit the
-// sovereign exemption from Paranoia, lineage, AMSI, Killerdom and fair scoring.
-func isGeDefenseBinary(image, path string) bool {
-	p := strings.ToLower(filepath.Clean(strings.TrimSpace(path)))
-	if p == "" || p == "." {
-		return false
-	}
-	return strings.Contains(p, `\vgt\gedefense\`) || strings.Contains(p, `\program files\vgt\gedefense\`)
 }
 
 // responsePolicyAllows applies the operator auto-response policy on top of the
@@ -536,10 +501,13 @@ func (e *Engine) Status() Status {
 		threatIntelligence = e.feeds.Status()
 	}
 	defenderTelemetry := e.cachedDefenderTelemetry()
+	styxStatus := e.StyxStatus()
+	styxCollectorStatus := e.StyxCollectorStatus()
 	e.mu.RLock()
 	notificationCount := len(e.notifications)
+	styxIncidentCount := len(e.styxIncidents)
 	e.mu.RUnlock()
-	return Status{KineticSources: e.kineticMonitor.SourceSnapshot(250), Traffic: e.trafficMonitor.Snapshot(), KineticArmed: kineticArmed, KineticIncidents: kineticIncidents, KineticThreatCorrelations: e.kineticThreatCorrelations.Load(), KineticBlockedCorrelations: e.kineticBlockedCorrelations.Load(), Kinetic: kineticSnap, KineticReadiness: readiness, UncorrelatedThreatHits: e.networkUncorrelated.Load(), Engine: "VGT MHX 7.1", Realtime: realtime, Telemetry: telemetry, TelemetryHeartbeatUTC: lastTelemetryUTC, Enforcement: enforcement, DefenderBridge: "AMSI + ASR + OPERATIONAL EVENT STREAM", AppControl: appControl, KernelEnforcement: e.kernelEnforcement.Load(), ProtectionMode: mode, ProtectionHealth: protectionHealth, ProtectionVerifiedUTC: protectionVerifiedUTC, EventsEvaluated: e.evaluated.Load(), EventsBlocked: e.blocked.Load(), KnownBenign: e.knownBenign.Load(), ThreatIntelligence: threatIntelligence, ThreatEnforcement: threatEnforcement, NetworkTelemetry: map[bool]string{true: "NATIVE_TCP_OWNER_PID", false: "DEGRADED"}[networkRealtime], NetworkConnections: e.networkObserved.Load(), WFPBlockTelemetry: map[bool]string{true: "POLLING_5157_AUDIT_UNVERIFIED", false: "DEGRADED"}[wfpRealtime], WFPBlockedEvents: e.wfpBlockedObserved.Load(), ThreatNetworkHits: e.networkThreatHits.Load(), AttackStories: uint64(attackStoryCount), KineticSettings: kineticSettings, PolicySettings: policySettings, ThreatIntelPolling: threatIntelPolling, DefenderTelemetry: defenderTelemetry, NotificationCount: notificationCount}
+	return Status{KineticSources: e.kineticMonitor.SourceSnapshot(250), Traffic: e.trafficMonitor.Snapshot(), KineticArmed: kineticArmed, KineticIncidents: kineticIncidents, KineticThreatCorrelations: e.kineticThreatCorrelations.Load(), KineticBlockedCorrelations: e.kineticBlockedCorrelations.Load(), Kinetic: kineticSnap, KineticReadiness: readiness, UncorrelatedThreatHits: e.networkUncorrelated.Load(), Engine: "VGT MHX 7.1", Realtime: realtime, Telemetry: telemetry, TelemetryHeartbeatUTC: lastTelemetryUTC, Enforcement: enforcement, DefenderBridge: "AMSI + ASR + OPERATIONAL EVENT STREAM", AppControl: appControl, KernelEnforcement: e.kernelEnforcement.Load(), ProtectionMode: mode, ProtectionHealth: protectionHealth, ProtectionVerifiedUTC: protectionVerifiedUTC, EventsEvaluated: e.evaluated.Load(), EventsBlocked: e.blocked.Load(), KnownBenign: e.knownBenign.Load(), ThreatIntelligence: threatIntelligence, ThreatEnforcement: threatEnforcement, NetworkTelemetry: map[bool]string{true: "NATIVE_TCP_OWNER_PID", false: "DEGRADED"}[networkRealtime], NetworkConnections: e.networkObserved.Load(), WFPBlockTelemetry: map[bool]string{true: "POLLING_5157_AUDIT_UNVERIFIED", false: "DEGRADED"}[wfpRealtime], WFPBlockedEvents: e.wfpBlockedObserved.Load(), ThreatNetworkHits: e.networkThreatHits.Load(), AttackStories: uint64(attackStoryCount), KineticSettings: kineticSettings, PolicySettings: policySettings, ThreatIntelPolling: threatIntelPolling, DefenderTelemetry: defenderTelemetry, NotificationCount: notificationCount, Styx: &styxStatus, StyxCollector: &styxCollectorStatus, StyxIncidents: styxIncidentCount}
 }
 
 func (e *Engine) SentinelStore() *SentinelStore {
@@ -585,13 +553,18 @@ func (e *Engine) strikeAndRecord(event ProcessEvent, ledgerKind, detection, titl
 	return true
 }
 
-func (e *Engine) TerminatePID(pid uint32, reason string) error {
-	reason = trimSentinelText(reason)
-	if err := terminatePIDVerified(pid, reason); err != nil {
-		_ = e.ledger.Append("sentinel.terminate_pid", reason, fmt.Sprintf("pid-%d-failed: %v", pid, err))
+// TerminateTarget executes a kinetic response for another engine. The request
+// must carry creation time and image path evidence; the responder re-opens the
+// live process and rejects the request when the identity changed (PID reuse),
+// when the target is a protected operating-system process, or when the target
+// is part of the product's own install tree.
+func (e *Engine) TerminateTarget(target TerminationTarget) error {
+	reason := trimSentinelText(target.Reason)
+	if err := e.terminateTargetVerified(target); err != nil {
+		_ = e.ledger.Append("sentinel.terminate_target", reason, fmt.Sprintf("pid-%d-failed: %v", target.PID, err))
 		return err
 	}
 	e.blocked.Add(1)
-	_ = e.ledger.Append("sentinel.terminate_pid", reason, fmt.Sprintf("pid-%d", pid))
+	_ = e.ledger.Append("sentinel.terminate_target", reason, fmt.Sprintf("pid-%d", target.PID))
 	return nil
 }

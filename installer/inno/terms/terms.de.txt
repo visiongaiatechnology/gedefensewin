@@ -1,0 +1,45 @@
+GEDEFENSE WINDOWS 5.3.0 — BETA-PROGRAMM-VEREINBARUNG UND NUTZUNGSBEDINGUNGEN
+VisionGaiaTechnology ("VGT", "wir", "uns")
+
+BITTE LESEN SIE DIESE BEDINGUNGEN VOLLSTÄNDIG. MIT DER AUSWAHL "ICH AKZEPTIERE" UND DER INSTALLATION STIMMEN SIE IHNEN ZU.
+
+1. GELTUNGSBEREICH UND BETA-STATUS
+GeDefense Windows 5.3.0 ist eine öffentliche Beta-Version. Sie ist nicht für den uneingeschränkten Produktivbetrieb, nicht für sicherheitskritische Infrastruktur und nicht als einzige Sicherheitskontrolle bestimmt. Die Beta kann Fehler, Sicherheitslücken, Datenverluste, Fehlklassifikationen und Systembeeinträchtigungen enthalten. Funktionen, Signaturen, Richtlinien und Dokumentation können sich ohne Vorankündigung ändern.
+
+2. LIZENZ
+Der Quellcode steht unter der GNU Affero General Public License, Version 3, ausschließlich (AGPL-3.0-only), soweit die beigefügten Lizenzdateien nichts anderes bestimmen. Der Installer und die enthaltenen Binärdateien werden für Test-, Evaluierungs- und Entwicklungszwecke bereitgestellt. Die AGPL-3.0-only und die beigefügten Drittanbieterhinweise bleiben unberührt. Marken, Logos und Produktnamen von VGT dürfen ohne schriftliche Zustimmung nicht für abgeleitete Produkte verwendet werden.
+
+3. BETA-PROGRAMM
+Die Teilnahme ist freiwillig und unentgeltlich. Es besteht kein Anspruch auf Support, Fehlerbehebung, Updates, bestimmte Funktionen oder eine bestimmte Verfügbarkeit. VGT kann das Beta-Programm, einzelne Builds oder Funktionen jederzeit beenden oder ändern. Feedback, Fehlerberichte und Verbesserungsvorschläge dürfen von VGT zur Verbesserung der Produkte verwendet werden; daraus entstehen keine Vergütungsansprüche.
+
+4. SICHERHEITSSOFTWARE UND SYSTEMRISIKEN
+GeDefense greift bewusst in Windows-Sicherheitsmechanismen ein. Je nach Richtlinie kann es Dienste, Treiber, Firewall-/WFP-Regeln, Defender-Einstellungen, Protokollierung, Prozesse, Dateien, Zertifikate, Autostart-Einträge und Netzwerkverbindungen verändern, blockieren oder entfernen. Dies kann legitime Anwendungen, Skripte, Installationen oder Fernzugriffe beeinträchtigen. Sie sind dafür verantwortlich, vor der Installation ein vollständiges Backup zu erstellen, die Beta zunächst auf einem isolierten Testsystem zu prüfen und die Wirkung der Richtlinien zu verstehen. Betreiben Sie die Beta nicht auf Geräten, deren Ausfall Menschen, Umwelt, Vermögen oder kritische Prozesse gefährden kann.
+
+5. ZERTIFIKATSVERTRAUEN
+Der Installer importiert das selbstsignierte VGT-Release-Zertifikat (Subject "CN=VisionGaia Technology VGT Release") in die Zertifikatspeicher "Lokaler Computer\Vertrauenswürdige Stammzertifizierungsstellen" und "Lokaler Computer\Vertrauenswürdige Herausgeber", damit die signierten Installations- und Wartungsskripte ausgeführt werden können. Mit der Zustimmung auf der folgenden Seite stimmen Sie diesem Import ausdrücklich zu. Sie erkennen an, dass Windows danach Code als vertrauenswürdig behandeln kann, der mit dem zugehörigen privaten VGT-Schlüssel signiert wurde. Das Zertifikat kann über die Windows-Zertifikatsverwaltung oder durch die Deinstallation entfernt werden, soweit es nicht anderweitig benötigt wird. Vertrauen Sie diesem Zertifikat nur, wenn Sie den Build und seine Herkunft geprüft haben. Die SHA-256-Prüfsumme des Installers und der Signaturstatus sollten mit der offiziellen Release-Seite übereinstimmen.
+
+6. DATEN UND TELEMETRIE
+Die Control Plane ist lokal ausgerichtet. Es gibt keinen Cloud-Zwang und keine automatische Übermittlung von Telemetrie an VGT. Lokale Protokolle, Evidenzdateien, Installationsprotokolle und Diagnosedaten verbleiben auf dem Gerät, sofern Sie sie nicht selbst weitergeben. Sie sind für die Einhaltung der auf Ihrem System geltenden Datenschutz-, Aufbewahrungs- und Compliance-Anforderungen verantwortlich.
+
+7. GEWÄHRLEISTUNG
+Die Beta wird "WIE BESEHEN" und "WIE VERFÜGBAR" bereitgestellt. Soweit gesetzlich zulässig, schließt VGT ausdrückliche und stillschweigende Gewährleistungen aus, einschließlich Marktgängigkeit, Eignung für einen bestimmten Zweck, Nichtverletzung von Rechten Dritter und Fehlerfreiheit. Es wird keine Garantie für Erkennungsraten, vollständige Abdeckung, Unterbrechungsfreiheit oder Wiederherstellbarkeit übernommen. Zwingende gesetzliche Gewährleistungsrechte, insbesondere bei Verbrauchern, bleiben unberührt.
+
+8. HAFTUNGSBESCHRÄNKUNG
+Soweit gesetzlich zulässig, haftet VGT nicht für mittelbare Schäden, Folgeschäden, entgangenen Gewinn, Datenverlust, Betriebsunterbrechung, Rufschäden oder Kosten der Ersatzbeschaffung, die aus der Nutzung oder Nichtnutzbarkeit der Beta entstehen. Die Haftung für Vorsatz und grobe Fahrlässigkeit, für Schäden aus der Verletzung von Leben, Körper oder Gesundheit sowie nach zwingenden gesetzlichen Vorschriften, insbesondere dem Produkthaftungsgesetz, bleibt unberührt. Bei einfacher Fahrlässigkeit haftet VGT nur für die Verletzung wesentlicher Vertragspflichten und begrenzt auf den vorhersehbaren, vertragstypischen Schaden. Eine weitergehende Haftungsbegrenzung ist ausgeschlossen, soweit sie gesetzlich unzulässig ist.
+
+9. FREISTELLUNG
+Sie stellen VGT von Ansprüchen Dritter frei, die aus Ihrer rechtswidrigen Nutzung der Beta, aus von Ihnen vorgenommenen Konfigurationen oder aus der Verletzung dieser Bedingungen entstehen, soweit Sie die Verletzung zu vertreten haben. Diese Freistellung gilt nicht für Ansprüche, die auf einem Verschulden von VGT beruhen.
+
+10. KRITISCHE INFRASTRUKTUR UND EXPORT
+Die Beta ist nicht bestimmt für Nuklearanlagen, Luftfahrt, medizinische Lebenserhaltungssysteme, Waffensysteme, chemische Anlagen oder andere Umgebungen, in denen ein Fehler zu schweren Personen- oder Umweltschäden führen kann. Sie sind für die Einhaltung anwendbarer Exportkontroll- und Sanktionsvorschriften verantwortlich.
+
+11. LAUFZEIT UND BEENDIGUNG
+Diese Bedingungen gelten ab der Installation, bis Sie die Beta deinstallieren oder VGT das Beta-Programm beendet. VGT kann die Bereitstellung einstellen. Die Abschnitte zu Lizenz, Gewährleistung, Haftung, Freistellung und anwendbarem Recht gelten über die Beendigung hinaus.
+
+12. ANWENDBARES RECHT
+Es gilt deutsches Recht unter Ausschluss des UN-Kaufrechts, soweit zwingende Verbraucherschutzvorschriften des Aufenthaltsorts nicht entgegenstehen. Gerichtsstand sind die gesetzlichen Gerichtsstände; zwingende gesetzliche Zuständigkeiten bleiben unberührt.
+
+13. KONTAKT
+VisionGaiaTechnology, Support und Sicherheitsmeldungen über die im Repository und in SECURITY.md genannten Kanäle.
+
+MIT DER INSTALLATION BESTÄTIGEN SIE, DASS SIE DIESE BEDINGUNGEN GELESEN, VERSTANDEN UND AKZEPTIERT HABEN UND DASS SIE DIE BETA AUF EINEM GEEIGNETEN TESTSYSTEM MIT BACKUP EINSETZEN.

@@ -60,6 +60,7 @@ var (
 	procOpenProcessToken         = advapi32.NewProc("OpenProcessToken")
 	procDuplicateTokenEx         = advapi32.NewProc("DuplicateTokenEx")
 	procCreateProcessWithTokenW  = advapi32.NewProc("CreateProcessWithTokenW")
+	procGetTokenInformation      = advapi32.NewProc("GetTokenInformation")
 )
 
 // STARTUPINFOW from processthreadsapi.h. The x64 layout is reproduced exactly;
@@ -95,6 +96,31 @@ type processInformation struct {
 // IsElevated reports whether the current process token is elevated.
 func IsElevated() bool {
 	return winapi.IsProcessElevated()
+}
+
+// tokenIsElevated queries TOKEN_ELEVATION for an already opened token. It never
+// guesses: an unreadable token is an error so the caller can fail closed instead
+// of starting the UI with unknown elevation.
+func tokenIsElevated(token winapi.Handle) (bool, error) {
+	if token == 0 {
+		return false, errors.New("userlaunch: token handle unavailable")
+	}
+	var elevation uint32
+	var returned uint32
+	result, _, callErr := procGetTokenInformation.Call(
+		uintptr(token),
+		uintptr(winapi.TokenElevation),
+		uintptr(unsafe.Pointer(&elevation)),
+		unsafe.Sizeof(elevation),
+		uintptr(unsafe.Pointer(&returned)),
+	)
+	if result == 0 {
+		return false, fmt.Errorf("userlaunch: GetTokenInformation(TokenElevation): %w", winapiError("GetTokenInformation", callErr))
+	}
+	if returned < uint32(unsafe.Sizeof(elevation)) {
+		return false, errors.New("userlaunch: GetTokenInformation(TokenElevation) returned a short buffer")
+	}
+	return elevation != 0, nil
 }
 
 // CommandLine validates the executable and renders it plus args as one Windows
@@ -165,6 +191,10 @@ func validateArgument(argument string) error {
 // process or an escalated UI instance). The token path is mandatory unless no
 // arguments are relayed, in which case the documented explorer fallback is used
 // because the shell itself starts the target unprivileged.
+//
+// Fail-closed contract: every path refuses to start the target when the side
+// that would start it is not provably unprivileged. There is no elevated
+// fallback; callers turn the returned error into a visible failure state.
 func LaunchAsShellUser(executable string, args []string) error {
 	if !IsElevated() {
 		return errors.New("userlaunch: the current process is not elevated")
@@ -179,6 +209,12 @@ func LaunchAsShellUser(executable string, args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("userlaunch: shell-user launch failed: %w", tokenErr)
 	}
+	// Fail-closed: the explorer relay is only legal when the desktop shell token
+	// is provably unprivileged. An elevated (or unverifiable) shell would hand
+	// the administrator token to the relayed target and then to Chromium.
+	if fallbackErr := requireUnelevatedShellToken(); fallbackErr != nil {
+		return errors.Join(fmt.Errorf("userlaunch: shell-user launch failed: %w", tokenErr), fallbackErr)
+	}
 	if fallbackErr := launchViaExplorer(executable); fallbackErr != nil {
 		return errors.Join(fmt.Errorf("userlaunch: shell-user launch failed: %w", tokenErr), fallbackErr)
 	}
@@ -188,14 +224,12 @@ func LaunchAsShellUser(executable string, args []string) error {
 // RelaunchUnelevatedIfNeeded hands an elevated UI process over to the desktop
 // shell user exactly once. The marker in the child's environment prevents a
 // relaunch loop when an elevated process inherits it.
+//
+// Every failure is reported as a *DeElevationError: an elevated UI process must
+// never continue as the UI or start a browser, so callers treat the error as
+// fatal for the elevated process (fail-closed).
 func RelaunchUnelevatedIfNeeded(executable string, args []string) (relaunched bool, err error) {
-	if !ShouldRelaunchUnelevated(IsElevated(), os.Getenv(MarkerEnv)) {
-		return false, nil
-	}
-	if err := LaunchAsShellUser(executable, args); err != nil {
-		return false, err
-	}
-	return true, nil
+	return relaunchUnelevated(IsElevated(), os.Getenv(MarkerEnv), executable, args, LaunchAsShellUser)
 }
 
 // launchWithShellToken duplicates the shell process token into a primary token
@@ -216,6 +250,17 @@ func launchWithShellToken(executable string, args []string) error {
 	defer func() {
 		winapi.ReportError("primary token handle close", winapi.CloseHandle(primaryToken))
 	}()
+
+	// Fail-closed: the relay must hand over to an unprivileged token. A shell
+	// that itself runs elevated (or a token whose elevation cannot be read)
+	// would start the target, and later Chromium, with administrator rights.
+	elevated, err := tokenIsElevated(primaryToken)
+	if err != nil {
+		return fmt.Errorf("userlaunch: refusing unverifiable shell token: %w", err)
+	}
+	if elevated {
+		return errors.New("userlaunch: desktop shell token is elevated; refusing to start the UI with administrator rights")
+	}
 
 	environment, err := unprivilegedEnvironment()
 	if err != nil {
@@ -342,6 +387,34 @@ func unprivilegedEnvironment() ([]uint16, error) {
 	// terminates the block itself (double NUL at the end).
 	units = append(units, 0)
 	return units, nil
+}
+
+// requireUnelevatedShellToken proves that the desktop shell token is not an
+// elevated administrator token. It is the precondition for the explorer relay:
+// the shell (not this process) starts the target, so only the shell token
+// decides the elevation of the relayed UI process. Unverifiable is refused.
+func requireUnelevatedShellToken() error {
+	shellProcess, shellToken, primaryToken, err := shellPrimaryToken()
+	if err != nil {
+		return fmt.Errorf("userlaunch: explorer fallback requires a verifiable unprivileged shell token: %w", err)
+	}
+	defer func() {
+		winapi.ReportError("shell process handle close", winapi.CloseHandle(shellProcess))
+	}()
+	defer func() {
+		winapi.ReportError("shell token handle close", winapi.CloseHandle(shellToken))
+	}()
+	defer func() {
+		winapi.ReportError("primary token handle close", winapi.CloseHandle(primaryToken))
+	}()
+	elevated, err := tokenIsElevated(primaryToken)
+	if err != nil {
+		return fmt.Errorf("userlaunch: explorer fallback requires a verifiable unprivileged shell token: %w", err)
+	}
+	if elevated {
+		return errors.New("userlaunch: desktop shell token is elevated; refusing explorer fallback")
+	}
+	return nil
 }
 
 // launchViaExplorer is the last-resort relay: the desktop shell (explorer.exe)

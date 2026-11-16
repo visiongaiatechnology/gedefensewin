@@ -10,6 +10,29 @@ Set-StrictMode -Version Latest
 $script:ForbiddenSourceDirectories = @('.git','release','payload','work','output','dist','certificates')
 $script:ForbiddenSourceExtensions = @('.exe','.dll','.sys','.msi','.msix','.zip','.7z','.iso','.wim','.esd','.syso','.pdb','.log','.pfx','.p12','.pvk','.snk','.key','.pem')
 
+# FIND-WIN-022: AI-agent handoff notes are canonical working-tree artifacts (the
+# agent workflow writes Next.md and friends), so their mere presence is NOT a
+# repository-hygiene violation. They are working state, never distribution
+# content: this central exclusion is applied while the source ship set is
+# enumerated, which means SOURCE-MANIFEST.sha256, SOURCE-MANIFEST-bound SBOMs,
+# the deterministic source ZIP and the provenance source-tree digest can never
+# contain them. Keep this list in sync with .gitignore ("Handoff / AI-agent
+# artifacts") and with build/Test-GeDefenseRelease.ps1, which asserts that the
+# generated source archive is note-free.
+$script:ExcludedDistributionNoteNames = @(
+    'Next.md',
+    'CURRENT_TASK.md',
+    'HANDOFF.md',
+    'SESSION_NOTES.md',
+    'DEVELOPER_NOTES.md',
+    'AGENT_NOTES.md',
+    'WORKLOG.md',
+    'GITHUB-UPLOAD.md',
+    'RELEASE-NOTES.md',
+    'MERGE_REPORT.json'
+)
+$script:ExcludedDistributionNotePatterns = @('START_HERE_*.md')
+
 function Get-VgtProjectRoot {
     param([string]$ToolsRoot = '')
     if ([string]::IsNullOrWhiteSpace($ToolsRoot)) { $ToolsRoot = $PSScriptRoot }
@@ -39,10 +62,33 @@ function Get-VgtRelativePath {
     return $full.Substring($root.Length).Replace('\','/')
 }
 
+function Get-VgtPublishedSourceExclusionReason {
+    # Returns a human-readable reason when a working-tree path is agent/handoff
+    # state that must never enter any distribution artifact (source manifest,
+    # source ZIP, SBOM, provenance), or '' when the path is ordinary content.
+    # Unknown files deliberately fall through: this function only removes known
+    # agent notes, it never removes arbitrary content.
+    param([Parameter(Mandatory)][string]$RelativePath)
+    $relative = $RelativePath.Replace('\','/')
+    if ([string]::IsNullOrWhiteSpace($relative)) { return '' }
+    $leaf = [IO.Path]::GetFileName($relative)
+    if ([string]::IsNullOrWhiteSpace($leaf)) { return '' }
+    foreach ($excludedName in $script:ExcludedDistributionNoteNames) {
+        if ([string]::Equals($leaf,$excludedName,[StringComparison]::OrdinalIgnoreCase)) { return ('AI-agent handoff note: {0}' -f $leaf) }
+    }
+    foreach ($excludedPattern in $script:ExcludedDistributionNotePatterns) {
+        if ($leaf -like $excludedPattern) { return ('AI-agent handoff note pattern {0}: {1}' -f $excludedPattern,$leaf) }
+    }
+    return ''
+}
+
 function Test-VgtSourceCandidate {
     param([Parameter(Mandatory)][string]$RelativePath)
     $relative = $RelativePath.Replace('\','/')
     if ([string]::IsNullOrWhiteSpace($relative)) { return $false }
+    # FIND-WIN-022: agent handoff notes may live in the working tree but are
+    # never part of the distribution ship set.
+    if (Get-VgtPublishedSourceExclusionReason -RelativePath $relative) { return $false }
     $parts = @($relative -split '/')
     if ($parts[0] -in $script:ForbiddenSourceDirectories) { return $false }
     foreach ($forbiddenPart in @('__pycache__','.pytest_cache','node_modules')) {
@@ -68,6 +114,15 @@ function Get-VgtSourceFileList {
         $relative = Get-VgtRelativePath -FullName $file.FullName -ProjectRoot $root
         if (Test-VgtSourceCandidate -RelativePath $relative) {
             $entries[$relative] = $file
+        }
+    }
+    # FIND-WIN-022 fail-closed assertion: the central exclusion above must have
+    # removed every agent/handoff note. If a future change to the candidate
+    # filter lets one through, the ship set aborts instead of leaking notes.
+    foreach ($relative in @($entries.Keys)) {
+        $exclusionReason = Get-VgtPublishedSourceExclusionReason -RelativePath $relative
+        if ($exclusionReason) {
+            throw [Security.SecurityException]::new(('Excluded agent/handoff note entered the source distribution set (fail-closed): {0} ({1})' -f $relative,$exclusionReason))
         }
     }
     $keys = [string[]]@($entries.Keys)
@@ -229,6 +284,13 @@ function Write-VgtSourceManifest {
     $root = [IO.Path]::GetFullPath($ProjectRoot)
     $files = @(Get-VgtSourceSnapshot -ProjectRoot $root)
     if ($files.Count -lt 50 -or $files.Count -gt 2000) { throw [IO.InvalidDataException]::new(('Source release file count violated the expected boundary: {0}' -f $files.Count)) }
+    # FIND-WIN-022 fail-closed assertion: the authoritative manifest must never
+    # list agent/handoff notes, even if a caller supplies a hand-crafted file
+    # list in the future.
+    foreach ($file in $files) {
+        $exclusionReason = Get-VgtPublishedSourceExclusionReason -RelativePath $file.Relative
+        if ($exclusionReason) { throw [Security.SecurityException]::new(('Excluded agent/handoff note entered SOURCE-MANIFEST.sha256 (fail-closed): {0} ({1})' -f $file.Relative,$exclusionReason)) }
+    }
     $lines = [Collections.Generic.List[string]]::new()
     foreach ($file in $files) {
         $lines.Add(('{0}  {1}' -f $file.Sha256,$file.Relative))
@@ -268,12 +330,14 @@ function Get-VgtReleaseAssetVersion {
     # Returns the version encoded in a recognised GeDefense release asset name,
     # or '' when the file is not a version-bearing release asset. Unknown files
     # deliberately fall through so the channel gate can fail closed on them.
+    # FIND-WIN-022: the Inno beta-onboarding installer is a first-class release
+    # asset: GeDefense-Setup-Inno-x64-v<ver>.exe, .exe.sha256 and .exe.json.
     param([Parameter(Mandatory)][string]$FileName)
     $name = [IO.Path]::GetFileName($FileName)
-    $pattern = '^(?:GeDefense-Setup-x64-v(?<v1>' + $script:VgtReleaseVersionPattern + ')\.(?:exe(?:\.sha256)?|json)|GeDefense-SBOM-v(?<v2>' + $script:VgtReleaseVersionPattern + ')\.cdx\.json|GeDefense-Provenance-v(?<v3>' + $script:VgtReleaseVersionPattern + ')\.json|VGT_GeDefense_Windows_(?<v4>' + $script:VgtReleaseVersionPattern + ')_Source\.zip(?:\.sha256)?)$'
+    $pattern = '^(?:GeDefense-Setup-x64-v(?<v1>' + $script:VgtReleaseVersionPattern + ')\.(?:exe(?:\.sha256)?|json)|GeDefense-Setup-Inno-x64-v(?<v5>' + $script:VgtReleaseVersionPattern + ')\.exe(?:\.sha256|\.json)?|GeDefense-SBOM-v(?<v2>' + $script:VgtReleaseVersionPattern + ')\.cdx\.json|GeDefense-Provenance-v(?<v3>' + $script:VgtReleaseVersionPattern + ')\.json|VGT_GeDefense_Windows_(?<v4>' + $script:VgtReleaseVersionPattern + ')_Source\.zip(?:\.sha256)?)$'
     $match = [Regex]::Match($name, $pattern)
     if (-not $match.Success) { return '' }
-    foreach ($groupName in @('v1','v2','v3','v4')) {
+    foreach ($groupName in @('v1','v5','v2','v3','v4')) {
         $group = $match.Groups[$groupName]
         if ($group.Success -and -not [string]::IsNullOrWhiteSpace($group.Value)) { return $group.Value }
     }
@@ -379,6 +443,9 @@ function Assert-VgtReleaseChannelHygiene {
     # assets fail closed, every binary/archive needs a matching .sha256 sidecar,
     # an installer requires its manifest/SBOM/provenance siblings and - when the
     # channel is publishable - SHA256SUMS.txt must cover every asset exactly.
+    # FIND-WIN-022: the Inno beta-onboarding installer is registered as a normal
+    # asset and is held to the same sidecar/hash rules as the standalone build
+    # (an optional Inno .exe.json is additionally bound to version, bytes, hash).
     # A missing release directory is reported as State=ABSENT (nothing to
     # verify); a partial build is reported as State=PARTIAL and is not a fail
     # until a complete set (installer + source archive) exists without sums.
@@ -401,7 +468,9 @@ function Assert-VgtReleaseChannelHygiene {
         ForeignAssets = @()
         UnknownAssets = @()
         HasInstaller = $false
+        HasInnoInstaller = $false
         HasSourceArchive = $false
+        InnoJsonState = 'absent'
         SumsState = 'absent'
         SumsEntries = 0
         SidecarsVerified = 0
@@ -444,13 +513,40 @@ function Assert-VgtReleaseChannelHygiene {
     }
 
     $installerName = 'GeDefense-Setup-x64-v{0}.exe' -f $Version
+    $innoInstallerName = 'GeDefense-Setup-Inno-x64-v{0}.exe' -f $Version
+    $innoSidecarName = $innoInstallerName + '.sha256'
+    $innoJsonName = $innoInstallerName + '.json'
     $sourceArchiveName = 'VGT_GeDefense_Windows_{0}_Source.zip' -f $Version
     $result.HasInstaller = $current.Contains($installerName)
+    $result.HasInnoInstaller = $current.Contains($innoInstallerName)
     $result.HasSourceArchive = $current.Contains($sourceArchiveName)
     if ($result.HasInstaller) {
         foreach ($requiredAsset in @(('GeDefense-Setup-x64-v{0}.json' -f $Version),('GeDefense-SBOM-v{0}.cdx.json' -f $Version),('GeDefense-Provenance-v{0}.json' -f $Version))) {
             if (-not $current.Contains($requiredAsset)) { throw [Security.SecurityException]::new(('Release channel has installer {0} but is missing the required supply-chain asset {1}.' -f $installerName,$requiredAsset)) }
         }
+    }
+    # FIND-WIN-022: the Inno installer is optional (only present once the beta
+    # onboarding path was built) but never half-registered. The generic sidecar
+    # loop above already proved the .exe has a measured, matching .sha256.
+    if ($result.HasInnoInstaller) {
+        if ($current.Contains($innoJsonName)) {
+            $innoInstallerPath = Join-Path $releaseFull $innoInstallerName
+            $innoJsonPath = Join-Path $releaseFull $innoJsonName
+            try {
+                $innoJson = Get-Content -LiteralPath $innoJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            } catch {
+                throw [IO.InvalidDataException]::new(('Inno installer sidecar is not valid JSON: {0}' -f $innoJsonName))
+            }
+            if ($null -eq $innoJson) { throw [IO.InvalidDataException]::new(('Inno installer sidecar is empty: {0}' -f $innoJsonName)) }
+            if ([string]$innoJson.version -ne $Version) { throw [Security.SecurityException]::new(('Inno installer sidecar version mismatch: {0} vs {1}' -f $innoJson.version,$Version)) }
+            $innoMeasuredHash = Get-VgtSha256 -Path $innoInstallerPath
+            if (([string]$innoJson.sha256).ToLowerInvariant() -ne $innoMeasuredHash) { throw [Security.SecurityException]::new(('Inno installer sidecar SHA-256 does not match the measured installer: {0}' -f $innoJsonName)) }
+            $innoInstallerBytes = [long](Get-Item -LiteralPath $innoInstallerPath).Length
+            if ([long]$innoJson.bytes -ne $innoInstallerBytes) { throw [Security.SecurityException]::new(('Inno installer sidecar byte count does not match the measured installer: {0}' -f $innoJsonName)) }
+            $result.InnoJsonState = 'verified'
+        }
+    } elseif ($current.Contains($innoSidecarName) -or $current.Contains($innoJsonName)) {
+        throw [Security.SecurityException]::new('Release channel contains Inno sidecar assets without the Inno installer (fail-closed).')
     }
 
     $sumsPath = Join-Path $releaseFull 'SHA256SUMS.txt'
@@ -466,6 +562,68 @@ function Assert-VgtReleaseChannelHygiene {
         $result.State = 'PARTIAL'
     }
     return [pscustomobject]$result
+}
+
+function Get-VgtZipEntryNames {
+    # Bounded, read-only enumeration of ZIP entry names. Both the entry count and
+    # the individual name length are capped so a hostile or corrupt archive can
+    # never make a release gate allocate or loop without bound.
+    param(
+        [Parameter(Mandatory)][string]$ArchivePath,
+        [int]$MaximumEntries = 4096,
+        [int]$MaximumNameLength = 1024
+    )
+    if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) { throw [IO.FileNotFoundException]::new(('Archive is missing: {0}' -f $ArchivePath)) }
+    if ($MaximumEntries -lt 1) { throw [IO.InvalidDataException]::new('ZIP entry bound must be positive.') }
+    if ($MaximumNameLength -lt 1) { throw [IO.InvalidDataException]::new('ZIP entry name bound must be positive.') }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    $archive = [IO.Compression.ZipFile]::OpenRead([IO.Path]::GetFullPath($ArchivePath))
+    try {
+        if ($archive.Entries.Count -gt $MaximumEntries) { throw [IO.InvalidDataException]::new(('Archive exceeds the bounded entry count: {0} entries (max {1}).' -f $archive.Entries.Count,$MaximumEntries)) }
+        $names = [Collections.Generic.List[string]]::new()
+        foreach ($entry in $archive.Entries) {
+            $name = [string]$entry.FullName
+            if ($name.Length -gt $MaximumNameLength) { throw [IO.InvalidDataException]::new(('Archive entry name exceeds the bounded length: {0} characters (max {1}).' -f $name.Length,$MaximumNameLength)) }
+            $names.Add($name)
+        }
+        return @($names.ToArray())
+    } finally {
+        $archive.Dispose()
+    }
+}
+
+function Assert-VgtSourceArchiveExcludesAgentNotes {
+    # FIND-WIN-022: agent/handoff notes (Next.md, START_HERE_*.md, ...) are
+    # allowed in the working tree but must never ship. This gate inspects the
+    # generated deterministic source archive (bounded read) and fails closed when
+    # any excluded note is present, so Test-GeDefenseRelease.ps1 checks the
+    # distribution instead of forbidding the working file.
+    param(
+        [Parameter(Mandatory)][string]$ArchivePath,
+        [string]$Version = ''
+    )
+    $archiveFull = [IO.Path]::GetFullPath($ArchivePath)
+    if (-not (Test-Path -LiteralPath $archiveFull -PathType Leaf)) { throw [IO.FileNotFoundException]::new(('Source archive is missing: {0}' -f $archiveFull)) }
+    $prefix = ''
+    if (-not [string]::IsNullOrWhiteSpace($Version)) { $prefix = ('GeDefense-Windows-{0}/' -f $Version) }
+    $names = @(Get-VgtZipEntryNames -ArchivePath $archiveFull -MaximumEntries 4096 -MaximumNameLength 1024)
+    $violations = [Collections.Generic.List[string]]::new()
+    foreach ($name in $names) {
+        $relative = $name.Replace('\','/')
+        if ($prefix -and $relative.StartsWith($prefix,[StringComparison]::Ordinal)) { $relative = $relative.Substring($prefix.Length) }
+        if ([string]::IsNullOrWhiteSpace($relative)) { continue }
+        $exclusionReason = Get-VgtPublishedSourceExclusionReason -RelativePath $relative
+        if ($exclusionReason) { $violations.Add(('{0} ({1})' -f $name,$exclusionReason)) }
+    }
+    if ($violations.Count -gt 0) {
+        throw [Security.SecurityException]::new(('Source archive contains AI-agent handoff notes (fail-closed): {0}' -f ($violations -join '; ')))
+    }
+    return [pscustomobject][ordered]@{
+        Status = 'PASS'
+        Archive = $archiveFull
+        Entries = $names.Count
+        ExcludedNotes = 0
+    }
 }
 
 function Get-VgtZipEntryBytes {
@@ -539,4 +697,4 @@ function Assert-VgtSourceArchiveFreshness {
     }
 }
 
-Export-ModuleMember -Function Get-VgtProjectRoot,Read-VgtVersion,Get-VgtRelativePath,Test-VgtSourceCandidate,Get-VgtSourceFileList,Get-VgtSourceSnapshot,Get-VgtSha256,Get-VgtSourceTreeDigest,Write-VgtSourceManifest,Get-VgtToolchain,Get-VgtSourceDateEpoch,Get-VgtStableUuid,Write-VgtDeterministicJson,Get-VgtDistributionForbiddenReason,Get-VgtReleaseAssetVersion,Assert-VgtSha256SumsCoverage,Assert-VgtReleaseChannelHygiene,Assert-VgtSourceArchiveFreshness
+Export-ModuleMember -Function Get-VgtProjectRoot,Read-VgtVersion,Get-VgtRelativePath,Get-VgtPublishedSourceExclusionReason,Test-VgtSourceCandidate,Get-VgtSourceFileList,Get-VgtSourceSnapshot,Get-VgtSha256,Get-VgtSourceTreeDigest,Write-VgtSourceManifest,Get-VgtToolchain,Get-VgtSourceDateEpoch,Get-VgtStableUuid,Write-VgtDeterministicJson,Get-VgtDistributionForbiddenReason,Get-VgtReleaseAssetVersion,Assert-VgtSha256SumsCoverage,Assert-VgtReleaseChannelHygiene,Assert-VgtSourceArchiveFreshness,Get-VgtZipEntryNames,Assert-VgtSourceArchiveExcludesAgentNotes

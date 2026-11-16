@@ -19,10 +19,16 @@ import {
   addSentinelWhitelist,
   removeSentinelWhitelist,
 } from './api.js';
-import {byId, announce, setText, toast, requestReason} from './dom.js';
+import {byId, announce, node, setText, toast, requestReason} from './dom.js';
 
 let currentStatus = null;
 let initialized = false;
+
+/** Server data is rendered exclusively through textContent/DOM construction;
+ *  no innerHTML is used for dynamic values. */
+function cellText(value) {
+  return value === undefined || value === null ? '' : String(value);
+}
 
 export async function loadSentinel({silent = false} = {}) {  try {
     const status = await getSentinelStatus();
@@ -111,7 +117,7 @@ function renderEmptyRow(container, columns, message) {
 function renderSignatures(sigs) {
   const container = byId('sentinelSigTableBody');
   if (!container) return;
-  container.innerHTML = '';
+  container.replaceChildren();
   if (sigs.length === 0) {
     renderEmptyRow(container, 4, 'Keine Killerdom-Signaturen geladen.');
     return;
@@ -121,14 +127,18 @@ function renderSignatures(sigs) {
     const tr = document.createElement('tr');
 
     const tdId = document.createElement('td');
-    tdId.innerHTML = `<span class="sentinel-badge ${sig.enabled ? 'clean' : 'neutral'}">${escapeHtml(sig.id)}</span>`;
+    tdId.appendChild(node('span', `sentinel-badge ${sig.enabled ? 'clean' : 'neutral'}`, cellText(sig.id)));
 
     const tdName = document.createElement('td');
-    tdName.innerHTML = `<strong>${escapeHtml(sig.name)}</strong><br><small class="sentinel-cell-sub">${escapeHtml(sig.description)}</small>`;
+    tdName.append(
+      node('strong', '', cellText(sig.name)),
+      document.createElement('br'),
+      node('small', 'sentinel-cell-sub', cellText(sig.description)),
+    );
 
     const tdPat = document.createElement('td');
     const pattern = typeof sig.pattern === 'string' && sig.pattern ? sig.pattern : (sig.description || sig.severity || '');
-    tdPat.innerHTML = `<code class="sentinel-signature-pattern">${escapeHtml(pattern.slice(0, 75))}...</code>`;
+    tdPat.appendChild(node('code', 'sentinel-signature-pattern', `${String(pattern).slice(0, 75)}...`));
 
     const tdAction = document.createElement('td');
     const label = document.createElement('label');
@@ -136,7 +146,7 @@ function renderSignatures(sigs) {
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.checked = Boolean(sig.enabled);
-    input.dataset.sigId = sig.id;
+    input.dataset.sigId = cellText(sig.id);
     input.addEventListener('change', async () => {
       const wantsEnabled = input.checked;
       let reason = 'Signatur über Sentinel-Konsole geändert';
@@ -182,7 +192,7 @@ function renderSignatures(sigs) {
 function renderSystemApps(apps) {
   const container = byId('sentinelSysAppTableBody');
   if (!container) return;
-  container.innerHTML = '';
+  container.replaceChildren();
   if (apps.length === 0) {
     renderEmptyRow(container, 4, 'Keine kuratierten System-Apps geladen.');
     return;
@@ -192,15 +202,17 @@ function renderSystemApps(apps) {
     const tr = document.createElement('tr');
 
     const tdName = document.createElement('td');
-    tdName.innerHTML = `<strong>${escapeHtml(app.name)}</strong><br><small class="sentinel-cell-sub">${escapeHtml(app.description)}</small>`;
+    tdName.append(
+      node('strong', '', cellText(app.name)),
+      document.createElement('br'),
+      node('small', 'sentinel-cell-sub', cellText(app.description)),
+    );
 
     const tdPath = document.createElement('td');
-    tdPath.innerHTML = `<code class="sentinel-code">${escapeHtml(app.path)}</code>`;
+    tdPath.appendChild(node('code', 'sentinel-code', cellText(app.path)));
 
     const tdStatus = document.createElement('td');
-    tdStatus.innerHTML = app.enabled 
-      ? '<span class="sentinel-badge clean">ERLAUBT</span>' 
-      : '<span class="sentinel-badge danger">ISOLIERT</span>';
+    tdStatus.appendChild(node('span', app.enabled ? 'sentinel-badge clean' : 'sentinel-badge danger', app.enabled ? 'ERLAUBT' : 'ISOLIERT'));
 
     const tdAction = document.createElement('td');
     const btn = document.createElement('button');
@@ -244,7 +256,7 @@ function renderSystemApps(apps) {
 function renderWhitelist(items) {
   const container = byId('sentinelWlTableBody');
   if (!container) return;
-  container.innerHTML = '';
+  container.replaceChildren();
   if (items.length === 0) {
     renderEmptyRow(container, 5, 'Keine Whitelist-Einträge vorhanden.');
     return;
@@ -254,21 +266,21 @@ function renderWhitelist(items) {
     const tr = document.createElement('tr');
 
     const tdName = document.createElement('td');
-    tdName.innerHTML = `<strong>${escapeHtml(item.name)}</strong>`;
+    tdName.appendChild(node('strong', '', cellText(item.name)));
 
     const tdPath = document.createElement('td');
-    tdPath.innerHTML = `<code class="sentinel-code">${escapeHtml(item.pathPattern)}</code>`;
+    tdPath.appendChild(node('code', 'sentinel-code', cellText(item.pathPattern)));
 
     const tdScore = document.createElement('td');
     let scoreClass = 'clean';
     if (item.currentScore >= 75) scoreClass = 'danger';
     else if (item.currentScore >= 25) scoreClass = 'warning';
-    tdScore.innerHTML = `<span class="sentinel-score-chip ${scoreClass}" title="Fair Behavioral Threat Score (0-100)">${item.currentScore}</span>`;
+    const scoreChip = node('span', `sentinel-score-chip ${scoreClass}`, cellText(item.currentScore));
+    scoreChip.title = 'Fair Behavioral Threat Score (0-100)';
+    tdScore.appendChild(scoreChip);
 
     const tdStatus = document.createElement('td');
-    tdStatus.innerHTML = item.enabled
-      ? '<span class="sentinel-badge clean">AKTIV</span>'
-      : '<span class="sentinel-badge neutral">INAKTIV</span>';
+    tdStatus.appendChild(node('span', item.enabled ? 'sentinel-badge clean' : 'sentinel-badge neutral', item.enabled ? 'AKTIV' : 'INAKTIV'));
 
     const tdAction = document.createElement('td');
     tdAction.className = 'sentinel-row-actions';
@@ -288,7 +300,32 @@ function renderWhitelist(items) {
       toggleBtn.textContent = item.enabled ? 'Deaktivieren' : 'Aktivieren';
       toggleBtn.addEventListener('click', async () => {
         try {
-          await toggleSentinelWhitelist(item.id, !item.enabled);
+          const enabling = !item.enabled;
+          let reason = 'Whitelist-Status über Sentinel-Konsole geändert';
+          let confirmation = '';
+          if (enabling) {
+            const entered = await requestReason({
+              title: `Whitelist-Ausnahme ${item.name} aktivieren`,
+              text: 'Das Aktivieren erweitert die erlaubte Ausführungsfläche. Die Begründung wird auditierbar protokolliert.',
+              label: 'Begründung',
+              confirmLabel: 'Aktivieren',
+              tone: 'danger',
+            });
+            if (!entered) return;
+            reason = entered;
+            confirmation = 'CHANGE SENTINEL POSTURE';
+          } else {
+            const entered = await requestReason({
+              title: `Whitelist-Ausnahme ${item.name} deaktivieren`,
+              text: 'Das Deaktivieren verschärft die Schutzlage. Die Begründung wird auditierbar protokolliert.',
+              label: 'Begründung',
+              confirmLabel: 'Deaktivieren',
+              tone: 'primary',
+            });
+            if (!entered) return;
+            reason = entered;
+          }
+          await toggleSentinelWhitelist(item.id, enabling, { reason, confirmation });
           toast(`Whitelist-Eintrag ${item.name} aktualisiert.`, 'good');
           await loadSentinel();
         } catch (err) {
@@ -302,7 +339,15 @@ function renderWhitelist(items) {
       delBtn.textContent = 'Entfernen';
       delBtn.addEventListener('click', async () => {
         try {
-          await removeSentinelWhitelist(item.id);
+          const entered = await requestReason({
+            title: `Whitelist-Ausnahme ${item.name} entfernen`,
+            text: 'Das Entfernen verschärft die Schutzlage. Die Begründung wird auditierbar protokolliert.',
+            label: 'Begründung',
+            confirmLabel: 'Entfernen',
+            tone: 'danger',
+          });
+          if (!entered) return;
+          await removeSentinelWhitelist(item.id, { reason: entered });
           toast(`Whitelist-Eintrag ${item.name} entfernt.`, 'good');
           await loadSentinel();
         } catch (err) {
@@ -321,16 +366,6 @@ function renderWhitelist(items) {
     tr.appendChild(tdAction);
     container.appendChild(tr);
   });
-}
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }
 
 export function bindSentinel() {
@@ -398,8 +433,17 @@ export function bindSentinel() {
         return;
       }
 
+      const entered = await requestReason({
+        title: `Whitelist-Ausnahme "${name}" hinzufügen`,
+        text: 'Eine neue Ausnahme erweitert die erlaubte Ausführungsfläche. Die Begründung wird auditierbar protokolliert.',
+        label: 'Begründung',
+        confirmLabel: 'Hinzufügen',
+        tone: 'danger',
+      });
+      if (!entered) return;
+
       try {
-        await addSentinelWhitelist(name, path, { sha256, signerMatch });
+        await addSentinelWhitelist(name, path, { sha256, signerMatch, reason: entered, confirmation: 'CHANGE SENTINEL POSTURE' });
         toast(`Whitelist-Eintrag "${name}" hinzugefügt.`, 'good');
         if (nameInput) nameInput.value = '';
         if (pathInput) pathInput.value = '';

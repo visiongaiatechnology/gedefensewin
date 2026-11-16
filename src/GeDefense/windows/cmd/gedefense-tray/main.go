@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -23,6 +24,10 @@ import (
 	"github.com/visiongaiatechnology/gedefense/windows/internal/wintray"
 )
 
+// messageBoxIconError is MB_ICONERROR, used for the honest fail-closed refusal
+// dialog when the unprivileged hand-over is not possible.
+const messageBoxIconError = 0x00000010
+
 func main() {
 	showVersion := flag.Bool("version", false, "show version")
 	_ = flag.Bool("tray", false, "start in notification-area mode")
@@ -35,7 +40,18 @@ func main() {
 	// "Run as administrator" start would hand the administrator token to the
 	// tray and, through it, to the Center. The hand-over happens before the
 	// single instance is claimed so the unprivileged process becomes primary.
-	if relaunchTrayUnelevated() {
+	// If the hand-over is not safely possible the tray refuses to run elevated
+	// instead of silently keeping the administrator token (FIND-WIN-023).
+	relaunched, deElevationErr := relaunchTrayUnelevated()
+	if deElevationErr != nil {
+		winapi.ReportError("tray de-elevation", deElevationErr)
+		_ = winapi.MessageBox("VGT GeDefense",
+			"Der GeDefense Tray kann nicht unprivilegiert gestartet werden und wird deshalb nicht mit Administratorrechten ausgeführt.\r\n\r\n"+
+				deElevationErr.Error(),
+			messageBoxIconError)
+		return
+	}
+	if relaunched {
 		return
 	}
 	primary, event, mutex, tampered := claimInstance()
@@ -286,21 +302,20 @@ func trayIconPath() (string, error) {
 }
 
 // relaunchTrayUnelevated hands an elevated tray over to the unprivileged
-// desktop shell user. It reports true only when a replacement process was
-// started; this process then exits with status 0. A failed hand-over is
-// reported and the tray keeps running elevated as a documented fallback.
-func relaunchTrayUnelevated() bool {
+// desktop shell user. It reports (true, nil) only when a replacement process was
+// started; this process then exits with status 0. When the hand-over is not
+// safely possible it returns a typed error and the caller must refuse to run
+// elevated instead of falling back to the administrator token.
+func relaunchTrayUnelevated() (bool, error) {
 	executable, err := os.Executable()
 	if err != nil {
-		winapi.ReportError("tray de-elevation executable", err)
-		return false
+		return false, fmt.Errorf("tray de-elevation executable: %w", err)
 	}
 	relaunched, err := userlaunch.RelaunchUnelevatedIfNeeded(executable, nil)
 	if err != nil {
-		winapi.ReportError("tray de-elevation", err)
-		return false
+		return false, fmt.Errorf("tray de-elevation: %w", err)
 	}
-	return relaunched
+	return relaunched, nil
 }
 
 // claimInstance establishes the tray single instance. HP-FIND-005: a named

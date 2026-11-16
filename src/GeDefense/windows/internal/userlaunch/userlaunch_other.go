@@ -17,5 +17,6 @@ func CommandLine(string, []string) (string, error) { return "", errUnsupported }
 // LaunchAsShellUser is unavailable without the Windows desktop shell token.
 func LaunchAsShellUser(string, []string) error { return errUnsupported }
 
-// RelaunchUnelevatedIfNeeded is unavailable without the Windows desktop shell.
-func RelaunchUnelevatedIfNeeded(string, []string) (bool, error) { return false, errUnsupported }
+// RelaunchUnelevatedIfNeeded is a no-op off Windows: IsElevated is always false,
+// so DecideStartPolicy returns StartPolicyProceed and the UI may run in place.
+func RelaunchUnelevatedIfNeeded(string, []string) (bool, error) { return false, nil }

@@ -81,6 +81,17 @@ func (s *Server) registerBrowser(w http.ResponseWriter, r *http.Request) {
 	now := s.clock()
 	s.sessionMu.Lock()
 	s.purgeSessionsLocked(now)
+	// Registrations are unique per (pid, client): a repeated registration for the
+	// same launcher child replaces the previous expectation instead of leaving an
+	// ambiguous duplicate behind (FIND-WIN-020).
+	retained := s.browserRegistrations[:0]
+	for _, existing := range s.browserRegistrations {
+		if existing.pid == input.PID && existing.client == client {
+			continue
+		}
+		retained = append(retained, existing)
+	}
+	s.browserRegistrations = retained
 	if len(s.browserRegistrations) >= maxBrowserRegistrations {
 		s.sessionMu.Unlock()
 		s.writeError(w, http.StatusTooManyRequests, "browser registration rate limited")
@@ -117,9 +128,24 @@ func validClientName(client string) bool {
 // browser path additionally verifies that the loopback peer of this very
 // request belongs to the process the launcher registered. The code is never
 // written to the browser command line by this product.
+//
+// Ordering contract (FIND-WIN-007): the public endpoint has its own attempt
+// budget, and the replay guard is consumed only after the request presented a
+// credential (bootstrap code) or was bound to the registered peer process.
+// Unauthenticated floods therefore never occupy the bounded replay table and
+// cannot deny legitimate mutations with HTTP 409.
 func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 	if !s.originAllowed(r, false) {
 		s.writeError(w, http.StatusForbidden, "request rejected")
+		return
+	}
+	// Dedicated public bootstrap budget: a bogus Authorization header must not
+	// bypass abuse protection (the outer wrapper only counts requests without any
+	// credential material).
+	remoteHost := remoteHostOf(r)
+	if !s.allowRate("exchange:"+remoteHost, rateBootstrap) {
+		w.Header().Set("Retry-After", "5")
+		s.writeError(w, http.StatusTooManyRequests, "request rate limited")
 		return
 	}
 	var input struct {
@@ -129,66 +155,94 @@ func (s *Server) exchange(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	// The exchange is a public bootstrap step, but the request itself is a
-	// mutation and must carry the replay guard exactly like every other POST
-	// (AN-FIND-007): a captured exchange cannot be replayed.
-	if !s.claim(r.Header.Get("X-VGT-Request-ID")) {
-		s.writeError(w, http.StatusConflict, "request rejected")
-		return
-	}
 	now := s.clock()
-	s.sessionMu.Lock()
-	s.purgeSessionsLocked(now)
-	if code := strings.TrimSpace(input.Code); code != "" {
+	code := strings.TrimSpace(input.Code)
+	if code != "" {
+		// Possession of a live bootstrap code is the credential. Validate it
+		// before consuming a replay slot and before deleting the one-time code:
+		// a rejected replay must not burn a valid bootstrap authorization.
+		s.sessionMu.Lock()
+		s.purgeSessionsLocked(now)
 		record, exists := s.bootstrapCodes[code]
-		delete(s.bootstrapCodes, code)
+		s.sessionMu.Unlock()
+		if !exists || now.After(record.expires) {
+			s.writeError(w, http.StatusUnauthorized, "bootstrap code rejected")
+			return
+		}
+		if !s.claim(r.Header.Get("X-VGT-Request-ID")) {
+			s.writeError(w, http.StatusConflict, "request rejected")
+			return
+		}
+		s.sessionMu.Lock()
+		s.purgeSessionsLocked(now)
+		record, exists = s.bootstrapCodes[code]
 		if !exists || now.After(record.expires) {
 			s.sessionMu.Unlock()
 			s.writeError(w, http.StatusUnauthorized, "bootstrap code rejected")
 			return
 		}
+		delete(s.bootstrapCodes, code)
 		token, recordSession, err := s.createSessionLocked(now, record.client, record.scopes, sessionAbsoluteLifetime)
+		s.sessionMu.Unlock()
 		if err != nil {
-			s.sessionMu.Unlock()
 			s.writeError(w, http.StatusInternalServerError, "session initialization failed")
 			return
 		}
-		s.sessionMu.Unlock()
 		s.setSessionCookie(w, token, recordSession.expires)
 		s.auditSession("created:bootstrap-code", recordSession.client, recordSession.scopes, token)
 		s.writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
 		return
 	}
-	registration := s.pendingBrowserRegistrationLocked(now)
-	if registration == nil {
-		s.sessionMu.Unlock()
+	// Browser path: snapshot every pending registration (the whole bounded slice,
+	// not just the newest entry) and bind it to the operating-system peer of this
+	// very connection before any replay slot is consumed.
+	s.sessionMu.Lock()
+	s.purgeSessionsLocked(now)
+	pending := s.pendingBrowserRegistrationLocked(now)
+	s.sessionMu.Unlock()
+	if len(pending) == 0 {
 		// The launcher registers the browser immediately after process start. A
 		// page that loads faster than that registration must retry; it never
 		// receives an unauthenticated session.
 		s.writeError(w, http.StatusUnauthorized, "browser session not authorized")
 		return
 	}
-	// Do not consume the registration while checking the peer: a failed lookup
-	// must not burn the one authorized bootstrap window.
-	s.sessionMu.Unlock()
-	if !s.browserPeerMatches(registration.pid, r.RemoteAddr) {
+	peerPID, err := s.peerProcessID(r.RemoteAddr)
+	if err != nil || peerPID == 0 {
 		s.writeError(w, http.StatusUnauthorized, "browser session not authorized")
+		return
+	}
+	var matched *browserRegistration
+	for index := range pending {
+		if browserPeerMatchesPID(peerPID, pending[index].pid) {
+			matched = &pending[index]
+			break
+		}
+	}
+	if matched == nil {
+		s.writeError(w, http.StatusUnauthorized, "browser session not authorized")
+		return
+	}
+	// The request is bound to the registered peer process now; only here does a
+	// replay slot get consumed. A failed replay leaves the registration intact so
+	// the operator can retry with a fresh request id.
+	if !s.claim(r.Header.Get("X-VGT-Request-ID")) {
+		s.writeError(w, http.StatusConflict, "request rejected")
 		return
 	}
 	s.sessionMu.Lock()
 	s.purgeSessionsLocked(now)
-	if !s.consumeBrowserRegistrationLocked(*registration) {
+	if !s.consumeBrowserRegistrationLocked(*matched) {
 		s.sessionMu.Unlock()
 		s.writeError(w, http.StatusUnauthorized, "browser session not authorized")
 		return
 	}
-	token, recordSession, err := s.createSessionLocked(now, registration.client, registration.scopes, sessionAbsoluteLifetime)
+	token, recordSession, err := s.createSessionLocked(now, matched.client, matched.scopes, sessionAbsoluteLifetime)
+	s.sessionMu.Unlock()
 	if err != nil {
-		s.sessionMu.Unlock()
 		s.writeError(w, http.StatusInternalServerError, "session initialization failed")
 		return
 	}
-	s.sessionMu.Unlock()
 	s.setSessionCookie(w, token, recordSession.expires)
 	s.auditSession("created:browser-process", recordSession.client, recordSession.scopes, token)
 	s.writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
@@ -198,14 +252,19 @@ func sameRegistration(left, right browserRegistration) bool {
 	return left.pid == right.pid && left.expires.Equal(right.expires) && left.client == right.client
 }
 
-func (s *Server) pendingBrowserRegistrationLocked(now time.Time) *browserRegistration {
-	for index := len(s.browserRegistrations) - 1; index >= 0; index-- {
-		registration := s.browserRegistrations[index]
+// pendingBrowserRegistrationLocked returns every unexpired registration as a
+// copy. Callers must match the list against the verified peer process instead of
+// trusting the newest entry, so a registration from another window does not mask
+// the one that actually owns this connection (FIND-WIN-020). The returned slice
+// is bounded by maxBrowserRegistrations. The caller holds sessionMu.
+func (s *Server) pendingBrowserRegistrationLocked(now time.Time) []browserRegistration {
+	pending := make([]browserRegistration, 0, len(s.browserRegistrations))
+	for _, registration := range s.browserRegistrations {
 		if now.Before(registration.expires) {
-			return &registration
+			pending = append(pending, registration)
 		}
 	}
-	return nil
+	return pending
 }
 
 // consumeBrowserRegistrationLocked removes exactly the registration that was
@@ -221,9 +280,12 @@ func (s *Server) consumeBrowserRegistrationLocked(verified browserRegistration) 
 	return false
 }
 
-func (s *Server) browserPeerMatches(expectedPID uint32, remoteAddr string) bool {
-	peerPID, err := s.peerProcessID(remoteAddr)
-	if err != nil || peerPID == 0 {
+// browserPeerMatchesPID reports whether the verified loopback peer is the
+// registered browser process itself or a descendant of it (Chromium spawns
+// helper processes that may carry the socket). Both sides must be concrete
+// process ids; a zero pid never matches.
+func browserPeerMatchesPID(peerPID, expectedPID uint32) bool {
+	if peerPID == 0 || expectedPID == 0 {
 		return false
 	}
 	if peerPID == expectedPID {

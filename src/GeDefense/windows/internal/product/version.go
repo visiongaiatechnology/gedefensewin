@@ -1,4 +1,4 @@
 // STATUS: DIAMANT VGT SUPREME
 package product
 
-const Version = "5.3.0"
+const Version = "6.0.0"

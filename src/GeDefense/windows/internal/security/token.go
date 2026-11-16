@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence/secretfs"
 )
 
 // TokenLength is the length of a base64url encoded 256-bit control-plane
@@ -22,7 +24,9 @@ var (
 
 // LoadOrCreateToken loads the control-plane credential from path or creates a
 // new 256-bit credential when the file does not exist yet. The file is created
-// atomically with an exclusive create; concurrent creators reload the winner.
+// exclusively through the hardened secret-file store: the SYSTEM/Administrators
+// DACL is applied to the still empty file before the first credential byte is
+// written (FIND-WIN-019). Concurrent creators reload the winner.
 func LoadOrCreateToken(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", errTokenPathRelative
@@ -32,33 +36,16 @@ func LoadOrCreateToken(path string) (string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", err
-	}
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return "", err
 	}
 	token := base64.RawURLEncoding.EncodeToString(secret)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		return LoadOrCreateToken(path)
-	}
-	if err != nil {
+	if err := secretfs.CreateSecretFileExclusive(path, []byte(token+"\n")); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return LoadOrCreateToken(path)
+		}
 		return "", err
-	}
-	_, writeErr := file.Write([]byte(token + "\n"))
-	if writeErr == nil {
-		writeErr = file.Sync()
-	}
-	closeErr := file.Close()
-	if writeErr != nil {
-		_ = os.Remove(path)
-		return "", writeErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(path)
-		return "", closeErr
 	}
 	return token, nil
 }
@@ -81,55 +68,26 @@ func ReadToken(path string) (string, error) {
 }
 
 // RotateToken atomically replaces the credential file with a freshly generated
-// 256-bit credential and returns the new token. The replacement happens via a
-// temp file in the same directory plus rename, so a crash cannot leave a
-// partial credential and the NTFS ACL inheritance of the directory is kept.
-// The returned token is NOT persisted anywhere else; callers must update their
-// in-memory authority and revoke every session that was authorized by the old
-// credential.
+// 256-bit credential and returns the new token. The replacement is performed by
+// the hardened secret-file store: the restrictive SYSTEM/Administrators DACL is
+// applied to the sibling temporary file while it is still empty, the secret is
+// written only afterwards and the ready file is renamed onto the target, so a
+// crash can never leave a partial credential and the replaced file can never
+// keep a wider inherited DACL. The returned token is NOT persisted anywhere
+// else; callers must update their in-memory authority and revoke every session
+// that was authorized by the old credential.
 func RotateToken(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", errTokenPathRelative
-	}
-	directory := filepath.Dir(path)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return "", err
 	}
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return "", err
 	}
 	token := base64.RawURLEncoding.EncodeToString(secret)
-	file, err := os.CreateTemp(directory, ".dashboard.token-*")
-	if err != nil {
+	if err := secretfs.CreateSecretFile(path, []byte(token+"\n")); err != nil {
 		return "", err
 	}
-	tempPath := file.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tempPath)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return "", err
-	}
-	if _, err := file.Write([]byte(token + "\n")); err != nil {
-		_ = file.Close()
-		return "", err
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return "", err
-	}
-	if err := file.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return "", err
-	}
-	cleanup = false
 	return token, nil
 }
 

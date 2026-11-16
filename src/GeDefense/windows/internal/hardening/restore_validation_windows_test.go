@@ -5,7 +5,9 @@ package hardening
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -66,6 +68,12 @@ foreach ($case in @($payload.Cases)) {
 `
 
 var baselineHelperFunctions = []string{
+	"Get-VgtNormalizedPath",
+	"Test-VgtReparsePoint",
+	"Assert-VgtNoReparseTraversal",
+	"Get-VgtAuditPolicyContentHash",
+	"Get-VgtBaselineKeyBytes",
+	"Test-VgtConstantTimeHexEqual",
 	"Get-VgtBaselineRegistryAllowlist",
 	"Test-VgtBaselineRegistryEntry",
 	"Test-VgtBaselineFirewallProfile",
@@ -375,11 +383,21 @@ func TestVgtBaselineStateValidationAndIntegrity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// FIND-WIN-005: the anchor is authenticated with a keyed HMAC and binds the
+	// audit-policy CSV content hash. The harness uses an isolated key directory
+	// so no ProgramData key store is touched.
+	keyDirectory := filepath.Join(t.TempDir(), "keys")
+	auditPolicyBytes, err := os.ReadFile(auditPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditPolicyDigest := sha256.Sum256(auditPolicyBytes)
+	auditPolicySha256 := hex.EncodeToString(auditPolicyDigest[:])
 
-	// First run: structural validation of the fixture and its SHA-256.
+	// First run: structural validation of the fixture and its keyed HMAC.
 	hashResult := runBaselineHelperHarness(t, []baselineHelperCase{
 		{ID: "state", Function: "Test-VgtBaselineState", JsonState: string(rawFixture), Named: map[string]any{"StateDirectory": stateDirectory}},
-		{ID: "hash", Function: "Get-VgtBaselineIntegrityHash", JsonState: string(rawFixture)},
+		{ID: "hash", Function: "Get-VgtBaselineIntegrityHash", JsonState: string(rawFixture), Named: map[string]any{"KeyDirectory": keyDirectory}},
 	})
 	var stateValid bool
 	readBaselineValue(t, hashResult, "state", &stateValid)
@@ -396,8 +414,41 @@ func TestVgtBaselineStateValidationAndIntegrity(t *testing.T) {
 	for key, value := range fixture {
 		withIntegrity[key] = value
 	}
-	withIntegrity["integrity"] = map[string]any{"algorithm": "SHA256", "baselineSha256": baselineHash}
+	withIntegrity["integrity"] = map[string]any{
+		"algorithm":         "HMAC-SHA256",
+		"baselineHmac":      baselineHash,
+		"auditPolicySha256": auditPolicySha256,
+		"keyId":             "0011223344556677",
+	}
 	rawWithIntegrity, err := json.Marshal(withIntegrity)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Unkeyed legacy SHA-256 integrity metadata must never be reported as Valid.
+	legacySha256 := map[string]any{}
+	for key, value := range fixture {
+		legacySha256[key] = value
+	}
+	legacySha256["integrity"] = map[string]any{"algorithm": "SHA256", "baselineSha256": baselineHash}
+	rawLegacySha256, err := json.Marshal(legacySha256)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Integrity metadata with a valid HMAC but an unbound audit-policy content
+	// hash must fail closed (the CSV content is part of the authenticated body).
+	mismatchedAuditHash := map[string]any{}
+	for key, value := range withIntegrity {
+		mismatchedAuditHash[key] = value
+	}
+	mismatchedAuditHash["integrity"] = map[string]any{
+		"algorithm":         "HMAC-SHA256",
+		"baselineHmac":      baselineHash,
+		"auditPolicySha256": strings.Repeat("0", 64),
+		"keyId":             "0011223344556677",
+	}
+	rawMismatchedAuditHash, err := json.Marshal(mismatchedAuditHash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +476,7 @@ func TestVgtBaselineStateValidationAndIntegrity(t *testing.T) {
 	}
 
 	// Structural mutations that must fail even with a valid integrity hash
-	// recomputed (integrity is corruption detection, not authenticity).
+	// recomputed.
 	badRegistry := map[string]any{}
 	for key, value := range fixture {
 		badRegistry[key] = value
@@ -456,10 +507,12 @@ func TestVgtBaselineStateValidationAndIntegrity(t *testing.T) {
 	}
 
 	results := runBaselineHelperHarness(t, []baselineHelperCase{
-		{ID: "valid-with-integrity", Function: "Test-VgtBaselineIntegrity", JsonState: string(rawWithIntegrity)},
-		{ID: "tampered", Function: "Test-VgtBaselineIntegrity", JsonState: string(rawTampered)},
-		{ID: "registry-tampered", Function: "Test-VgtBaselineIntegrity", JsonState: string(rawRegistryTampered)},
-		{ID: "legacy", Function: "Test-VgtBaselineIntegrity", JsonState: string(rawFixture)},
+		{ID: "valid-with-integrity", Function: "Test-VgtBaselineIntegrity", JsonState: string(rawWithIntegrity), Named: map[string]any{"KeyDirectory": keyDirectory}},
+		{ID: "tampered", Function: "Test-VgtBaselineIntegrity", JsonState: string(rawTampered), Named: map[string]any{"KeyDirectory": keyDirectory}},
+		{ID: "registry-tampered", Function: "Test-VgtBaselineIntegrity", JsonState: string(rawRegistryTampered), Named: map[string]any{"KeyDirectory": keyDirectory}},
+		{ID: "legacy", Function: "Test-VgtBaselineIntegrity", JsonState: string(rawFixture), Named: map[string]any{"KeyDirectory": keyDirectory}},
+		{ID: "legacy-sha256", Function: "Test-VgtBaselineIntegrity", JsonState: string(rawLegacySha256), Named: map[string]any{"KeyDirectory": keyDirectory}},
+		{ID: "audit-content-mismatch", Function: "Test-VgtBaselineIntegrity", JsonState: string(rawMismatchedAuditHash), Named: map[string]any{"KeyDirectory": keyDirectory}},
 		{ID: "bad-registry", Function: "Test-VgtBaselineState", JsonState: string(rawBadRegistry), Named: map[string]any{"StateDirectory": stateDirectory}},
 		{ID: "bad-firewall", Function: "Test-VgtBaselineState", JsonState: string(rawBadFirewall), Named: map[string]any{"StateDirectory": stateDirectory}},
 		{ID: "bad-audit-policy", Function: "Test-VgtBaselineState", JsonState: string(rawBadAuditPolicy), Named: map[string]any{"StateDirectory": stateDirectory}},
@@ -476,6 +529,8 @@ func TestVgtBaselineStateValidationAndIntegrity(t *testing.T) {
 	expectString("tampered", "Mismatch")
 	expectString("registry-tampered", "Mismatch")
 	expectString("legacy", "Legacy")
+	expectString("legacy-sha256", "Legacy")
+	expectString("audit-content-mismatch", "Mismatch")
 	for _, id := range []string{"bad-registry", "bad-firewall", "bad-audit-policy"} {
 		var value bool
 		readBaselineValue(t, results, id, &value)

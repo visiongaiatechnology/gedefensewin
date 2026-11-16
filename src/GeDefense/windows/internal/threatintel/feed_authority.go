@@ -46,9 +46,11 @@ import (
 //     feedAuthorityDocumentMessage (feeds sorted by feedKey, RFC3339Nano times).
 //  4. When the public key ring exists, every fetched feed and every cached
 //     generation MUST carry a valid attestation. Missing/invalid/expired/
-//     rolled-back attestations are rejected fail-closed. Without a key ring the
-//     manager reports FeedAuthenticity=UNCONFIGURED and the hard TTL still
-//     expires every unverified generation (DP-FIND-003).
+//     rolled-back attestations are rejected fail-closed. FIND-WIN-015: without a
+//     verified key ring no unsigned feed may become an enforcement/blocking
+//     basis. The manager reports FeedAuthenticity=UNVERIFIED and
+//     FeedEnforcement=DISABLED_UNAUTHORIZED; the data stays available for display
+//     and audit as ANNOTATE_ONLY. The hard TTL still expires every generation.
 const (
 	feedAuthoritySchemaVersion      = 1
 	feedAuthorityDocFileName        = "feed-authority.json"
@@ -59,9 +61,11 @@ const (
 	maximumFeedAuthorityKeyring     = 64 << 10
 	maximumFeedAuthorityValidity    = 30 * 24 * time.Hour
 	feedAuthorityFutureTolerance    = 5 * time.Minute
-	feedAuthenticityUnconfigured    = "UNCONFIGURED"
+	feedAuthenticityUnverified      = "UNVERIFIED"
 	feedAuthenticityEnforced        = "ENFORCED"
 	feedAuthenticityFailed          = "FAILED"
+	feedEnforcementVerified         = "VERIFIED_AUTHORITY"
+	feedEnforcementDisabled         = "DISABLED_UNAUTHORIZED"
 	feedAuthorityStateSchemaVersion = 1
 )
 
@@ -173,6 +177,42 @@ func loadFeedAuthorityKeyring(root string) (keys map[string]ed25519.PublicKey, c
 	return keys, true, nil
 }
 
+// authorityEnforcementAvailable reports whether a verified signed-authority key
+// ring is in force. Enforcement/blocking from feed data is only permitted when
+// this is true; a missing, empty or broken trust anchor yields UNVERIFIED
+// annotation-only operation (FIND-WIN-015).
+func (m *Manager) authorityEnforcementAvailable() bool {
+	if m == nil {
+		return false
+	}
+	m.authorityMu.RLock()
+	defer m.authorityMu.RUnlock()
+	return m.authorityConfigured && m.authorityError == "" && len(m.authorityKeys) > 0
+}
+
+// authorityStatus projects the trust-anchor state for Status/audit consumers.
+// It never infers enforcement from data freshness or from a previous generation.
+func (m *Manager) authorityStatus() (authenticity string, enforcement string, errorText string, keys int, sequence uint64) {
+	if m == nil {
+		return feedAuthenticityUnverified, feedEnforcementDisabled, "threat intelligence manager unavailable", 0, 0
+	}
+	m.authorityMu.RLock()
+	defer m.authorityMu.RUnlock()
+	keys = len(m.authorityKeys)
+	sequence = m.authorityState.LastSequence
+	errorText = m.authorityError
+	switch {
+	case m.authorityConfigured && m.authorityError != "":
+		return feedAuthenticityFailed, feedEnforcementDisabled, errorText, keys, sequence
+	case m.authorityConfigured && len(m.authorityKeys) > 0:
+		return feedAuthenticityEnforced, feedEnforcementVerified, "", keys, sequence
+	default:
+		return feedAuthenticityUnverified, feedEnforcementDisabled,
+			"feed authority unavailable: unsigned feed generations are annotation-only and cannot become a blocking enforcement basis", keys, sequence
+	}
+}
+
+// loadFeedAuthority loads the pinned trust anchor and the anti-rollback state.
 func (m *Manager) loadFeedAuthority() {
 	keys, configured, err := loadFeedAuthorityKeyring(m.root)
 	m.authorityMu.Lock()

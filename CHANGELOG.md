@@ -3,6 +3,23 @@
 All notable changes to GeDefense Windows are documented here. The project follows a
 versioned release history; `VERSION` is the authoritative version for builds.
 
+## [6.0.0] - 2026-11-16
+
+### Added — V6 Sovereign Anti-Spyware & Kernel Telemetry
+
+- **Anti-Spyware Sensors (`internal/spyware` + `internal/app/v6_sensors.go`, `v6_windows.go`):** BYOVD vulnerable-driver & Authenticode verification (`WinVerifyTrust`), webcam/microphone/screen-capture/location capability consent store monitoring, Windows persistence detection (`IFEO`, `SilentProcessExit`, `AppCertDlls`, `AppInit_DLLs`, LSA security/notification packages, Print Monitors), and LSASS Event Log (`4656`/`4663`) `PROCESS_VM_READ` inspection.
+- **Out-of-Band Evidence Witness (`internal/witness`):** Signed Ed25519 ledger checkpoints with AES-256-GCM outbox, SPKI-pinned HTTPS transport, fail-closed rollback/fork detection, and air-gapped `vgtw1:` export support.
+- **StyX Passive Egress & Beaconing Detector (`internal/mhx/styx_*` + `internal/winapi/tcp_estats_windows.go`):** IPv4/IPv6 TCP flow telemetry, receive-byte estats correlation, and periodic beacon scoring in `OBSERVE_ONLY` mode.
+- **Emergency Lockdown Engine (`internal/lockdown`):** Crash-safe AES-256-GCM state with `expected_epoch` Compare-Set release, Composite BadUSB device classifier, and PID+CreationTime-bound broker process freezer.
+- **Ephemeral Parser Cells (`internal/parsercells`):** Zero-capability Windows AppContainer isolation, Job Object resource limits, `Win32kSystemCallDisable` + 5 process mitigations, and handle-only I/O.
+- **Native WinAPI V6 Foundations (`internal/winapi`):** Real-time ETW consumer (`StartTraceW`/`ProcessTrace`/`tdh.dll`), direct WFP filter transactions (`fwpuclnt.dll`) + `SetTcpEntry`, and TPM 2.0 / TCG WBCL / Secure Boot / HVCI measured boot posture (`tbs.dll` + `ncrypt.dll`).
+- **Control Plane & Web UI:** `GET /api/v1/v6/status`, `/api/v1/v6/spyware/findings`, `/api/v1/v6/styx/incidents`, and the **V6 Sovereign** dashboard view.
+
+### Security & Supply-Chain Hardening
+
+- **VGT-100 Security Remediation (`FIND-WIN-001`..`FIND-WIN-023`):** Fail-closed de-elevation for Center & Tray, operator broker Authenticode & kernel image binding, signed Titan persistence/quarantine evidence with `RESTORED_DEGRADED` recovery, HMAC-protected evidence high-water & threat-intel clock anchors, fail-closed `secretfs` pre-write DACLs, and release-channel hygiene with prerelease-aware installer downgrade protection.
+- **Toolchain CVE Fix (`GO-2026-6859`):** Pinned Go release toolchain updated from `1.26.10` to `1.26.11` (`net/http` header race fix).
+
 ## [5.3.0] - 2026-10-28
 
 ### Added

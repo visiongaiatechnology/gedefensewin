@@ -24,7 +24,40 @@ const (
 	// maxUnauthenticatedRequestsPerMinute is the global brake for clients that
 	// present no credential at all. Authenticated scopes have their own budgets.
 	maxUnauthenticatedRequestsPerMinute = 300
+	// maxExchangeAttemptsPerMinute bounds public session-exchange attempts per
+	// loopback peer. The exchange is authenticated by a bootstrap code or by a
+	// verified peer process, so failed attempts are budgeted here and never
+	// consume a replay slot (FIND-WIN-007).
+	maxExchangeAttemptsPerMinute = 30
+	// maxOperatorBrokerRejectedPerMinute bounds rejected operator-broker callers
+	// in a bucket of their own so an unauthorised process cannot exhaust the
+	// budget of the legitimate Center/Tray client (FIND-WIN-008).
+	maxOperatorBrokerRejectedPerMinute = 10
+	// The first-run setup flow performs several long/policy calls in one guided
+	// sequence. Only while the server-authoritative setup marker is incomplete,
+	// and only for the exact setup endpoints, these calls use a dedicated,
+	// bounded budget instead of widening the general long-operation limits.
+	setupFlowRequestsPerMinute       = 12
+	setupFlowRequestsPerMinuteMaster = 24
 )
+
+// Additional rate classes. The first four classes are declared with the rate
+// bucket type; these extend it without touching the shared type definition.
+const (
+	rateBootstrap      rateClass = 4
+	rateBrokerRejected rateClass = 5
+	rateSetup          rateClass = 6
+)
+
+// setupFlowPaths are the exact endpoints the documented first-run wizard calls
+// before it completes setup. No other route is ever moved to the setup budget.
+var setupFlowPaths = map[string]struct{}{
+	"/api/v1/hardening/enforce":          {},
+	"/api/v1/integrity/configuration":    {},
+	"/api/v1/titan/policy":               {},
+	"/api/v1/titan/owner-process-images": {},
+	"/api/v1/setup/complete":             {},
+}
 
 // headers is the outermost wrapper. Security headers are applied before any
 // rejection so that even early 400/403/429 responses carry the full header set
@@ -110,7 +143,7 @@ func (s *Server) protected(mode routeAuthMode, confirmation string, next http.Ha
 		}
 		// Rate budgets are checked before the replay guard so a caller cannot
 		// exhaust the replay table and deny legitimate mutations.
-		if !s.allowRate(auth.identity(), rateClassForRoute(mode, r.Method, r.URL.Path)) {
+		if !s.allowRate(s.rateIdentity(auth, r), s.rateClassFor(mode, r)) {
 			w.Header().Set("Retry-After", "5")
 			s.writeError(w, http.StatusTooManyRequests, "request rate limited")
 			return
@@ -210,6 +243,51 @@ func rateClassForRoute(mode routeAuthMode, method, path string) rateClass {
 	}
 }
 
+// rateIdentity keys a fixed-window budget to the concrete session (token digest)
+// plus the loopback peer address, not merely to the client name. Two sessions
+// that happen to use the same client name therefore never starve each other
+// (FIND-WIN-018). The master break-glass credential keeps its own identity
+// because it is not a session; the setup budget is a separate class on top of
+// the same identity. The digest is non-secret and rotation-safe for audit.
+func (s *Server) rateIdentity(auth authContext, r *http.Request) string {
+	if auth.master {
+		return "master"
+	}
+	if auth.session == nil {
+		return "anonymous:" + remoteHostOf(r)
+	}
+	return "session:" + auth.client + ":" + remoteHostOf(r) + ":" + sessionDigest(auth.token)
+}
+
+// rateClassFor applies the dedicated first-run setup budget while the server's
+// setup marker is incomplete, and only for the exact endpoints of the documented
+// wizard flow. Every other request keeps its normal class, so the general long
+// and policy limits are not widened (FIND-WIN-018).
+func (s *Server) rateClassFor(mode routeAuthMode, r *http.Request) rateClass {
+	if s.setupFlowApplies(r) {
+		return rateSetup
+	}
+	return rateClassForRoute(mode, r.Method, r.URL.Path)
+}
+
+// setupFlowApplies reports whether this request belongs to the guided first-run
+// setup sequence. The decision is server-authoritative (startup state) and
+// bounded to the known setup endpoints; an unreadable setup marker keeps the
+// normal budgets (fail-closed for availability, never a broader budget).
+func (s *Server) setupFlowApplies(r *http.Request) bool {
+	if s.startupGate == nil || r.Method != http.MethodPost {
+		return false
+	}
+	if _, ok := setupFlowPaths[r.URL.Path]; !ok {
+		return false
+	}
+	result, err := s.startupGate.SetupStatus(s.version)
+	if err != nil {
+		return false
+	}
+	return !result.Complete
+}
+
 func isLongOperation(method, path string) bool {
 	if method == http.MethodGet || method == http.MethodHead {
 		return false
@@ -254,6 +332,19 @@ func rateLimitFor(class rateClass, identity string) int {
 			return 6
 		}
 		return 2
+	case rateBootstrap:
+		// Public exchange attempts: generous enough for the launcher/browser race
+		// (the UI retries a few times) but strict against replay-table floods.
+		return maxExchangeAttemptsPerMinute
+	case rateBrokerRejected:
+		// Rejected operator-broker callers get their own tight budget so they can
+		// never consume the legitimate Center/Tray budget.
+		return maxOperatorBrokerRejectedPerMinute
+	case rateSetup:
+		if master {
+			return setupFlowRequestsPerMinuteMaster
+		}
+		return setupFlowRequestsPerMinute
 	default:
 		return 60
 	}
@@ -338,7 +429,7 @@ func (s *Server) masterAuthorize(next http.HandlerFunc) http.HandlerFunc {
 			s.writeError(w, http.StatusUnauthorized, "authorization required")
 			return
 		}
-		if !s.allowRate("master", rateClassForRoute(authMaster, r.Method, r.URL.Path)) {
+		if !s.allowRate("master", s.rateClassFor(authMaster, r)) {
 			w.Header().Set("Retry-After", "5")
 			s.writeError(w, http.StatusTooManyRequests, "request rate limited")
 			return
@@ -362,7 +453,7 @@ func (s *Server) windowAuthorize(next http.HandlerFunc) http.HandlerFunc {
 			s.rejectUnauthenticated(w, r)
 			return
 		}
-		if !auth.master && !auth.scopes.has(scopeWindow) {
+		if !auth.master && !auth.scopes.has(scopeWindow) && !operatorSessionMayControlWindow(auth) {
 			s.writeError(w, http.StatusForbidden, "insufficient authorization")
 			return
 		}
@@ -370,7 +461,7 @@ func (s *Server) windowAuthorize(next http.HandlerFunc) http.HandlerFunc {
 			s.writeError(w, http.StatusForbidden, "request rejected")
 			return
 		}
-		if !s.allowRate(auth.identity(), rateClassForRoute(authWindow, r.Method, r.URL.Path)) {
+		if !s.allowRate(s.rateIdentity(auth, r), s.rateClassFor(authWindow, r)) {
 			w.Header().Set("Retry-After", "5")
 			s.writeError(w, http.StatusTooManyRequests, "request rate limited")
 			return
@@ -383,12 +474,25 @@ func (s *Server) windowAuthorize(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// operatorSessionMayControlWindow allows the verified Center operator session to
+// drive the native window host. The broker now bounds a non-elevated Center
+// session to read+operate (FIND-WIN-006), so the window-control surface must be
+// reachable with operate authority; the read-only Tray session and every
+// non-operator session stay excluded. The window is the console's own chrome,
+// never a control-plane policy surface.
+func operatorSessionMayControlWindow(auth authContext) bool {
+	return auth.session != nil && auth.session.operator && auth.scopes.has(scopeOperate)
+}
+
 // operatorAuthorize accepts either the master break-glass credential or an
 // operator session minted by the OS-identity broker (the caller's Windows token
-// proved operator-group/Administrators membership). Browser cookie sessions and
-// generic service sessions never pass this wrapper; it is only used for the
-// privileged window registration step that binds a browser child process
-// (UI-FIND-001 / AN-FIND-004).
+// proved operator-group/Administrators membership *and* the calling image is a
+// signed, installed product binary). Browser cookie sessions and generic service
+// sessions never pass this wrapper; it is only used for the privileged window
+// registration step that binds a browser child process (UI-FIND-001 /
+// AN-FIND-004). Because the broker bounds a non-elevated Center binary to
+// read+operate, operate authority (not scopeAll) is the requirement here; a
+// read-only Tray session still cannot register a browser.
 func (s *Server) operatorAuthorize(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth, ok := s.authenticate(w, r)
@@ -397,7 +501,7 @@ func (s *Server) operatorAuthorize(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if !auth.master {
-			if auth.session == nil || !auth.session.operator || !auth.scopes.has(scopeAll) {
+			if auth.session == nil || !auth.session.operator || !auth.scopes.has(scopeOperate) {
 				s.writeError(w, http.StatusForbidden, "insufficient authorization")
 				return
 			}
@@ -406,7 +510,7 @@ func (s *Server) operatorAuthorize(next http.HandlerFunc) http.HandlerFunc {
 			s.writeError(w, http.StatusForbidden, "request rejected")
 			return
 		}
-		if !s.allowRate(auth.identity(), rateClassForRoute(authOperate, r.Method, r.URL.Path)) {
+		if !s.allowRate(s.rateIdentity(auth, r), s.rateClassFor(authOperate, r)) {
 			w.Header().Set("Retry-After", "5")
 			s.writeError(w, http.StatusTooManyRequests, "request rate limited")
 			return

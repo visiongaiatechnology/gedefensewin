@@ -26,8 +26,9 @@ package settings
 const SchemaVersion = 1
 
 // CatalogVersion identifies the static control catalog. It changes whenever a
-// control is added, removed or its meaning changes.
-const CatalogVersion = "5.0.0"
+// control is added, removed or its meaning changes. 5.3.0 adds the V6 Sovereign
+// section (spyware sensors and witness activation).
+const CatalogVersion = "5.3.0"
 
 const (
 	// SectionDefender covers Microsoft Defender preferences.
@@ -46,6 +47,9 @@ const (
 	SectionStartup = "startup"
 	// SectionNotifications covers operator notification behavior.
 	SectionNotifications = "notifications"
+	// SectionV6 covers the V6 Sovereign anti-spyware sensors and the
+	// out-of-band evidence witness activation.
+	SectionV6 = "v6"
 )
 
 const (
@@ -243,6 +247,7 @@ func sectionDefinitions() []Section {
 		{ID: SectionThreatIntelligence, Label: "Threat Intelligence", Description: "Abrufintervall, Feed-Aktionen, blockierende Abdeckung und geschützte Netze.", Order: 6},
 		{ID: SectionStartup, Label: "Start & Hintergrund", Description: "Dienststart, Tray-Verhalten, Bereitschaftsprüfung und Health-Refresh.", Order: 7},
 		{ID: SectionNotifications, Label: "Benachrichtigungen", Description: "Ereignisbenachrichtigungen, Startzusammenfassung, Ton und Detailtiefe.", Order: 8},
+		{ID: SectionV6, Label: "V6 Sovereign", Description: "Anti-Spyware-Sensoren (BYOVD, Fähigkeiten, Persistenz, LSASS) und der externe Evidenz-Witness. Sensoren sind ausschließlich erkennend (OBSERVE_ONLY).", Order: 9},
 	}
 }
 
@@ -250,7 +255,7 @@ func allControls() []Control {
 	return append(defenderControls(), append(firewallControls(),
 		append(hardeningControls(), append(mhxControls(),
 			append(kineticControls(), append(threatIntelligenceControls(),
-				append(startupControls(), notificationControls()...)...)...)...)...)...)...)
+				append(startupControls(), append(notificationControls(), v6Controls()...)...)...)...)...)...)...)...)
 }
 
 func newBool(id, label, category, description, risk string, def bool, levels []string) Control {
@@ -421,6 +426,21 @@ func notificationControls() []Control {
 		newBool("notifications.soundAlerts", "Tonalarm", "BENACHRICHTIGUNGEN", "Zusätzlich einen dezenten Ton bei kritischen Ereignissen abspielen.", RiskLow, false, levels),
 		newEnum("notifications.verbosity", "Detailtiefe", "BENACHRICHTIGUNGEN", "Detailgrad der Benachrichtigungen: minimal, normal oder detailed.", RiskLow, "normal", []string{"minimal", "normal", "detailed"}, levels),
 		newInt("notifications.retentionDays", "Aufbewahrung", "BENACHRICHTIGUNGEN", "Aufbewahrungsdauer des Benachrichtigungsfeeds.", RiskLow, 14, 1, 90, "Tage", levels),
+	}
+}
+
+// v6Controls is the V6 Sovereign section. Every control is a genuine switch of
+// a wired runtime component: the anti-spyware collectors are gated by these
+// values and the witness supervisor starts or stops the out-of-band witness.
+func v6Controls() []Control {
+	levels := allLevelIDs
+	return []Control{
+		newBool("v6.spywareEnabled", "Anti-Spyware-Sensoren", "V6 SOVEREIGN", "Aktiviert die V6-Anti-Spyware-Erkennung im Dienst. Sensoren klassifizieren ausschließlich und antworten mit OBSERVE_ONLY.", RiskHigh, true, levels),
+		newBool("v6.spywareByovd", "BYOVD-Treibererkennung", "V6 SOVEREIGN", "Scannt Kernel-Dienste und Signaturstatus auf bekannte verwundbare Treiber (BYOVD).", RiskHigh, true, levels),
+		newBool("v6.spywareCapability", "Fähigkeitszugriffe", "V6 SOVEREIGN", "Überwacht Kamera-, Mikrofon-, Bildschirm- und Standortzugriffe im Windows-Consent-Store.", RiskHigh, true, levels),
+		newBool("v6.spywarePersistence", "Persistenz-Mechanismen", "V6 SOVEREIGN", "Prüft registry-basierte Persistenz (IFEO, AppInit/AppCert, LSA-Pakete, Druckmonitore).", RiskHigh, true, levels),
+		newBool("v6.spywareLsass", "LSASS-Zugriffe", "V6 SOVEREIGN", "Überwacht Sicherheits-Auditereignisse 4656/4663 auf LSASS-Speicherzugriffe außerhalb der Allowlist.", RiskCritical, true, levels),
+		newBool("v6.witnessEnabled", "Evidenz-Witness", "V6 SOVEREIGN", "Aktiviert den externen, signierten Witness-Client. Erfordert ein gültiges settings.json unter witness/. Ohne dieses Dokument bleibt der Witness aus.", RiskHigh, false, levels),
 	}
 }
 

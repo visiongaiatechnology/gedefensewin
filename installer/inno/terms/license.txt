@@ -1,0 +1,45 @@
+GEDEFENSE WINDOWS 5.3.0 — BETA PROGRAM AGREEMENT AND TERMS OF USE
+VisionGaiaTechnology ("VGT", "we", "us")
+
+PLEASE READ THESE TERMS IN FULL. BY SELECTING "I ACCEPT" AND INSTALLING THE SOFTWARE, YOU AGREE TO THEM.
+
+1. SCOPE AND BETA STATUS
+GeDefense Windows 5.3.0 is a public beta. It is not intended for unrestricted production use, for safety-critical infrastructure, or as the sole security control. The beta may contain errors, security defects, data loss, misclassifications and system impact. Features, signatures, policies and documentation may change without notice.
+
+2. LICENSE
+The source code is licensed under the GNU Affero General Public License, version 3 only (AGPL-3.0-only), unless the accompanying license files state otherwise. The installer and bundled binaries are provided for testing, evaluation and development. The AGPL-3.0-only license and the bundled third-party notices remain unaffected. VGT trademarks, logos and product names may not be used for derived products without written permission.
+
+3. BETA PROGRAM
+Participation is voluntary and free of charge. There is no entitlement to support, bug fixes, updates, specific features or availability. VGT may end or change the beta program, builds or features at any time. Feedback, bug reports and suggestions may be used by VGT to improve its products without any compensation obligation.
+
+4. SECURITY SOFTWARE AND SYSTEM RISKS
+GeDefense deliberately modifies Windows security mechanisms. Depending on policy, it may change, block or remove services, drivers, firewall/WFP rules, Defender settings, audit policy, processes, files, certificates, autostart entries and network connections. This can affect legitimate applications, scripts, installations or remote access. You are responsible for taking a full backup before installation, testing the beta on an isolated system first, and understanding the effect of the policies. Do not use the beta on devices where failure could endanger people, the environment, property or critical processes.
+
+5. CERTIFICATE TRUST
+The installer imports the self-signed VGT release certificate (subject "CN=VisionGaia Technology VGT Release") into the certificate stores "Local Computer\Trusted Root Certification Authorities" and "Local Computer\Trusted Publishers" so that the signed installation and maintenance scripts can run. By accepting on the following page you expressly consent to this import. You acknowledge that Windows may afterwards treat code signed with the corresponding VGT private key as trusted. The certificate can be removed through the Windows certificate manager or by uninstalling, where it is not otherwise required. Only trust this certificate if you have verified the build and its origin. The installer SHA-256 checksum and signature status should match the official release page.
+
+6. DATA AND TELEMETRY
+The control plane is local-first. There is no mandatory cloud service and no automatic transmission of telemetry to VGT. Local logs, evidence files, installation logs and diagnostics remain on the device unless you choose to share them. You are responsible for complying with the privacy, retention and compliance requirements applicable to your system.
+
+7. WARRANTY
+The beta is provided "AS IS" and "AS AVAILABLE". To the extent permitted by law, VGT disclaims express and implied warranties, including merchantability, fitness for a particular purpose, non-infringement and freedom from defects. No guarantee is given for detection rates, complete coverage, uninterrupted operation or recoverability. Mandatory statutory warranty rights, in particular for consumers, remain unaffected.
+
+8. LIMITATION OF LIABILITY
+To the extent permitted by law, VGT is not liable for indirect or consequential damages, loss of profit, loss of data, business interruption, reputational harm or replacement costs arising from the use or inability to use the beta. Liability for intent and gross negligence, for injury to life, body or health, and under mandatory statutory provisions, in particular the German Product Liability Act, remains unaffected. For simple negligence, VGT is liable only for breach of essential contractual obligations and limited to the foreseeable damage typical for the contract. Any further limitation is excluded where legally impermissible.
+
+9. INDEMNITY
+You indemnify VGT against third-party claims arising from your unlawful use of the beta, from configurations you make, or from your breach of these terms, to the extent you are responsible for the breach. This does not apply to claims based on VGT's fault.
+
+10. CRITICAL INFRASTRUCTURE AND EXPORT
+The beta is not intended for nuclear facilities, aviation, medical life-support systems, weapons systems, chemical plants or other environments where a failure could cause serious personal or environmental harm. You are responsible for compliance with applicable export-control and sanctions laws.
+
+11. TERM AND TERMINATION
+These terms apply from installation until you uninstall the beta or VGT ends the beta program. VGT may discontinue the offering. The sections on license, warranty, liability, indemnity and governing law survive termination.
+
+12. GOVERNING LAW
+German law applies, excluding the UN Convention on Contracts for the International Sale of Goods, unless mandatory consumer-protection rules of your place of residence prevail. Statutory jurisdictions apply; mandatory statutory venues remain unaffected.
+
+13. CONTACT
+VisionGaiaTechnology; support and security reports through the channels named in the repository and in SECURITY.md.
+
+BY INSTALLING, YOU CONFIRM THAT YOU HAVE READ, UNDERSTOOD AND ACCEPTED THESE TERMS AND THAT YOU WILL USE THE BETA ON A SUITABLE TEST SYSTEM WITH A BACKUP.

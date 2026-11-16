@@ -9,7 +9,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/geoip"
@@ -149,12 +148,10 @@ type mapOrigin struct {
 	Reason      string  `json:"reason,omitempty"`
 }
 
-var (
-	publicIPCacheMu  sync.RWMutex
-	publicIPCache    string
-	publicIPCachedAt time.Time
-)
-
+// localOutboundIP resolves the local address of the interface the default route
+// would use. A connected UDP socket transmits no packet (the kernel only
+// performs a local route lookup), so this stays inside the zero-egress policy;
+// the fallback enumerates local interface addresses.
 func localOutboundIP() net.IP {
 	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(8, 8, 8, 8), Port: 80})
 	if err == nil {
@@ -174,75 +171,99 @@ func localOutboundIP() net.IP {
 	return nil
 }
 
-func discoverPublicIP() string {
-	publicIPCacheMu.RLock()
-	if publicIPCache != "" && time.Since(publicIPCachedAt) < 10*time.Minute {
-		cached := publicIPCache
-		publicIPCacheMu.RUnlock()
-		return cached
+// publicIPSource names the local, already available origin of the host address.
+type publicIPSource int
+
+const (
+	// publicIPSourceUnavailable means no local/configured source provided an
+	// address. The UI renders that honestly instead of guessing.
+	publicIPSourceUnavailable publicIPSource = iota
+	// publicIPSourceOperator means the operator explicitly configured the value.
+	publicIPSourceOperator
+	// publicIPSourceInterface means a public unicast address of a local network
+	// interface was used.
+	publicIPSourceInterface
+)
+
+// label is the stable JSON/UI label for the source. There is deliberately no
+// external/DNS label: GeDefense runs zero-egress.
+func (source publicIPSource) label() string {
+	switch source {
+	case publicIPSourceOperator:
+		return "operator-configured"
+	case publicIPSourceInterface:
+		return "public-interface"
+	default:
+		return ""
 	}
-	publicIPCacheMu.RUnlock()
-
-	if configured := strings.TrimSpace(os.Getenv("GEDEFENSE_MAP_HOST_IP")); configured != "" {
-		if ip := net.ParseIP(configured); ip != nil {
-			publicIPCacheMu.Lock()
-			publicIPCache = ip.String()
-			publicIPCachedAt = time.Now()
-			publicIPCacheMu.Unlock()
-			return ip.String()
-		}
-	}
-
-	if addresses, err := net.InterfaceAddrs(); err == nil {
-		for _, addr := range addresses {
-			ip, _, err := net.ParseCIDR(addr.String())
-			if err == nil && ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() && ip.IsGlobalUnicast() {
-				if _, isSpecial := geoip.ClassifySpecial(ip); !isSpecial {
-					publicIPCacheMu.Lock()
-					publicIPCache = ip.String()
-					publicIPCachedAt = time.Now()
-					publicIPCacheMu.Unlock()
-					return ip.String()
-				}
-			}
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
-	defer cancel()
-
-	dnsEndpoints := []struct {
-		server string
-		domain string
-	}{
-		{"208.67.222.222:53", "myip.opendns.com"},
-		{"1.1.1.1:53", "whoami.cloudflare"},
-	}
-
-	for _, ep := range dnsEndpoints {
-		server := ep.server
-		resolver := &net.Resolver{
-			PreferGo: true,
-			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				d := net.Dialer{Timeout: 600 * time.Millisecond}
-				return d.DialContext(ctx, "udp", server)
-			},
-		}
-		if ips, err := resolver.LookupHost(ctx, ep.domain); err == nil && len(ips) > 0 {
-			if parsed := net.ParseIP(ips[0]); parsed != nil && parsed.IsGlobalUnicast() {
-				if _, isSpecial := geoip.ClassifySpecial(parsed); !isSpecial {
-					publicIPCacheMu.Lock()
-					publicIPCache = parsed.String()
-					publicIPCachedAt = time.Now()
-					publicIPCacheMu.Unlock()
-					return parsed.String()
-				}
-			}
-		}
-	}
-
-	return ""
 }
+
+// publicIPResult is the outcome of the local public-IP lookup.
+type publicIPResult struct {
+	IP     string
+	Source publicIPSource
+}
+
+// operatorPublicIPEnv is the only configuration source for the host's public
+// address. It is read locally and never validated against a network service.
+const operatorPublicIPEnv = "GEDEFENSE_MAP_HOST_IP"
+
+// publicIPResolver answers "what is this host's public address?" exclusively
+// from local state. GeDefense documents a zero-egress policy: neither plaintext
+// UDP-DNS (the removed FIND-WIN-023 behaviour) nor any HTTP client may be used
+// to discover the address, and a request must never block on a network timeout.
+// Therefore this type owns no network client at all.
+type publicIPResolver struct {
+	lookupEnv      func(string) string
+	interfaceAddrs func() ([]net.Addr, error)
+	// externalLookup is the removed external discovery seam. It is nil for every
+	// production resolver and discover never calls it: the field exists so the
+	// regression test can wire a function that fails the test, which proves that
+	// a reintroduced external lookup cannot slip through unnoticed.
+	externalLookup func(context.Context, string) ([]string, error)
+}
+
+// defaultPublicIPResolver is the production resolver: environment plus local
+// interface enumeration, nothing else.
+var defaultPublicIPResolver = publicIPResolver{
+	lookupEnv:      os.Getenv,
+	interfaceAddrs: net.InterfaceAddrs,
+}
+
+// discover reports the host's public address from operator configuration or a
+// local interface. Without such a source it reports unavailable (empty result);
+// it never performs an external lookup and never sleeps on a timeout.
+func (resolver publicIPResolver) discover() publicIPResult {
+	if resolver.lookupEnv != nil {
+		if configured := strings.TrimSpace(resolver.lookupEnv(operatorPublicIPEnv)); configured != "" {
+			if ip := net.ParseIP(configured); ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+				return publicIPResult{IP: ip.String(), Source: publicIPSourceOperator}
+			}
+		}
+	}
+	if resolver.interfaceAddrs != nil {
+		if addresses, err := resolver.interfaceAddrs(); err == nil {
+			for _, address := range addresses {
+				ip, _, err := net.ParseCIDR(address.String())
+				if err != nil || ip == nil || ip.IsLoopback() || ip.IsUnspecified() || !ip.IsGlobalUnicast() {
+					continue
+				}
+				// Private, carrier-grade and link-local ranges are not a public
+				// address; they are reported separately as the local interface.
+				if _, isSpecial := geoip.ClassifySpecial(ip); isSpecial {
+					continue
+				}
+				return publicIPResult{IP: ip.String(), Source: publicIPSourceInterface}
+			}
+		}
+	}
+	// Zero-Egress: no external discovery. resolver.externalLookup stays unused.
+	return publicIPResult{}
+}
+
+// publicIPStatusReason is the honest operator-facing reason for an unavailable
+// public address, rendered by the overview map.
+const publicIPStatusReason = "Keine öffentliche IP aus lokaler Konfiguration oder Schnittstelle verfügbar (Zero-Egress: keine externe Abfrage)."
 
 func (s *Server) mapOrigin() mapOrigin {
 	localIP := localOutboundIP()
@@ -251,7 +272,10 @@ func (s *Server) mapOrigin() mapOrigin {
 		internalIPStr = localIP.String()
 	}
 
-	externalIPStr := discoverPublicIP()
+	// The public address is never discovered through the network; it comes from
+	// operator configuration or a public interface address that already exists.
+	resolved := defaultPublicIPResolver.discover()
+	externalIPStr := resolved.IP
 
 	origin := mapOrigin{
 		InternalIP: internalIPStr,
@@ -259,19 +283,14 @@ func (s *Server) mapOrigin() mapOrigin {
 	}
 
 	targetIPStr := externalIPStr
-	sourceLabel := "public-dns"
-	if configured := strings.TrimSpace(os.Getenv("GEDEFENSE_MAP_HOST_IP")); configured != "" && externalIPStr == configured {
-		sourceLabel = "operator-configured"
-	} else if externalIPStr != "" && targetIPStr == internalIPStr {
-		sourceLabel = "public-interface"
-	}
+	sourceLabel := resolved.Source.label()
 	if targetIPStr == "" {
 		targetIPStr = internalIPStr
 		sourceLabel = "local-interface"
 	}
 
 	if targetIPStr == "" {
-		origin.Reason = "Keine Netzwerkschnittstelle ermittelt"
+		origin.Reason = publicIPStatusReason
 		return origin
 	}
 

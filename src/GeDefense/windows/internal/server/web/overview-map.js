@@ -4,6 +4,7 @@ import { getOverviewThreatMap } from './api.js';
 import { t, locale } from './overview-map-strings.js';
 import { normalizePayload, telemetryRows, stateFor, LIMITS } from './overview-map-data.js';
 import { OverviewMapRenderer } from './overview-map-renderer.js';
+import { LANGUAGE_EVENT } from './i18n.js';
 
 let renderer = null;
 let payload = null;
@@ -290,7 +291,7 @@ export function startOverviewThreatMap() {
   panel.addEventListener('pointerleave', () => focusIP(selectedIP), options);
   panel.addEventListener('keydown', event => { if (event.key === 'Escape') hideSourceCard(); }, options);
   document.addEventListener('visibilitychange', syncActivity, options);
-  document.addEventListener('gedefense:language', () => {
+  document.addEventListener(LANGUAGE_EVENT, () => {
     const currentStatus = $('overviewMapStatus').dataset.state;
     renderMetadata(); renderFeed(true);
     status(currentStatus || 'loading');

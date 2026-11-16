@@ -101,6 +101,15 @@ type Ledger struct {
 	checkpointFileBytes int64
 	checkpoints         []checkpointRecord
 	archives            []ledgerArchive
+	// checkpointStorePresent records whether a checkpoint store file existed when
+	// it was last loaded. checkpointProblem carries the bounded reason why a
+	// present store could not be trusted. Both are used for the FIND-WIN-016
+	// fail-closed message and are never used to skip verification.
+	checkpointStorePresent bool
+	checkpointProblem      string
+	// highWater is the authenticated tip mirror written by highwater.go. It is
+	// loaded on Open/Verify and enforced after the chain and witness verified.
+	highWater highWaterState
 
 	appendFailures uint64
 	lastError      error
@@ -123,30 +132,52 @@ func Open(path, keyPath string) (*Ledger, error) {
 // OpenWithOptions opens the ledger with explicit options. A configured witness
 // path must be absolute and outside the evidence data root; the configured
 // witness is authenticated before the ledger is returned.
+//
+// FIND-WIN-016: a non-empty chain without an intact signed checkpoint, or a
+// chain tip behind the authenticated high-water anchor, fails closed with a
+// typed error. Neither situation is "repaired" by signing a fresh tip; the
+// explicit operator path is RecoverCheckpointAnchors (recovery.go).
 func OpenWithOptions(path, keyPath string, options Options) (*Ledger, error) {
+	ledger, release, err := prepareLedger(path, keyPath, options)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	if err := ledger.loadAnchorsAndVerifyLocked(); err != nil {
+		return nil, err
+	}
+	return ledger, nil
+}
+
+// prepareLedger validates the paths, takes the cross-process writer lock, loads
+// the protected key material and returns an unverified ledger. The caller must
+// invoke the returned release function under all outcomes.
+func prepareLedger(path, keyPath string, options Options) (*Ledger, func(), error) {
 	if !filepath.IsAbs(path) || !filepath.IsAbs(keyPath) {
-		return nil, errors.New("evidence paths must be absolute")
+		return nil, nil, errors.New("evidence paths must be absolute")
 	}
 	directory := filepath.Dir(path)
 	witnessPath, err := validateWitnessPath(options.WitnessPath, directory)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	lockFile, err := acquireWriterLock(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer releaseWriterLock(lockFile)
+	release := func() { releaseWriterLock(lockFile) }
 	key, err := secretfs.LoadOrCreateRawKey(keyPath, ledgerHMACKeyBytes)
 	if err != nil {
-		return nil, err
+		release()
+		return nil, nil, err
 	}
 	keyRestriction, err := secretfs.HardenFile(keyPath)
 	if err != nil {
-		return nil, fmt.Errorf("evidence key access control: %w", err)
+		release()
+		return nil, nil, fmt.Errorf("evidence key access control: %w", err)
 	}
 	// The signing seed lives in a dedicated protected directory. This is the
 	// DP-FIND-001 separation: even when the installer's data-root grant is
@@ -154,9 +185,10 @@ func OpenWithOptions(path, keyPath string, options Options) (*Ledger, error) {
 	// SYSTEM/Administrators-only DACL.
 	signingKey, _, fingerprint, err := secretfs.LoadOrCreateEd25519Seed(filepath.Join(directory, "keys", "evidence-signing.key"))
 	if err != nil {
-		return nil, err
+		release()
+		return nil, nil, err
 	}
-	ledger := &Ledger{
+	return &Ledger{
 		path:                filepath.Clean(path),
 		dir:                 directory,
 		key:                 key,
@@ -165,23 +197,40 @@ func OpenWithOptions(path, keyPath string, options Options) (*Ledger, error) {
 		checkpointPath:      filepath.Clean(path) + ".checkpoints.jsonl",
 		keyRestriction:      keyRestriction,
 		witnessPath:         witnessPath,
+	}, release, nil
+}
+
+// loadAnchorsAndVerifyLocked performs the complete Open sequence: load the
+// anchors, verify the HMAC chain, the witness and the fail-closed anchor rules,
+// then publish the signed tip checkpoint and the authenticated high-water mirror
+// for the verified tip. It must run under the writer lock.
+func (l *Ledger) loadAnchorsAndVerifyLocked() error {
+	l.loadCheckpoints()
+	if err := l.loadArchives(); err != nil {
+		return err
 	}
-	ledger.loadCheckpoints()
-	if err := ledger.loadArchives(); err != nil {
-		return nil, err
+	l.loadJournalState()
+	l.loadHighWaterLocked()
+	if err := l.verifyLocked(); err != nil {
+		return err
 	}
-	ledger.loadJournalState()
-	if err := ledger.verifyLocked(); err != nil {
-		return nil, err
+	if err := l.verifyWitnessLocked(); err != nil {
+		return err
 	}
-	if err := ledger.verifyWitnessLocked(); err != nil {
-		return nil, err
+	// FIND-WIN-016: the anchor rules run after the witness so an ahead witness
+	// still produces the specific rollback diagnosis (its error text is part of
+	// the DP-FIND-012 contract).
+	if err := l.verifyAnchorStateLocked(); err != nil {
+		return err
 	}
-	if err := ledger.ensureTipCheckpointLocked(); err != nil {
-		return nil, err
+	if err := l.ensureTipCheckpointLocked(); err != nil {
+		return err
 	}
-	ledger.refreshWitnessLocked()
-	return ledger, nil
+	if err := l.persistHighWaterLocked(); err != nil {
+		return err
+	}
+	l.refreshWitnessLocked()
+	return nil
 }
 
 func (l *Ledger) Append(kind, action, result string) error {
@@ -252,7 +301,16 @@ func (l *Ledger) appendLocked(kind, action, result string) error {
 	l.fileBytes += int64(len(raw)) + 1
 	l.sequence = record.Sequence
 	l.lastMAC = record.MAC
+	// FIND-WIN-016: a non-empty chain must never exist without at least one
+	// intact signed checkpoint, otherwise Open()/Verify() fail closed. The very
+	// first record therefore always anchors a checkpoint; later records batch at
+	// the configured interval. The same rule retries the anchor after a failed
+	// checkpoint write instead of leaving the ledger unanchored forever.
+	checkpointDue := l.sequence == 1 || len(l.checkpoints) == 0
 	if appendCheckpointInterval > 0 && l.sequence%appendCheckpointInterval == 0 {
+		checkpointDue = true
+	}
+	if checkpointDue {
 		if err := l.appendCheckpointLocked(checkpointRecord{Kind: checkpointKindTip, Sequence: l.sequence, LastMAC: l.lastMAC}); err != nil {
 			l.lastError = fmt.Errorf("evidence checkpoint: %w", err)
 		}
@@ -263,7 +321,11 @@ func (l *Ledger) appendLocked(kind, action, result string) error {
 // refreshLocked reconciles the cached chain tip with the on-disk files. The
 // single-writer lock makes this a cheap operation; a differing file size means
 // another run archived or appended, so the tip is re-read and authenticated.
+// FIND-WIN-016: a reconciliation that moves the tip backwards (live file deleted
+// or truncated while the service runs) is rejected instead of silently starting
+// a new chain on top of the shortened file.
 func (l *Ledger) refreshLocked() error {
+	previousSequence := l.sequence
 	info, err := os.Stat(l.path)
 	if errors.Is(err, os.ErrNotExist) {
 		l.sequence = 0
@@ -288,14 +350,20 @@ func (l *Ledger) refreshLocked() error {
 		}
 	}
 	if err != nil { // file still absent
-		return l.refreshFromArchivesLocked()
+		if err := l.refreshFromArchivesLocked(); err != nil {
+			return err
+		}
+		return l.verifyRuntimeTipAgainstAnchorsLocked(previousSequence)
 	}
 	lines, err := readNewestLines(l.path, 1)
 	if err != nil {
 		return err
 	}
 	if len(lines) == 0 {
-		return l.refreshFromArchivesLocked()
+		if err := l.refreshFromArchivesLocked(); err != nil {
+			return err
+		}
+		return l.verifyRuntimeTipAgainstAnchorsLocked(previousSequence)
 	}
 	record, err := decodeRecord(lines[0])
 	if err != nil {
@@ -312,7 +380,7 @@ func (l *Ledger) refreshLocked() error {
 		l.fileFirstSequence = l.archives[len(l.archives)-1].LastSequence + 1
 	}
 	l.refreshRetainedFromLocked()
-	return nil
+	return l.verifyRuntimeTipAgainstAnchorsLocked(previousSequence)
 }
 
 func (l *Ledger) refreshRetainedFromLocked() {
@@ -524,12 +592,18 @@ func (l *Ledger) Verify() error {
 	defer l.mu.Unlock()
 	err := l.withWriterLock(func() error {
 		l.loadCheckpoints()
+		l.loadHighWaterLocked()
 		if err := l.verifyLocked(); err != nil {
 			return err
 		}
 		// A configured but corrupt witness is a failed verification, not a
 		// silently ignored side condition.
-		return l.verifyWitnessLocked()
+		if err := l.verifyWitnessLocked(); err != nil {
+			return err
+		}
+		// FIND-WIN-016: deleting the checkpoint store or replacing the live file
+		// while the service runs must fail verification just like a failed Open.
+		return l.verifyAnchorStateLocked()
 	})
 	if err != nil {
 		l.lastError = err
@@ -757,18 +831,22 @@ func (l *Ledger) loadArchives() error {
 }
 
 func (l *Ledger) loadCheckpoints() {
+	l.checkpoints = nil
+	l.checkpointStorePresent = false
+	l.checkpointProblem = ""
 	info, err := os.Lstat(l.checkpointPath)
 	if errors.Is(err, os.ErrNotExist) {
-		l.checkpoints = nil
 		l.checkpointFileBytes = 0
 		return
 	}
 	if err != nil {
+		l.checkpointStorePresent = true
+		l.checkpointProblem = "the checkpoint store is unreadable: " + boundedErrorText(err)
 		l.lastError = fmt.Errorf("evidence checkpoint store: %w", err)
-		l.checkpoints = nil
 		l.checkpointFileBytes = 0
 		return
 	}
+	l.checkpointStorePresent = true
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		if quarantineErr := l.quarantineCheckpointStore("not a regular file"); quarantineErr != nil {
 			l.lastError = quarantineErr
@@ -785,8 +863,8 @@ func (l *Ledger) loadCheckpoints() {
 	// aside: Windows refuses to rename a file that still has an open handle.
 	payload, err := os.ReadFile(l.checkpointPath)
 	if err != nil {
+		l.checkpointProblem = "the checkpoint store is unreadable: " + boundedErrorText(err)
 		l.lastError = err
-		l.checkpoints = nil
 		return
 	}
 	scanner := bufio.NewScanner(bytes.NewReader(payload))
@@ -829,22 +907,28 @@ func (l *Ledger) loadCheckpoints() {
 	if len(checkpoints) > maxCheckpointEntriesInMemory {
 		checkpoints = checkpoints[len(checkpoints)-maxCheckpointEntriesInMemory:]
 	}
+	if len(checkpoints) == 0 {
+		l.checkpointProblem = "the checkpoint store contains no intact signed checkpoint"
+	}
 	l.checkpoints = checkpoints
 	l.checkpointFileBytes = info.Size()
 }
 
 // quarantineCheckpointStore preserves a damaged checkpoint store unchanged for
-// forensics and starts a fresh store. It intentionally does not mark the whole
-// ledger bad: the HMAC chain is verified independently and a new signed tip
-// checkpoint is written after verification.
+// forensics. FIND-WIN-016: it deliberately does NOT start a fresh store. Once the
+// evidence chain is non-empty, Open()/Verify() fail closed with
+// ErrEvidenceCheckpointAnchorMissing; a fresh signed tip is only written by the
+// explicit operator recovery path (RecoverCheckpointAnchors).
 func (l *Ledger) quarantineCheckpointStore(reason string) error {
 	stamp := time.Now().UTC().Format("20060102T150405Z")
 	target := fmt.Sprintf("%s.corrupt-%s", l.checkpointPath, stamp)
 	if err := os.Rename(l.checkpointPath, target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		l.checkpointProblem = "the checkpoint store could not be quarantined: " + boundedErrorText(err)
 		return errors.Join(errors.New("evidence checkpoint store rejected: "+reason), err)
 	}
 	l.checkpoints = nil
 	l.checkpointFileBytes = 0
+	l.checkpointProblem = "the checkpoint store was rejected: " + reason
 	return errors.New("evidence checkpoint store rejected: " + reason)
 }
 
@@ -891,6 +975,12 @@ func (l *Ledger) appendCheckpointLocked(partial checkpointRecord) error {
 	// itself is durable. A failed witness write degrades the independent anchor
 	// (visible through LastError/Witness) but never drops local evidence.
 	l.updateWitnessLocked()
+	// FIND-WIN-016: mirror the anchored tip into the authenticated high-water
+	// record. A failed write degrades rollback detection (surfaced via LastError)
+	// but never drops the checkpoint or the evidence record itself.
+	if err := l.persistHighWaterLocked(); err != nil {
+		l.lastError = fmt.Errorf("evidence high-water: %w", err)
+	}
 	return nil
 }
 
@@ -1019,6 +1109,7 @@ func (l *Ledger) Close() error {
 	defer l.mu.Unlock()
 	l.checkpoints = nil
 	l.archives = nil
+	l.highWater = highWaterState{}
 	return nil
 }
 

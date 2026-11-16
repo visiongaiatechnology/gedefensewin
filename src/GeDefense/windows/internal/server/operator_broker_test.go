@@ -4,7 +4,18 @@ package server
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
+)
+
+const (
+	// testCenterImage/testTrayImage live inside the administrator-owned install
+	// tree. The test fixtures model the verdict the Windows resolver computes
+	// (trusted tree + Authenticode); the real derivation is exercised by
+	// operatorPeerFromPID on Windows.
+	testCenterImage  = `C:\Program Files\VGT\GeDefense\bin\GeDefenseCenter.exe`
+	testTrayImage    = `C:\Program Files\VGT\GeDefense\bin\GeDefenseTray.exe`
+	testForeignImage = `C:\Users\Public\evil.exe`
 )
 
 func withBrokerHeader() requestOption {
@@ -19,7 +30,10 @@ func withReplayValue(id string) requestOption {
 	}
 }
 
-func brokerPeerFixtures(operatorAuthorised bool) func(*Server) {
+// brokerPeerResolver builds the deterministic peer seam. It models exactly the
+// kernel/token verdict the production resolver returns: process image path, tree
+// trust, Authenticode state and token elevation.
+func brokerPeerResolver(imagePath string, operatorAuthorised, elevated, trusted, signed bool) func(*Server) {
 	return func(s *Server) {
 		s.peerPID = func(string) (uint32, error) { return 4242, nil }
 		s.operatorPeer = func(pid uint32) (operatorPeer, error) {
@@ -27,18 +41,34 @@ func brokerPeerFixtures(operatorAuthorised bool) func(*Server) {
 				return operatorPeer{}, errors.New("unexpected peer pid")
 			}
 			return operatorPeer{
-				PID:      pid,
-				Account:  `VGT-TEST\operator`,
-				SID:      "S-1-5-21-1111-2222-3333-1001",
-				Operator: operatorAuthorised,
+				PID:                    pid,
+				Account:                `VGT-TEST\operator`,
+				SID:                    "S-1-5-21-1111-2222-3333-1001",
+				Operator:               operatorAuthorised,
+				Elevated:               elevated,
+				ImagePath:              imagePath,
+				ImageTrusted:           trusted,
+				ImageSignatureVerified: signed,
 			}, nil
 		}
 	}
 }
 
+// centreBrokerFixture models an elevated, signed Center binary in the install
+// tree (the full-authority launcher).
+func centreBrokerFixture(operatorAuthorised bool) func(*Server) {
+	return brokerPeerResolver(testCenterImage, operatorAuthorised, true, true, true)
+}
+
+// trayBrokerFixture models a signed Tray binary in the install tree. The Tray
+// never runs elevated and must never receive more than read authority.
+func trayBrokerFixture(operatorAuthorised bool) func(*Server) {
+	return brokerPeerResolver(testTrayImage, operatorAuthorised, false, true, true)
+}
+
 func TestOperatorBrokerMintsFullScopeCenterSession(t *testing.T) {
 	server, handler := newSecurityTestServer(t)
-	brokerPeerFixtures(true)(server)
+	centreBrokerFixture(true)(server)
 	record := callHandler(handler, http.MethodPost, "/api/v1/session/operator",
 		`{"client":"center-launcher"}`, withBrokerHeader(), withReplayID())
 	if record.Code != http.StatusCreated {
@@ -77,7 +107,7 @@ func TestOperatorBrokerMintsFullScopeCenterSession(t *testing.T) {
 
 func TestOperatorBrokerTraySessionIsReadOnly(t *testing.T) {
 	server, handler := newSecurityTestServer(t)
-	brokerPeerFixtures(true)(server)
+	trayBrokerFixture(true)(server)
 	record := callHandler(handler, http.MethodPost, "/api/v1/session/operator",
 		`{"client":"tray"}`, withBrokerHeader(), withReplayID())
 	if record.Code != http.StatusCreated {
@@ -111,8 +141,8 @@ func TestOperatorBrokerFailsClosed(t *testing.T) {
 		configure(server)
 		return handler
 	}
-	authorised := brokerPeerFixtures(true)
-	denied := brokerPeerFixtures(false)
+	authorised := centreBrokerFixture(true)
+	denied := centreBrokerFixture(false)
 	validBody := `{"client":"center-launcher"}`
 
 	tests := []struct {
@@ -149,9 +179,140 @@ func TestOperatorBrokerFailsClosed(t *testing.T) {
 	}
 }
 
+// TestOperatorBrokerRejectsUntrustedCallerImage is the FIND-WIN-006 regression:
+// an arbitrary user process (foreign path, unsigned/unverified image or a client
+// role that does not match the actual signed binary) must never receive a token.
+func TestOperatorBrokerRejectsUntrustedCallerImage(t *testing.T) {
+	cases := []struct {
+		name   string
+		client string
+		config func(*Server)
+	}{
+		{"foreign process image", operatorBrokerCenter, brokerPeerResolver(testForeignImage, true, true, false, false)},
+		{"trusted tree but dev-unsigned", operatorBrokerCenter, brokerPeerResolver(testCenterImage, true, true, true, false)},
+		{"not tree-trusted", operatorBrokerCenter, brokerPeerResolver(`C:\Users\Public\GeDefenseCenter.exe`, true, true, false, true)},
+		{"center role claimed by tray binary", operatorBrokerCenter, trayBrokerFixture(true)},
+		{"tray role claimed by center binary", operatorBrokerTray, centreBrokerFixture(true)},
+		{"missing image path", operatorBrokerCenter, brokerPeerResolver("", true, true, false, false)},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server, handler := newSecurityTestServer(t)
+			testCase.config(server)
+			record := callHandler(handler, http.MethodPost, "/api/v1/session/operator",
+				`{"client":"`+testCase.client+`"}`, withBrokerHeader(), withReplayID())
+			if record.Code != http.StatusForbidden {
+				t.Fatalf("untrusted caller status = %d, want 403: %s", record.Code, record.Body.String())
+			}
+			if payload := decodeBody(t, record); payload["token"] != nil {
+				t.Fatalf("untrusted caller received a session token: %v", payload)
+			}
+		})
+	}
+}
+
+// TestOperatorBrokerScopeBinding proves the client header cannot upgrade scope:
+// the client role is bound exactly to the verified binary (a Center process
+// cannot even claim the smaller Tray role), and a scope field in the body is
+// rejected outright.
+func TestOperatorBrokerScopeBinding(t *testing.T) {
+	server, handler := newSecurityTestServer(t)
+	centreBrokerFixture(true)(server)
+	crossRole := callHandler(handler, http.MethodPost, "/api/v1/session/operator",
+		`{"client":"tray"}`, withBrokerHeader(), withReplayID())
+	if crossRole.Code != http.StatusForbidden {
+		t.Fatalf("center binary claiming the tray role status = %d, want 403: %s", crossRole.Code, crossRole.Body.String())
+	}
+	if payload := decodeBody(t, crossRole); payload["token"] != nil {
+		t.Fatalf("cross-role broker request received a token: %v", payload)
+	}
+	escalation := callHandler(handler, http.MethodPost, "/api/v1/session/operator",
+		`{"client":"center-launcher","scopes":["read","operate","policy","window"]}`,
+		withBrokerHeader(), withReplayID())
+	if escalation.Code != http.StatusBadRequest {
+		t.Fatalf("broker accepted a client-supplied scope list: %d %s", escalation.Code, escalation.Body.String())
+	}
+}
+
+// TestOperatorBrokerNonElevatedCenterLosesPolicyScope pins the elevation gate:
+// a medium-IL Center session is bounded to read+operate and cannot reach policy
+// mutations or window registration.
+func TestOperatorBrokerNonElevatedCenterLosesPolicyScope(t *testing.T) {
+	server, handler := newSecurityTestServer(t)
+	brokerPeerResolver(testCenterImage, true, false, true, true)(server)
+	record := callHandler(handler, http.MethodPost, "/api/v1/session/operator",
+		`{"client":"center-launcher"}`, withBrokerHeader(), withReplayID())
+	if record.Code != http.StatusCreated {
+		t.Fatalf("non-elevated center status = %d: %s", record.Code, record.Body.String())
+	}
+	payload := decodeBody(t, record)
+	token, _ := payload["token"].(string)
+	scopes, _ := payload["scopes"].([]any)
+	if len(scopes) != 2 || scopes[0] != "read" || scopes[1] != "operate" {
+		t.Fatalf("non-elevated center must be bounded to read+operate: %v", scopes)
+	}
+	if denied := callHandler(handler, http.MethodPost, "/api/v1/hardening/rollback",
+		`{"confirmation":"ROLLBACK HARDENING","reason":"non-elevated broker session escalation attempt"}`,
+		withBearer(token), withReplayID()); denied.Code != http.StatusForbidden {
+		t.Fatalf("non-elevated center session reached a policy mutation: %d %s", denied.Code, denied.Body.String())
+	}
+}
+
+func TestOperatorBrokerRejectedAttemptsDoNotLockOutOperator(t *testing.T) {
+	server, handler := newSecurityTestServer(t)
+	brokerPeerResolver(testCenterImage, false, true, true, true)(server)
+	for attempt := 0; attempt < 5; attempt++ {
+		record := callHandler(handler, http.MethodPost, "/api/v1/session/operator",
+			`{"client":"center-launcher"}`, withBrokerHeader(), withReplayID())
+		if record.Code != http.StatusForbidden {
+			t.Fatalf("unauthorised attempt %d status = %d, want 403", attempt, record.Code)
+		}
+	}
+	// The legitimate operator must not be rate limited by the rejected attempts.
+	centreBrokerFixture(true)(server)
+	allowed := callHandler(handler, http.MethodPost, "/api/v1/session/operator",
+		`{"client":"center-launcher"}`, withBrokerHeader(), withReplayID())
+	if allowed.Code != http.StatusCreated {
+		t.Fatalf("legitimate operator was locked out after rejected attempts: %d %s", allowed.Code, allowed.Body.String())
+	}
+}
+
+func TestOperatorPeerImageAuthorisationPredicate(t *testing.T) {
+	signed := operatorPeer{ImagePath: testCenterImage, ImageTrusted: true, ImageSignatureVerified: true}
+	tests := []struct {
+		name   string
+		peer   operatorPeer
+		client string
+		want   bool
+	}{
+		{"trusted signed center", signed, operatorBrokerCenter, true},
+		{"trusted signed center as tray", signed, operatorBrokerTray, false},
+		{"missing image", operatorPeer{ImageTrusted: true, ImageSignatureVerified: true}, operatorBrokerCenter, false},
+		{"untrusted tree", operatorPeer{ImagePath: testForeignImage, ImageTrusted: false, ImageSignatureVerified: true}, operatorBrokerCenter, false},
+		{"unsigned image", operatorPeer{ImagePath: testCenterImage, ImageTrusted: true, ImageSignatureVerified: false}, operatorBrokerCenter, false},
+		{"parent-directory escape", operatorPeer{ImagePath: `C:\Program Files\VGT\GeDefenseEvil\GeDefenseCenter.exe`, ImageTrusted: false, ImageSignatureVerified: true}, operatorBrokerCenter, false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := testCase.peer.imageAuthorisedFor(testCase.client); got != testCase.want {
+				t.Fatalf("imageAuthorisedFor(%s) = %t, want %t", testCase.client, got, testCase.want)
+			}
+		})
+	}
+	if scopes := operatorScopesFor(operatorBrokerTray, operatorPeer{Elevated: true}); scopes != scopeRead {
+		t.Fatalf("tray scopes = %v, want read only", scopes.names())
+	}
+	if scopes := operatorScopesFor(operatorBrokerCenter, operatorPeer{}); scopes != scopeRead|scopeOperate {
+		t.Fatalf("non-elevated center scopes = %v, want read+operate", scopes.names())
+	}
+	if scopes := operatorScopesFor(operatorBrokerCenter, operatorPeer{Elevated: true}); scopes != scopeAll {
+		t.Fatalf("elevated center scopes = %v, want all", scopes.names())
+	}
+}
+
 func TestOperatorBrokerReplayIsRejected(t *testing.T) {
 	server, handler := newSecurityTestServer(t)
-	brokerPeerFixtures(true)(server)
+	centreBrokerFixture(true)(server)
 	requestID := "0a1b2c3d-4e5f-4a6b-8c7d-000000000123"
 	first := callHandler(handler, http.MethodPost, "/api/v1/session/operator",
 		`{"client":"center-launcher"}`, withBrokerHeader(), withReplayValue(requestID))
@@ -167,7 +328,7 @@ func TestOperatorBrokerReplayIsRejected(t *testing.T) {
 
 func TestOperatorBrokerRateLimitApplies(t *testing.T) {
 	server, handler := newSecurityTestServer(t)
-	brokerPeerFixtures(true)(server)
+	trayBrokerFixture(true)(server)
 	lastStatus := 0
 	for attempt := 0; attempt < 12; attempt++ {
 		record := callHandler(handler, http.MethodPost, "/api/v1/session/operator",
@@ -179,6 +340,11 @@ func TestOperatorBrokerRateLimitApplies(t *testing.T) {
 	}
 	if lastStatus != http.StatusTooManyRequests {
 		t.Fatalf("broker rate limit did not engage, last status %d", lastStatus)
+	}
+	// The authorized bucket must be a real budget, not an unauthorised-request
+	// rejection: every earlier attempt was created successfully.
+	if lastStatus == http.StatusForbidden {
+		t.Fatal("authorized broker requests were rejected as unauthorized")
 	}
 }
 
@@ -194,5 +360,16 @@ func TestOperatorPeerAuthorisationPredicate(t *testing.T) {
 	}
 	if (operatorPeer{Account: "x"}).authorised() {
 		t.Fatal("plain account must not be authorised")
+	}
+}
+
+// TestOperatorBrokerRequestRoleBinding keeps the exact client identifiers the
+// shipped operatorclient uses; a rename would silently break Center/Tray.
+func TestOperatorBrokerRequestRoleBinding(t *testing.T) {
+	if operatorBrokerCenter != "center-launcher" || operatorBrokerTray != "tray" {
+		t.Fatalf("broker client identifiers changed: center=%q tray=%q", operatorBrokerCenter, operatorBrokerTray)
+	}
+	if !strings.HasSuffix(operatorCenterExecutable, ".exe") || !strings.HasSuffix(operatorTrayExecutable, ".exe") {
+		t.Fatalf("executable bindings are not Windows images: %q %q", operatorCenterExecutable, operatorTrayExecutable)
 	}
 }

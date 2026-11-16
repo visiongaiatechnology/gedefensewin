@@ -201,7 +201,8 @@ func assertSecurityHeaders(t *testing.T, response *httptest.ResponseRecorder) {
 }
 
 func TestReplayIDIsMandatoryOnEveryMutationPath(t *testing.T) {
-	_, handler := newSecurityTestServer(t)
+	server, handler := newSecurityTestServer(t)
+	server.peerPID = func(string) (uint32, error) { return 4242, nil }
 	cases := []struct {
 		name string
 		path string
@@ -216,6 +217,15 @@ func TestReplayIDIsMandatoryOnEveryMutationPath(t *testing.T) {
 			options := []requestOption{withMaster()}
 			if testCase.name == "public exchange" {
 				options = []requestOption{withOrigin("http://127.0.0.1:17831")}
+				// The exchange binds the request to a registered browser process
+				// before it consumes the replay guard (FIND-WIN-007), so the
+				// process expectation must exist for the missing-id rejection to
+				// be a replay decision instead of an unauthenticated 401.
+				register := callHandler(handler, http.MethodPost, "/api/v1/session/register-browser",
+					`{"pid":4242}`, withMaster(), withReplayID())
+				if register.Code != http.StatusCreated {
+					t.Fatalf("register status=%d body=%s", register.Code, register.Body.String())
+				}
 			}
 			response := callHandler(handler, http.MethodPost, testCase.path, testCase.body, options...)
 			if response.Code != http.StatusConflict {

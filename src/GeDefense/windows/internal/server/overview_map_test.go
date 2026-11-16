@@ -2,9 +2,11 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/geoip"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/kinetic"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/mhx"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/threatintel"
@@ -108,6 +111,134 @@ func TestOverviewMapUsesRealObservationsAndCorrelationContext(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "geoip.csv") || strings.Contains(response.Body.String(), `"last_error":`) {
 		t.Fatal("internal CSV path leaked")
+	}
+}
+
+func TestPublicIPResolverUsesOnlyLocalSources(t *testing.T) {
+	externalCalls := 0
+	newResolver := func(environment map[string]string, addresses []net.Addr, addressErr error) publicIPResolver {
+		return publicIPResolver{
+			lookupEnv:      func(name string) string { return environment[name] },
+			interfaceAddrs: func() ([]net.Addr, error) { return addresses, addressErr },
+			externalLookup: func(context.Context, string) ([]string, error) {
+				externalCalls++
+				return []string{"198.51.100.7"}, nil
+			},
+		}
+	}
+	interfaceAddress := func(cidr string) net.Addr {
+		ip, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			t.Fatalf("invalid test interface address %q: %v", cidr, err)
+		}
+		network.IP = ip
+		return network
+	}
+
+	tests := []struct {
+		name        string
+		environment map[string]string
+		addresses   []net.Addr
+		addressErr  error
+		wantIP      string
+		wantSource  publicIPSource
+	}{
+		{
+			name:        "operator configuration wins",
+			environment: map[string]string{operatorPublicIPEnv: " 8.8.8.8 "},
+			addresses:   []net.Addr{interfaceAddress("1.1.1.1/24")},
+			wantIP:      "8.8.8.8",
+			wantSource:  publicIPSourceOperator,
+		},
+		{
+			name:       "public interface address",
+			addresses:  []net.Addr{interfaceAddress("1.1.1.1/24")},
+			wantIP:     "1.1.1.1",
+			wantSource: publicIPSourceInterface,
+		},
+		{
+			name:      "private interface is not a public address",
+			addresses: []net.Addr{interfaceAddress("127.0.0.1/8"), interfaceAddress("192.168.10.20/24")},
+		},
+		{
+			name: "no configured source",
+		},
+		{
+			name:       "interface enumeration failure",
+			addressErr: fmt.Errorf("enumeration unavailable"),
+		},
+		{
+			name:        "invalid operator value falls back to the interface",
+			environment: map[string]string{operatorPublicIPEnv: "not-an-ip"},
+			addresses:   []net.Addr{interfaceAddress("1.1.1.1/24")},
+			wantIP:      "1.1.1.1",
+			wantSource:  publicIPSourceInterface,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := newResolver(test.environment, test.addresses, test.addressErr).discover()
+			if result.IP != test.wantIP || result.Source != test.wantSource {
+				t.Fatalf("discover() = {%q, %v}, want {%q, %v}", result.IP, result.Source, test.wantIP, test.wantSource)
+			}
+			if result.Source.label() != test.wantSource.label() {
+				t.Fatalf("source label mismatch: %q", result.Source.label())
+			}
+		})
+	}
+	if externalCalls != 0 {
+		t.Fatalf("local resolution performed %d external lookup(s); zero-egress forbids them", externalCalls)
+	}
+}
+
+// TestMapOriginNeverReportsDNSDiscovery pins the honest API contract: the origin
+// may only be operator-configured, a local public interface or the local
+// interface. There is no "public-dns" source and no silent network attempt.
+func TestMapOriginNeverReportsDNSDiscovery(t *testing.T) {
+	t.Setenv(operatorPublicIPEnv, "8.8.8.8")
+	server := &Server{geo: geoip.NewGeoResolver(filepath.Join(t.TempDir(), "missing.csv"))}
+	origin := server.mapOrigin()
+	if origin.Source != "operator-configured" || origin.ExternalIP != "8.8.8.8" {
+		t.Fatalf("operator-configured public IP was not used: %+v", origin)
+	}
+	if origin.Source == "public-dns" {
+		t.Fatal("map origin still claims a public DNS discovery source")
+	}
+
+	t.Setenv(operatorPublicIPEnv, "")
+	origin = server.mapOrigin()
+	if origin.Source == "public-dns" {
+		t.Fatal("map origin still claims a public DNS discovery source")
+	}
+	if origin.ExternalIP != "" && origin.Source != "public-interface" {
+		t.Fatalf("unconfigured external IP has an untrusted source: %+v", origin)
+	}
+	if origin.IP == "" && strings.TrimSpace(origin.Reason) == "" {
+		t.Fatalf("unavailable origin is not explained: %+v", origin)
+	}
+}
+
+// TestOverviewMapSourceHasNoPlaintextDNSEgress is a static regression guard for
+// FIND-WIN-023: the removed plaintext UDP-DNS discovery must not come back.
+func TestOverviewMapSourceHasNoPlaintextDNSEgress(t *testing.T) {
+	source, err := os.ReadFile("overview_map.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	forbidden := []string{
+		"myip.opendns.com",
+		"whoami.cloudflare",
+		"208.67.222.222:53",
+		"1.1.1.1:53",
+		"net.Resolver",
+		"LookupHost",
+		"PreferGo",
+		"public-dns",
+	}
+	for _, fragment := range forbidden {
+		if strings.Contains(string(source), fragment) {
+			t.Fatalf("overview_map.go reintroduced external discovery fragment %q", fragment)
+		}
 	}
 }
 

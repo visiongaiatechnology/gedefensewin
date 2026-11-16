@@ -1,5 +1,5 @@
 ﻿# VGT GeDefense Windows official release toolchain
-go=1.26.10
-go_windows_amd64_zip_sha256=7ecd2d7260e82c59bcbd7f1077a07cee2dea607295b858df67195a1e4e09629b
+go=1.26.11
+go_windows_amd64_zip_sha256=71ae086f0137e665f855a811cc119152b6a783e0bbc1b906e709f46d80141eb0
 powershell=5.1
 

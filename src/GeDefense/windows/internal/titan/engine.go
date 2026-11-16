@@ -44,6 +44,17 @@ type remoteObservation struct {
 	LocalPort     uint16
 }
 
+// KillerdomTarget is a kinetic-response request handed to the registered
+// bridge. It carries the identity evidence Titan actually observed instead of a
+// bare PID: without creation time and image path the responder cannot prove
+// that the PID still names the process that caused the compromise observation.
+type KillerdomTarget struct {
+	PID              uint32
+	CreationUnixNano int64
+	ImagePath        string
+	Reason           string
+}
+
 // Engine owns Titan's collection lifecycle, policy evaluation and evidence.
 // It does not terminate processes and it does not claim file-to-process
 // attribution that the platform sensors cannot prove.
@@ -77,7 +88,7 @@ type Engine struct {
 	sensorWG  sync.WaitGroup
 
 	bridgeMu        sync.RWMutex
-	killerdomBridge func(pid uint32, reason string) error
+	killerdomBridge func(KillerdomTarget) error
 }
 
 func New(root, version string, ledger *evidence.Ledger) (*Engine, error) {
@@ -98,16 +109,27 @@ func New(root, version string, ledger *evidence.Ledger) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	vault, err := OpenVault(filepath.Join(root, "quarantine"))
-	if err != nil {
+	vault, vaultErr := OpenVault(filepath.Join(root, "quarantine"))
+	var vaultIntegrity *VaultMetadataIntegrityError
+	if vaultErr != nil && !errors.As(vaultErr, &vaultIntegrity) {
 		_ = journal.Close()
-		return nil, err
+		return nil, vaultErr
 	}
 	engine := &Engine{
 		root: root, version: version, policy: policy, journal: journal, vault: vault,
 		events: make(chan Observation, maxEventQueue), sensors: make(map[string]SensorStatus),
 		boot:             BootTrust{Detail: "Noch keine Boot-Messung verfügbar."},
 		notificationSeen: make(map[string]time.Time),
+	}
+	if vaultIntegrity != nil {
+		// The service must keep protecting the host even when one quarantine
+		// metadata record was tampered with. The affected entries are blocked for
+		// restore/review by the vault itself; the integrity violation is recorded
+		// as high-severity evidence and surfaced through Status.
+		engine.appendSelfIntegrity("TITAN_SELF_INTEGRITY",
+			fmt.Sprintf("Quarantäne-Metadaten-Integrität verletzt (%d Einträge): %v",
+				len(vaultIntegrity.Issues), vaultIntegrity),
+			SeverityHigh, TrustCompromised)
 	}
 	verification := journal.Verify()
 	engine.journalVerified = verification.Verified
@@ -218,19 +240,33 @@ func (e *Engine) record(observation Observation) error {
 	recent := e.recentHighRiskCount(now)
 	observation.Authorization = Evaluate(policy, e.policy, observation, now, recent)
 
-	// VGT 5.3.0 Titan <-> Killerdom Correlation Bridge
+	// VGT 5.3.1 Titan <-> Killerdom Correlation Bridge.
+	//
+	// Kinetic authority requires OBSERVED attribution: the requesting engine must
+	// have seen the process that caused the change (for example through an ETW
+	// kernel-file provider). A temporal four-second heuristic is enrichment, not
+	// evidence, and must never terminate a process. Deferring the response is
+	// recorded in the evidence chain so the gap is visible instead of silent.
 	if policy.CorrelateWithKillerdom && observation.Authorization.Status == TrustCompromised {
-		e.bridgeMu.RLock()
-		bridge := e.killerdomBridge
-		e.bridgeMu.RUnlock()
-		if bridge != nil && observation.Actor.PID > 4 {
-			go func(pid uint32, name, reason string) {
-				if err := bridge(pid, fmt.Sprintf("Titan Correlated Strike: %s (%s)", name, reason)); err != nil {
-					e.appendSelfIntegrity("KILLERDOM_BRIDGE_FAILED",
-						fmt.Sprintf("Titan-Korrelation konnte PID %d nicht terminieren: %v", pid, err),
-						SeverityHigh, TrustUnexpected)
-				}
-			}(observation.Actor.PID, observation.Object.Name, observation.Authorization.Reason)
+		target, ok := killerdomTargetFor(observation)
+		if !ok {
+			e.appendSelfIntegrity("KILLERDOM_BRIDGE_DEFERRED",
+				fmt.Sprintf("Titan-Korrelation nicht ausreichend belegt (%s); keine Prozessbeendigung fuer %q",
+					observation.Actor.CorrelationQuality, observation.Object.Name),
+				SeverityHigh, TrustUnexpected)
+		} else {
+			e.bridgeMu.RLock()
+			bridge := e.killerdomBridge
+			e.bridgeMu.RUnlock()
+			if bridge != nil {
+				go func(request KillerdomTarget) {
+					if err := bridge(request); err != nil {
+						e.appendSelfIntegrity("KILLERDOM_BRIDGE_FAILED",
+							fmt.Sprintf("Titan-Korrelation konnte PID %d nicht terminieren: %v", request.PID, err),
+							SeverityHigh, TrustUnexpected)
+					}
+				}(target)
+			}
 		}
 	}
 	if observation.Authorization.Status == TrustUnexpected || observation.Authorization.Status == TrustCompromised {
@@ -657,6 +693,10 @@ func (e *Engine) Status() Status {
 	if !verification.Verified || e.journal.Error() != "" || dropped > 0 || overflows > 0 {
 		degraded = true
 	}
+	quarantineIntegrity := e.vault.IntegrityIssues()
+	if len(quarantineIntegrity) > 0 {
+		degraded = true
+	}
 	if degraded {
 		state = "DEGRADED"
 	}
@@ -677,6 +717,7 @@ func (e *Engine) Status() Status {
 			LastCheckpointUTC: journalStatus.CreatedUTC,
 			Detail:            "Kein unabhängiger Witness konfiguriert. Checkpoints sind lokal signiert; das ist manipulationsanzeigend, aber kein externer Vertrauensanker."},
 		EventsDropped: dropped, WatcherOverflows: overflows, QuarantineBytes: quarantineBytes, CanQuarantine: true,
+		QuarantineIntegrity: quarantineIntegrity,
 		Limits: Limits{
 			MaxEventsPerPage: 100, MaxQuarantineMB: maxQuarantineFileBytes >> 20, MaxPermits: maxPermits,
 			MaxQuarantineEntries: maxEntries, MaxQuarantineTotalMB: int(maxBytes >> 20),
@@ -785,7 +826,8 @@ func (e *Engine) processContext(now time.Time) (Actor, bool) {
 			ProcessChain:        append([]string(nil), process.Chain...),
 			CorrelationQuality:  CorrelationTemporal,
 			CorrelationNote:     "Prozessstart zeitlich nahe der Dateiänderung; keine Datei-zu-PID-Zuordnung beobachtet.",
-			ObservedProcessTime: process.ObservedUTC}, true
+			ObservedProcessTime: process.ObservedUTC,
+			CreationUTC:         process.CreationUTC}, true
 	}
 	return Actor{CorrelationQuality: CorrelationNone, CorrelationNote: "Keine direkte oder zeitlich nahe Prozesszuordnung beobachtet."}, false
 }
@@ -896,9 +938,29 @@ func sensorIDForSource(source string) string {
 	}
 }
 
+// killerdomTargetFor turns a compromised observation into a kinetic request
+// only when the attribution is OBSERVED and carries full process identity.
+// Temporal or absent attribution never yields kill authority.
+func killerdomTargetFor(observation Observation) (KillerdomTarget, bool) {
+	actor := observation.Actor
+	if actor.CorrelationQuality != CorrelationObserved {
+		return KillerdomTarget{}, false
+	}
+	if actor.PID <= 4 || actor.CreationUTC.IsZero() || strings.TrimSpace(actor.Path) == "" {
+		return KillerdomTarget{}, false
+	}
+	return KillerdomTarget{
+		PID:              actor.PID,
+		CreationUnixNano: actor.CreationUTC.UnixNano(),
+		ImagePath:        actor.Path,
+		Reason:           fmt.Sprintf("Titan Correlated Strike: %s (%s)", observation.Object.Name, observation.Authorization.Reason),
+	}, true
+}
+
 // SetKillerdomBridge registers the kinetic callback used to terminate processes
-// identified by Titan as responsible for high-risk system compromise.
-func (e *Engine) SetKillerdomBridge(bridge func(pid uint32, reason string) error) {
+// identified by Titan as responsible for high-risk system compromise. The
+// callback receives full identity evidence and must reject mismatches itself.
+func (e *Engine) SetKillerdomBridge(bridge func(KillerdomTarget) error) {
 	e.bridgeMu.Lock()
 	defer e.bridgeMu.Unlock()
 	e.killerdomBridge = bridge

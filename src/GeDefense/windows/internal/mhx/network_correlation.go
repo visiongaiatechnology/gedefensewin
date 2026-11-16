@@ -66,6 +66,10 @@ func (e *Engine) evaluateNetwork(event networkEvent) {
 		e.networkUncorrelated.Add(1)
 	}
 	if correlated {
+		// Real, bounded cross-signal for the fair behavioural score: a process
+		// observed contacting threat-intelligence infrastructure keeps this
+		// factor for threatHitTTL.
+		e.recordThreatHitLocked(event.PID, now)
 		finding.Image = recent.event.Image
 		finding.CorrelationID = recent.analysis.ID
 		storySignals := appendUniqueCopy(recent.analysis.Signals, "network.threat-intelligence."+strings.ToLower(string(match.Action)))
@@ -338,14 +342,12 @@ func wfpAttackStoryID(analysisID string, event wfpBlockEvent) string {
 }
 
 func (e *Engine) purgeRecentProcessesLocked(now time.Time) {
-	if len(e.recentProcesses) == 0 {
-		return
-	}
 	for pid, record := range e.recentProcesses {
 		if now.After(record.expires) {
 			delete(e.recentProcesses, pid)
 		}
 	}
+	e.purgeThreatHitsLocked(now)
 }
 
 func (e *Engine) NetworkFindings(limit int) []NetworkFinding {

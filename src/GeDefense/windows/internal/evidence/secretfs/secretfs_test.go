@@ -109,3 +109,84 @@ func TestRestrictionReportsServiceEnforcementAvailability(t *testing.T) {
 		t.Fatalf("service process did not restrict secret directory: %+v", restriction)
 	}
 }
+
+// TestCreateSecretFileAppliesDACLBeforeFirstSecretByte is the regression test
+// for FIND-WIN-019: the creation path used to write the secret material first
+// and harden the DACL afterwards, leaving a readable window. The seam runs at
+// the moment the restrictive DACL is applied and fails if the file already
+// contains payload bytes.
+func TestCreateSecretFileAppliesDACLBeforeFirstSecretByte(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "secrets")
+	path := filepath.Join(dir, "state.json")
+
+	previous := hardenBeforeFirstSecretByte
+	t.Cleanup(func() { hardenBeforeFirstSecretByte = previous })
+	observations := 0
+	hardenBeforeFirstSecretByte = func(target string) (Restriction, error) {
+		observations++
+		info, statErr := os.Stat(target)
+		if statErr != nil {
+			t.Fatalf("hardened target does not exist: %v", statErr)
+		}
+		if info.Size() != 0 {
+			t.Fatalf("secret bytes were written before the DACL was applied: %d bytes", info.Size())
+		}
+		return previous(target)
+	}
+
+	if err := CreateSecretFile(path, []byte("top-secret-payload")); err != nil {
+		t.Fatal(err)
+	}
+	if observations == 0 {
+		t.Fatal("hardening seam was never invoked")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "top-secret-payload" {
+		t.Fatalf("stored payload=%q", raw)
+	}
+	if _, err := HardenFile(path); err != nil {
+		t.Fatalf("final secret file is not hardenable: %v", err)
+	}
+}
+
+// TestCreateSecretFileExclusiveAppliesDACLBeforeFirstSecretByte covers the
+// exclusive-create variant used for dashboard.token.
+func TestCreateSecretFileExclusiveAppliesDACLBeforeFirstSecretByte(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "token")
+	path := filepath.Join(dir, "dashboard.token")
+
+	previous := hardenBeforeFirstSecretByte
+	t.Cleanup(func() { hardenBeforeFirstSecretByte = previous })
+	observations := 0
+	hardenBeforeFirstSecretByte = func(target string) (Restriction, error) {
+		observations++
+		info, statErr := os.Stat(target)
+		if statErr != nil {
+			t.Fatalf("hardened target does not exist: %v", statErr)
+		}
+		if info.Size() != 0 {
+			t.Fatalf("credential bytes were written before the DACL was applied: %d bytes", info.Size())
+		}
+		return previous(target)
+	}
+
+	if err := CreateSecretFileExclusive(path, []byte("credential\n")); err != nil {
+		t.Fatal(err)
+	}
+	if observations == 0 {
+		t.Fatal("hardening seam was never invoked")
+	}
+	if err := CreateSecretFileExclusive(path, []byte("second\n")); err == nil {
+		t.Fatal("exclusive creation overwrote an existing secret file")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "credential\n" {
+		t.Fatalf("stored payload=%q", raw)
+	}
+}

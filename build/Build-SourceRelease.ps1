@@ -114,6 +114,13 @@ foreach ($file in $files) {
     $forbiddenReason = Get-VgtDistributionForbiddenReason -RelativePath $file.Relative
     if ($forbiddenReason) { throw [IO.InvalidDataException]::new(('Forbidden distribution artifact entered the source release: {0} ({1})' -f $file.Relative,$forbiddenReason)) }
 }
+# FIND-WIN-022 fail-closed assertion: AI-agent handoff notes are excluded
+# centrally by Get-VgtSourceFileList, so they may exist in the working tree but
+# must never appear in the candidate set, the manifest or the source ZIP.
+foreach ($file in $files) {
+    $exclusionReason = Get-VgtPublishedSourceExclusionReason -RelativePath $file.Relative
+    if ($exclusionReason) { throw [Security.SecurityException]::new(('Excluded agent/handoff note entered the source release candidate set (fail-closed): {0} ({1})' -f $file.Relative,$exclusionReason)) }
+}
 
 # The manifest uses the same deterministic enumeration/ordinal ordering as the
 # provenance artifact, so both bind the identical byte set.
@@ -126,6 +133,14 @@ foreach ($file in $files) { $shipFiles.Add($file.Relative) }
 $shipFiles.Add('SOURCE-MANIFEST.sha256')
 $shipRelative = [string[]]@($shipFiles.ToArray())
 [Array]::Sort($shipRelative,[StringComparer]::Ordinal)
+# FIND-WIN-022 fail-closed assertion: prove the concrete ship set handed to the
+# deterministic ZIP writer is free of agent/handoff notes. This is deliberately
+# checked again after the manifest entry was appended so an excluded path can
+# never be smuggled into the archive through the ship-set construction.
+foreach ($relative in $shipRelative) {
+    $exclusionReason = Get-VgtPublishedSourceExclusionReason -RelativePath $relative
+    if ($exclusionReason) { throw [Security.SecurityException]::new(('Excluded agent/handoff note entered the source ZIP ship set (fail-closed): {0} ({1})' -f $relative,$exclusionReason)) }
+}
 $filesByRelative = @{}
 foreach ($file in $files) { $filesByRelative[$file.Relative] = $file }
 $shipEntries = [Collections.Generic.List[object]]::new()

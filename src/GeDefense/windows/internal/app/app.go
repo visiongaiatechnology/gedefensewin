@@ -33,6 +33,7 @@ type App struct {
 	integrity *integrity.Engine
 	hardening *hardening.Engine
 	titan     *titan.Engine
+	v6        *v6Runtime
 	ledger    *evidence.Ledger
 }
 
@@ -78,16 +79,19 @@ func New(root, version string) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("startup state: %w", err)
 	}
+	v6 := newV6Runtime(root, dataRoot, version, ledger)
 	settingsService, err := settings.OpenWithOptions(settings.Options{
 		Path:     filepath.Join(dataRoot, "settings.json"),
 		Evidence: ledger,
-		Applier:  &settingsApplier{hardening: engine, mhx: mhxEngine, ledger: ledger},
+		Applier:  &settingsApplier{hardening: engine, mhx: mhxEngine, v6: v6, ledger: ledger},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("settings service: %w", err)
 	}
-	handler := webserver.NewWithTitan(version, token, engine, auditEngine, xdrEngine, mhxEngine, integrityEngine, ledger, startupState, settingsService, titanEngine)
-	return &App{monitor: monitor.New(engine, ledger, 5*time.Minute), mhx: mhxEngine, integrity: integrityEngine, hardening: engine, titan: titanEngine, ledger: ledger, server: &http.Server{
+	snapshot := settingsService.Snapshot()
+	v6.Restore(v6ConfigFromValues(snapshot.Values[settings.SectionV6]))
+	handler := webserver.NewWithV6(version, token, engine, auditEngine, xdrEngine, mhxEngine, integrityEngine, ledger, startupState, settingsService, titanEngine, v6)
+	return &App{monitor: monitor.New(engine, ledger, 5*time.Minute), mhx: mhxEngine, integrity: integrityEngine, hardening: engine, titan: titanEngine, v6: v6, ledger: ledger, server: &http.Server{
 		Addr:              "127.0.0.1:17831",
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -150,11 +154,12 @@ func (a *App) Run(stop <-chan struct{}) error {
 	var stopOnce sync.Once
 	stopAll := func() { stopOnce.Do(func() { close(internalStop) }) }
 	var workers sync.WaitGroup
-	workers.Add(4)
+	workers.Add(5)
 	go func() { defer workers.Done(); a.supervise("monitor", a.monitor.Run, internalStop) }()
 	go func() { defer workers.Done(); a.supervise("mhx", a.mhx.Run, internalStop) }()
 	go func() { defer workers.Done(); a.supervise("integrity", a.integrity.Run, internalStop) }()
 	go func() { defer workers.Done(); a.supervise("titan", a.titan.Run, internalStop) }()
+	go func() { defer workers.Done(); a.supervise("v6", a.v6.Run, internalStop) }()
 
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- a.server.ListenAndServe() }()
@@ -184,6 +189,9 @@ func (a *App) Run(stop <-chan struct{}) error {
 		if result == nil {
 			result = errors.New("security worker shutdown timed out")
 		}
+	}
+	if closeErr := a.v6.Close(); closeErr != nil && result == nil {
+		result = closeErr
 	}
 	if closeErr := a.titan.Close(); closeErr != nil && result == nil {
 		result = closeErr

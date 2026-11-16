@@ -31,6 +31,33 @@ func (a Action) rank() int {
 	}
 }
 
+// capDeclaredAction is the central model-layer authority ceiling (FIND-WIN-015).
+// The immutable catalog declaration is the upper bound of what a feed may ever
+// contribute to enforcement: an ANNOTATE_ONLY feed can never be escalated to
+// BLOCK (or CORRELATE_ONLY) by an override, an aggregation step or a consumer.
+// Downgrades remain allowed. Unknown actions fail closed to ANNOTATE_ONLY.
+func capDeclaredAction(declared, resolved Action) Action {
+	if !validFeedAction(resolved) {
+		return ActionAnnotateOnly
+	}
+	if declared == ActionAnnotateOnly {
+		return ActionAnnotateOnly
+	}
+	return resolved
+}
+
+// capEnforcementAction additionally applies the fail-closed signed-authority
+// rule: without an authenticated feed authority nothing may become an
+// enforcement/blocking basis. Display and audit remain available as
+// ANNOTATE_ONLY. Both caps are applied in one place so compiler, status and
+// policy projections cannot disagree.
+func capEnforcementAction(declared, resolved Action, authorityAvailable bool) Action {
+	if !authorityAvailable {
+		return ActionAnnotateOnly
+	}
+	return capDeclaredAction(declared, resolved)
+}
+
 type FeedFormat string
 
 const (
@@ -118,8 +145,16 @@ type Status struct {
 	FeedAuthorityKeys     int    `json:"feedAuthorityKeys"`
 	FeedAuthoritySequence uint64 `json:"feedAuthoritySequence"`
 	FeedAuthorityError    string `json:"feedAuthorityError,omitempty"`
-	FeedClockRollback     bool   `json:"feedClockRollback"`
-	MaxFeedAgeSeconds     int    `json:"maxFeedAgeSeconds"`
+	// FeedEnforcement records whether unsigned/unverified feed data is allowed to
+	// contribute blocking enforcement. It is always derived from the verified key
+	// ring and never inferred by a consumer (FIND-WIN-015).
+	FeedEnforcement   string `json:"feedEnforcement"`
+	FeedClockRollback bool   `json:"feedClockRollback"`
+	// FeedClockError surfaces a rejected/tampered clock high-water anchor
+	// (FIND-WIN-015). Freshness and rollback detection are not trusted while it is
+	// non-empty.
+	FeedClockError    string `json:"feedClockError,omitempty"`
+	MaxFeedAgeSeconds int    `json:"maxFeedAgeSeconds"`
 }
 
 type Match struct {

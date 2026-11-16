@@ -12,8 +12,11 @@ import (
 	"github.com/visiongaiatechnology/gedefense/windows/internal/hardening"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/integrity"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/mhx"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/spyware"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/startup"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/titan"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
+	"github.com/visiongaiatechnology/gedefense/windows/internal/witness"
 	"github.com/visiongaiatechnology/gedefense/windows/internal/xdr"
 )
 
@@ -207,6 +210,7 @@ type Server struct {
 	mhx         MHXEngine
 	integrity   IntegrityEngine
 	titan       TitanEngine
+	v6          V6Provider
 	ledger      *evidence.Ledger
 	startupGate *startup.State
 	settings    SettingsService
@@ -305,7 +309,21 @@ type MHXEngine interface {
 	SetApplication(context.Context, string, string) ([]mhx.ApplicationAllow, error)
 	ReconcilePolicy(context.Context) error
 	SentinelStore() *mhx.SentinelStore
-	TerminatePID(uint32, string) error
+	TerminateTarget(mhx.TerminationTarget) error
+	StyxStatus() mhx.StyxStatus
+	StyxCollectorStatus() mhx.StyxCollectorStatus
+	StyxIncidents(int) []mhx.StyxIncident
+}
+
+// V6Provider exposes bounded V6 Sovereign runtime projections to the control
+// plane without coupling HTTP handlers to sensor or witness lifecycles.
+type V6Provider interface {
+	SpywareStatus() spyware.Status
+	SpywareFindings(int) []spyware.Finding
+	SpywareLockState() string
+	WitnessStatus() witness.StatusReport
+	WitnessSettingsState() (string, string)
+	BootPosture() winapi.BootPosture
 }
 
 type IntegrityEngine interface {
@@ -327,7 +345,7 @@ type TitanEngine interface {
 	ReviewQuarantine(string, string) (titan.QuarantineEntry, error)
 	SetPolicy(string, bool, string) (titan.Policy, error)
 	SetCorrelationWithKillerdom(bool, string) (titan.Policy, error)
-	SetKillerdomBridge(func(uint32, string) error)
+	SetKillerdomBridge(func(titan.KillerdomTarget) error)
 	SetOwnerProcessImages([]string, string) (titan.Policy, error)
 	Permits() []titan.Permit
 	CreatePermit(string, string, string, time.Duration, bool, string) (titan.Permit, error)

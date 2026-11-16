@@ -410,6 +410,10 @@ async function activate() {
   clearError();
   const choice = caseById(selected);
   const reason = `First-run setup: ${choice.eyebrow} · ${choice.target} · operator choice`;
+  // Every mutation carries the typed confirmation phrase the control plane
+  // requires. While the server-side setup marker is incomplete, the control
+  // plane budgets this documented first-run sequence in its own bounded class;
+  // there is no client-side rate or scope bypass.
   try {
     const hardening = await api('/api/v1/hardening/enforce', {
       method: 'POST',
@@ -425,7 +429,7 @@ async function activate() {
     if (integrity?.state === 'DEGRADED') throw new Error('Integritätsmonitor ist nach der Aktivierung noch degradiert.');
     await api('/api/v1/titan/policy', {
       method: 'POST',
-      json: {mode: choice.titan, autoQuarantine: choice.autoQuarantine, reason},
+      json: {mode: choice.titan, autoQuarantine: choice.autoQuarantine, reason, confirmation: 'CHANGE TITAN POLICY'},
       signal: AbortSignal.timeout(60000),
     });
     if (selected === 'developer') {

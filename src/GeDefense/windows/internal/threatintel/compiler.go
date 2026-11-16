@@ -18,6 +18,17 @@ type prefixTrie struct {
 	v6 *prefixTrieNode
 }
 
+// compileEnforcementIndicators compiles the validated BLOCK prefixes into the
+// minimal WFP enforcement set. Two subtraction layers are enforced centrally:
+//
+//   - the operator protected-network policy (management/exception networks), and
+//   - the immutable self-protection veto (loopback, link-local, multicast, cloud
+//     instance metadata and every configured host DNS resolver).
+//
+// FIND-WIN-015: the veto is applied here, inside the compiler, so no override,
+// aggregation or UI path can produce an enforcement projection that blocks the
+// host's own DNS/IMDS/control-plane path. It is a carve-out, not a wholesale
+// prefix drop: the rest of a broad feed prefix stays enforceable.
 func compileEnforcementIndicators(values []string, protected []netip.Prefix) ([]string, error) {
 	blocks := make([]netip.Prefix, 0, len(values))
 	for _, value := range values {
@@ -28,8 +39,10 @@ func compileEnforcementIndicators(values []string, protected []netip.Prefix) ([]
 		blocks = append(blocks, canonicalPrefix(prefix))
 	}
 	blocks = compactPrefixUnion(blocks)
-	protected = compactPrefixUnion(protected)
-	protectedTrie := buildPrefixTrie(protected)
+	veto := make([]netip.Prefix, 0, len(protected)+len(selfProtectionRanges)+8)
+	veto = append(veto, protected...)
+	veto = append(veto, selfProtectionVetoPrefixes()...)
+	protectedTrie := buildPrefixTrie(compactPrefixUnion(veto))
 	compiled := make([]netip.Prefix, 0, len(blocks))
 	for _, block := range blocks {
 		protectedNode, covered := protectedTrie.nodeFor(block)

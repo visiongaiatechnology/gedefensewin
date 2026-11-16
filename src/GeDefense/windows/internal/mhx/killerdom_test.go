@@ -1,4 +1,4 @@
-// STATUS: DIAMANT VGT SUPREME
+// STATUS: PLATIN VGT SUPREME
 package mhx
 
 import (
@@ -152,10 +152,12 @@ func TestSentinelStoreAndWhitelist(t *testing.T) {
 		t.Fatalf("expected explorer.exe to be an allowed system app, got allowed=%v name=%s isSys=%v", allowed, name, isSys)
 	}
 
-	// Verify Whitelist App Check
+	// FIND-WIN-009: the legacy "*antigravity.exe" default wildcard is shipped
+	// disabled because it authorized any binary with that basename, including a
+	// user-writable copy. An owner must add an exact path or a pinned entry.
 	allowed, name, isSys = store.IsAppAllowed(`C:\Users\Masterboard\AppData\Local\Programs\antigravity.exe`)
-	if !allowed || isSys {
-		t.Fatalf("expected antigravity.exe to be an allowed whitelist app, got allowed=%v name=%s isSys=%v", allowed, name, isSys)
+	if allowed {
+		t.Fatalf("legacy filename-only wildcard must not authorize antigravity.exe, got allowed=%v name=%s isSys=%v", allowed, name, isSys)
 	}
 
 	// Verify Unknown App
@@ -261,7 +263,11 @@ func TestKillerdomSelfProtection(t *testing.T) {
 		t.Fatalf("expected isGeDefenseSelfOrChild to be true for GeDefense audit child process")
 	}
 
-	// 3. Child process referencing Invoke-VgtHardening.ps1 even if ParentPID wasn't captured
+	// 3. A command line that merely embeds the hardened-script path MUST NOT be
+	// exempt any more (FIND-WIN-004). The former `-File "…\VGT\GeDefense\…"`
+	// substring exemption was a universal bypass: any attacker process could
+	// add those strings to its command line. Legitimate self-healing children are
+	// recognised through the tracked-child registry instead.
 	childScript := ProcessEvent{
 		PID:         9999,
 		ParentPID:   8888,
@@ -269,8 +275,8 @@ func TestKillerdomSelfProtection(t *testing.T) {
 		ImagePath:   `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
 		CommandLine: `powershell.exe -NoProfile -File "C:\Program Files\VGT\GeDefense\engine\Invoke-VgtHardening.ps1"`,
 	}
-	if !isGeDefenseSelfOrChild(childScript) {
-		t.Fatalf("expected isGeDefenseSelfOrChild to be true for Invoke-VgtHardening child")
+	if isGeDefenseSelfOrChild(childScript) {
+		t.Fatalf("command-line smuggling must not grant self-protection immunity")
 	}
 
 	// 4. GeDefense Center UI

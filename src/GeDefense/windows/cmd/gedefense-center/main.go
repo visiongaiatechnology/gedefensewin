@@ -21,12 +21,21 @@ func main() {
 		_ = winapi.MessageBox("VGT GeDefense Center", fmt.Sprintf("GeDefense Center %s", product.Version), winapi.MBIconInformation)
 		return
 	}
-	// The Center is designed as an unprivileged UI process. An inherited
-	// elevated token (auto-elevated Setup started the tray, "Run as
-	// administrator") is handed back to the interactive desktop shell before any
-	// single-instance state is claimed; a Chromium window must never inherit the
-	// administrator token.
-	if relaunchCenterUnelevated() {
+	// The Center is an unprivileged UI process. An inherited elevated token
+	// (auto-elevated Setup started the tray, "Run as administrator") is handed
+	// back to the interactive desktop shell before any single-instance state is
+	// claimed; a Chromium window must never inherit the administrator token.
+	//
+	// The hand-over is fail-closed (FIND-WIN-023): when it cannot be verified,
+	// this elevated process reports the cause and exits. It never continues as
+	// the elevated UI and never starts a browser with administrator rights.
+	relaunched, deElevationErr := relaunchCenterUnelevated()
+	if deElevationErr != nil {
+		recordCenterDeElevationFailure(deElevationErr)
+		_ = winapi.MessageBox("VGT GeDefense Center", centerDeElevationRefusalMessage(deElevationErr), winapi.MBIconError)
+		os.Exit(1)
+	}
+	if relaunched {
 		return
 	}
 	// The single-instance objects are resolved through the hardened helper: a
@@ -60,27 +69,53 @@ func main() {
 
 // relaunchCenterUnelevated hands an elevated Center over to the unprivileged
 // desktop shell user. It reports true only when a replacement process was
-// started; this process then exits with status 0. A failed hand-over is
-// recorded in the launch diagnostic log and the Center keeps working elevated
-// as a documented fallback instead of blocking the operator.
-func relaunchCenterUnelevated() (relaunched bool) {
+// started; this process then exits with status 0.
+//
+// A non-elevated Center is a normal start and returns (false, nil). Any error
+// means the elevated process must stop: the caller shows the refusal and exits
+// with a non-zero status instead of continuing as an elevated UI.
+func relaunchCenterUnelevated() (relaunched bool, err error) {
+	if !userlaunch.IsElevated() {
+		return false, nil
+	}
 	executable, err := os.Executable()
 	if err != nil {
-		recordCenterDeElevationFailure(fmt.Errorf("executable path unavailable: %w", err))
-		return false
+		return false, &userlaunch.DeElevationError{Reason: "executable path unavailable", Err: err}
 	}
-	relaunched, err = userlaunch.RelaunchUnelevatedIfNeeded(executable, nil)
-	if err != nil {
-		recordCenterDeElevationFailure(err)
-		return false
-	}
-	return relaunched
+	return userlaunch.RelaunchUnelevatedIfNeeded(executable, nil)
 }
 
 func recordCenterDeElevationFailure(err error) {
 	if userlaunch.IsElevated() {
 		launcher.RecordElevationFallback(err)
 	}
+}
+
+// centerDeElevationRefusalMessage is the honest operator dialog for a refused
+// hand-over. It must never suggest that the Center continues with elevated
+// rights or that an elevated browser fallback exists.
+func centerDeElevationRefusalMessage(err error) string {
+	var message strings.Builder
+	message.WriteString("GeDefense Center kann nicht ohne Administratorrechte gestartet werden.\n\n")
+	message.WriteString("Sicherheitsgrenze: Aus diesem erhöhten Prozess wird kein Browser gestartet. ")
+	message.WriteString("Einen Start mit erhöhten Rechten gibt es bewusst nicht.\n\n")
+	message.WriteString("Ursache: ")
+	message.WriteString(deElevationFailureReason(err))
+	message.WriteString("\n\nHinweis: Starten Sie GeDefense Center ohne \"Als Administrator ausführen\" ")
+	message.WriteString("über Startmenü oder Taskleiste.")
+	if path, pathErr := launcher.DiagnosticLogPath(); pathErr == nil {
+		message.WriteString("\n\nDetails: ")
+		message.WriteString(path)
+	}
+	return message.String()
+}
+
+func deElevationFailureReason(err error) string {
+	var deElevation *userlaunch.DeElevationError
+	if errors.As(err, &deElevation) && strings.TrimSpace(deElevation.Reason) != "" {
+		return deElevation.Reason
+	}
+	return "Übergabe an den unprivilegierten Desktop-Benutzer fehlgeschlagen"
 }
 
 // centerLaunchFailureMessage builds the specific operator dialog for a failed

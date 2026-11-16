@@ -127,20 +127,36 @@ func TestDevelopmentRootToleratesSourceArtifactsButNotProtectedChanges(t *testin
 }
 
 func TestMaintenanceStartOnlyIsToleratedButImagePathChangeIsNot(t *testing.T) {
+	// The service-image evidence is mandatory now: a BITS name alone is not a
+	// tolerance (FIND-WIN-010). The verifier is injected for determinism; the
+	// production binding uses winapi.VerifyAuthenticode.
+	withTitanSignatureVerifier(t, alwaysValidSignatureVerifier)
 	engine := newTestEngine(t)
+	evidencedActor := Actor{Image: "svchost.exe", Path: `C:\Windows\System32\svchost.exe`, CorrelationQuality: CorrelationNone}
+	engine.record(Observation{Type: EventPersistenceChanged, Source: "titan-persistence", Health: "HEALTHY",
+		Object: Object{Kind: ObjectService, Path: `HKLM\SYSTEM\CurrentControlSet\Services\BITS`, Name: "BITS", Change: "START_ONLY"},
+		Actor:  evidencedActor})
+	engine.record(Observation{Type: EventPersistenceChanged, Source: "titan-persistence", Health: "HEALTHY",
+		Object: Object{Kind: ObjectService, Path: `HKLM\SYSTEM\CurrentControlSet\Services\BITS`, Name: "BITS", Change: "IMAGE_PATH"},
+		Actor:  evidencedActor})
+	// Without the image evidence the same name-only start change stays flagged.
 	engine.record(Observation{Type: EventPersistenceChanged, Source: "titan-persistence", Health: "HEALTHY",
 		Object: Object{Kind: ObjectService, Path: `HKLM\SYSTEM\CurrentControlSet\Services\BITS`, Name: "BITS", Change: "START_ONLY"}})
-	engine.record(Observation{Type: EventPersistenceChanged, Source: "titan-persistence", Health: "HEALTHY",
-		Object: Object{Kind: ObjectService, Path: `HKLM\SYSTEM\CurrentControlSet\Services\BITS`, Name: "BITS", Change: "IMAGE_PATH"}})
+	if isMaintenanceStartOnly(Observation{Object: Object{Kind: ObjectService, Name: "BITS", Change: "START_ONLY"}}) {
+		t.Fatal("name-only maintenance start change matched the helper")
+	}
 	events, _, err := engine.Events(10, 0, FilterAll)
-	if err != nil || len(events) != 2 {
+	if err != nil || len(events) != 3 {
 		t.Fatalf("events=%d err=%v", len(events), err)
 	}
-	if events[1].Authorization.Status != TrustTolerated {
-		t.Fatalf("BITS start-only status=%s, want TOLERATED", events[1].Authorization.Status)
+	if events[2].Authorization.Status != TrustTolerated {
+		t.Fatalf("BITS start-only status=%s, want TOLERATED", events[2].Authorization.Status)
 	}
-	if events[0].Authorization.Status != TrustUnexpected {
-		t.Fatalf("BITS image-path status=%s, want UNEXPECTED", events[0].Authorization.Status)
+	if events[1].Authorization.Status != TrustUnexpected {
+		t.Fatalf("BITS image-path status=%s, want UNEXPECTED", events[1].Authorization.Status)
+	}
+	if events[0].Authorization.Status == TrustTolerated {
+		t.Fatalf("name-only BITS start change without image evidence was tolerated: %+v", events[0].Authorization)
 	}
 }
 

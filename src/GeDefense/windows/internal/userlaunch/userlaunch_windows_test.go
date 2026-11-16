@@ -10,7 +10,40 @@ import (
 	"testing"
 	"unicode/utf16"
 	"unsafe"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/winapi"
 )
+
+var (
+	testKernel32              = syscall.NewLazyDLL("kernel32.dll")
+	testAdvapi32              = syscall.NewLazyDLL("advapi32.dll")
+	procGetCurrentProcessTest = testKernel32.NewProc("GetCurrentProcess")
+	procOpenProcessTokenTest  = testAdvapi32.NewProc("OpenProcessToken")
+)
+
+// TestTokenIsElevatedMatchesCurrentProcess proves that the TOKEN_ELEVATION
+// query used to reject an elevated shell token reports the same elevation as
+// the already trusted current-process check.
+func TestTokenIsElevatedMatchesCurrentProcess(t *testing.T) {
+	process, _, _ := procGetCurrentProcessTest.Call()
+	var token syscall.Handle
+	opened, _, callErr := procOpenProcessTokenTest.Call(process, uintptr(winapi.TokenQuery), uintptr(unsafe.Pointer(&token)))
+	if opened == 0 || token == 0 {
+		t.Fatalf("OpenProcessToken failed: %v", callErr)
+	}
+	defer func() { winapi.ReportError("test token close", winapi.CloseHandle(winapi.Handle(token))) }()
+
+	elevated, err := tokenIsElevated(winapi.Handle(token))
+	if err != nil {
+		t.Fatalf("token elevation query failed: %v", err)
+	}
+	if elevated != IsElevated() {
+		t.Fatalf("token elevation = %t, current process elevation = %t", elevated, IsElevated())
+	}
+	if _, err := tokenIsElevated(0); err == nil {
+		t.Fatal("an invalid token handle must fail closed")
+	}
+}
 
 func TestShouldRelaunchUnelevated(t *testing.T) {
 	tests := []struct {

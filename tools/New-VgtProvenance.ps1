@@ -234,7 +234,7 @@ $document = [ordered]@{
         goModSha256 = $(if ($null -ne $goMod) { $goMod.Sha256 } else { '' })
         goSumSha256 = $(if ($null -ne $goSum) { $goSum.Sha256 } else { '' })
         goSumBytes = $(if ($null -ne $goSum) { $goSum.Bytes } else { 0 })
-        gotoolchainEnforced = 'GOTOOLCHAIN=local is required; go.mod pins toolchain go1.26.10; minimum patched release is enforced by build/Test-GeDefenseRelease.ps1'
+        gotoolchainEnforced = 'GOTOOLCHAIN=local is required; go.mod pins toolchain go1.26.11; minimum patched release is enforced by build/Test-GeDefenseRelease.ps1'
     }
     buildRecipe = [ordered]@{
         commands = @(

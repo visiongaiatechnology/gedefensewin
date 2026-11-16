@@ -117,6 +117,10 @@ type Actor struct {
 	CorrelationQuality  CorrelationQuality `json:"correlationQuality"`
 	CorrelationNote     string             `json:"correlationNote,omitempty"`
 	ObservedProcessTime time.Time          `json:"observedProcessTime,omitempty"`
+	// CreationUTC is the kernel-reported process creation time of the observed
+	// actor. It is empty when the sensor could not read it; a kinetic request
+	// built from an actor without it must be rejected by the responder.
+	CreationUTC time.Time `json:"creationUtc,omitempty"`
 }
 
 // NetworkContext is deliberately narrow. It never claims that a connection
@@ -358,8 +362,13 @@ type Status struct {
 	EventsDropped    uint64            `json:"eventsDropped"`
 	WatcherOverflows uint64            `json:"watcherOverflows"`
 	QuarantineBytes  int64             `json:"quarantineBytes"`
-	CanQuarantine    bool              `json:"canQuarantine"`
-	Limits           Limits            `json:"limits"`
+	// QuarantineIntegrity lists quarantine metadata records whose authenticated
+	// MAC no longer verifies. They stay blocked for restore/review, and the
+	// service keeps running so a tampered file cannot disable protection
+	// (fail-closed action, fail-available service).
+	QuarantineIntegrity []VaultIntegrityIssue `json:"quarantineIntegrity,omitempty"`
+	CanQuarantine       bool                  `json:"canQuarantine"`
+	Limits              Limits                `json:"limits"`
 }
 
 // Limits is the published bound envelope for the UI.

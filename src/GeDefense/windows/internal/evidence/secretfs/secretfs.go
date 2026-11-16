@@ -49,6 +49,13 @@ const (
 	secretDirMode  = 0o700
 )
 
+// hardenBeforeFirstSecretByte is the ordering seam for the regression test:
+// every secret creation path must invoke it while the file is still empty and
+// before the first secret byte is written (FIND-WIN-019). Production uses the
+// real HardenFile implementation; tests replace it with an inspector that fails
+// when the file already contains secret material.
+var hardenBeforeFirstSecretByte = HardenFile
+
 // Restriction reports the effective protection state of a secret path.
 type Restriction struct {
 	Path       string
@@ -145,8 +152,11 @@ func LoadOrCreateEd25519Seed(path string) (ed25519.PrivateKey, ed25519.PublicKey
 }
 
 // CreateSecretFile writes a new secret file atomically-replaceably: the new
-// content is written to a sibling temporary file, hardened and only then renamed
-// onto the target. Used for key rollover and authenticated state anchors.
+// content is written to a sibling temporary file, the restrictive DACL is
+// applied to that (still empty) temporary file, and only then are the secret
+// bytes written and the file renamed onto the target. The target is verified
+// once more after the replacement so a renamed file can never inherit a
+// permissive DACL (FIND-WIN-019).
 func CreateSecretFile(path string, payload []byte) error {
 	if path == "" || !filepath.IsAbs(path) {
 		return errors.New("secret file requires an absolute path")
@@ -162,9 +172,11 @@ func CreateSecretFile(path string, payload []byte) error {
 	temporaryPath := temporary.Name()
 	cleanup := func() { _ = os.Remove(temporaryPath) }
 	defer cleanup()
-	if err := temporary.Chmod(secretFileMode); err != nil {
+	// Access control first, secret bytes second: the temporary file is still
+	// empty, so there is no readable window for the secret material.
+	if _, err := hardenBeforeFirstSecretByte(temporaryPath); err != nil {
 		_ = temporary.Close()
-		return err
+		return fmt.Errorf("secret file access control: %w", err)
 	}
 	if _, err := temporary.Write(payload); err != nil {
 		_ = temporary.Close()
@@ -183,10 +195,21 @@ func CreateSecretFile(path string, payload []byte) error {
 	if err := replaceFile(temporaryPath, path); err != nil {
 		return err
 	}
+	cleanup = func() {}
+	if _, err := HardenFile(path); err != nil {
+		return fmt.Errorf("secret file access control after replace: %w", err)
+	}
 	return nil
 }
 
-func createSecretFile(path string, payload []byte) error {
+// CreateSecretFileExclusive creates a secret file only when it does not exist
+// yet. The restrictive DACL is applied to the exclusively created, still empty
+// file before the first secret byte is written. os.ErrExist is returned
+// unchanged so concurrent creators can reload the winner (dashboard.token).
+func CreateSecretFileExclusive(path string, payload []byte) error {
+	if path == "" || !filepath.IsAbs(path) {
+		return errors.New("secret file requires an absolute path")
+	}
 	directory := filepath.Dir(path)
 	if _, err := EnsureSecretDir(directory); err != nil {
 		return err
@@ -195,24 +218,36 @@ func createSecretFile(path string, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	writeErr := func() error {
-		if _, err := file.Write(payload); err != nil {
-			return err
+	written := false
+	defer func() {
+		if !written {
+			_ = file.Close()
+			_ = os.Remove(path)
 		}
-		return file.Sync()
 	}()
-	closeErr := file.Close()
-	if writeErr != nil {
-		_ = os.Remove(path)
-		return writeErr
+	// Access control first, secret bytes second: the file exists but is empty.
+	if _, err := hardenBeforeFirstSecretByte(path); err != nil {
+		return fmt.Errorf("secret file access control: %w", err)
 	}
-	if closeErr != nil {
-		_ = os.Remove(path)
-		return closeErr
+	if _, err := file.Write(payload); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
 	}
 	if _, err := HardenFile(path); err != nil {
-		_ = os.Remove(path)
-		return fmt.Errorf("secret file access control: %w", err)
+		return fmt.Errorf("secret file access control after create: %w", err)
+	}
+	written = true
+	return nil
+}
+
+func createSecretFile(path string, payload []byte) error {
+	if err := CreateSecretFileExclusive(path, payload); err != nil {
+		return err
 	}
 	return nil
 }

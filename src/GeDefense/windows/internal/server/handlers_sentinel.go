@@ -2,7 +2,10 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -40,10 +43,12 @@ type sentinelItemToggleRequest struct {
 }
 
 type sentinelAddWhitelistRequest struct {
-	Name        string `json:"name"`
-	PathPattern string `json:"pathPattern"`
-	SHA256      string `json:"sha256"`
-	SignerMatch string `json:"signerMatch"`
+	Name         string `json:"name"`
+	PathPattern  string `json:"pathPattern"`
+	SHA256       string `json:"sha256"`
+	SignerMatch  string `json:"signerMatch"`
+	Reason       string `json:"reason"`
+	Confirmation string `json:"confirmation"`
 }
 
 type sentinelRemoveWhitelistRequest struct {
@@ -62,6 +67,54 @@ func (s *Server) requireSentinelReduceIntent(w http.ResponseWriter, confirmation
 	}
 	s.writeError(w, http.StatusConflict, "explicit confirmation and operator reason required for reducing protection posture")
 	return false
+}
+
+// requireSentinelReason validates an optional operator reason on a
+// protection-tightening Whitelist mutation. Those actions are not blocked when
+// the client omits a reason (they harden the posture); a reason that is present
+// must still satisfy the shared boundary so it can be attributed in the ledger.
+func (s *Server) requireSentinelReason(w http.ResponseWriter, reason string) bool {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		return true
+	}
+	if len(trimmed) < 8 || len(trimmed) > 512 {
+		s.writeError(w, http.StatusBadRequest, "invalid operator reason")
+		return false
+	}
+	return true
+}
+
+// recordSentinelWhitelistAudit appends a tamper-evident audit record for every
+// Whitelist mutation (FIND-WIN-018). The authenticated actor, the concrete
+// action and the result are recorded; a rejected mutation never produces an
+// entry because the handler returns before calling this helper.
+func (s *Server) recordSentinelWhitelistAudit(r *http.Request, action, outcome, reason string) {
+	if s.ledger == nil {
+		return
+	}
+	actor := "unknown"
+	session := ""
+	if auth, ok := authContextFrom(r); ok {
+		actor = auth.client
+		if auth.master {
+			actor = "master"
+		}
+		if auth.session != nil {
+			session = sessionDigest(auth.token)
+		}
+	}
+	detail := "actor=" + actor + "; outcome=" + outcome
+	if session != "" {
+		detail += "; session=" + session
+	}
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		digest := sha256.Sum256([]byte(trimmed))
+		detail += "; reason-sha256=" + hex.EncodeToString(digest[:])
+	}
+	if err := s.ledger.Append("sentinel.whitelist", action, detail); err != nil {
+		log.Printf("sentinel whitelist evidence: %v", err)
+	}
 }
 
 func (s *Server) sentinelAvailable(w http.ResponseWriter) bool {
@@ -294,14 +347,26 @@ func (s *Server) sentinelToggleWhitelist(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Enabling a whitelist entry creates a new protection exemption and is
+	// therefore confirmation-gated. Disabling it hardens the posture and is not
+	// blocked unnecessarily; both directions are audited (FIND-WIN-018).
+	if req.Enabled {
+		if !s.requireSentinelReduceIntent(w, req.Confirmation, req.Reason) {
+			return
+		}
+	} else if !s.requireSentinelReason(w, req.Reason) {
+		return
+	}
 	store := s.mhx.SentinelStore()
 	if err := store.ToggleWhitelistApp(req.ID, req.Enabled); err != nil {
 		s.writeInternalError(w, http.StatusBadRequest, "Whitelist-Eintrag konnte nicht aktualisiert werden", "sentinel.whitelist", err)
 		return
 	}
-	if s.ledger != nil {
-		_ = s.ledger.Append("sentinel.whitelist", fmt.Sprintf("%s=%t", req.ID, req.Enabled), strings.TrimSpace(req.Reason))
+	outcome := "disabled"
+	if req.Enabled {
+		outcome = "enabled"
 	}
+	s.recordSentinelWhitelistAudit(r, "toggle", outcome+"; id="+req.ID, req.Reason)
 	s.sentinelStatus(w, r)
 }
 
@@ -314,12 +379,18 @@ func (s *Server) sentinelAddWhitelist(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Adding a whitelist entry grants a permanent protection exemption. It must
+	// be a confirmed, reasoned operator decision (FIND-WIN-018).
+	if !s.requireSentinelReduceIntent(w, req.Confirmation, req.Reason) {
+		return
+	}
 	store := s.mhx.SentinelStore()
 	entry, err := store.AddWhitelistAppPinned(req.Name, req.PathPattern, req.SHA256, req.SignerMatch)
 	if err != nil {
 		s.writeInternalError(w, http.StatusBadRequest, "Whitelist-Eintrag konnte nicht angelegt werden", "sentinel.whitelist.add", err)
 		return
 	}
+	s.recordSentinelWhitelistAudit(r, "add", "created; id="+entry.ID+"; path="+entry.PathPattern, req.Reason)
 	s.writeJSON(w, http.StatusOK, entry)
 }
 
@@ -332,13 +403,16 @@ func (s *Server) sentinelRemoveWhitelist(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Removing an exemption tightens the posture: no confirmation phrase, but a
+	// reasoned and audited action (FIND-WIN-018).
+	if !s.requireSentinelReason(w, req.Reason) {
+		return
+	}
 	store := s.mhx.SentinelStore()
 	if err := store.RemoveWhitelistApp(req.ID); err != nil {
 		s.writeInternalError(w, http.StatusBadRequest, "Whitelist-Eintrag konnte nicht entfernt werden", "sentinel.whitelist.remove", err)
 		return
 	}
-	if s.ledger != nil {
-		_ = s.ledger.Append("sentinel.whitelist", "removed "+req.ID, strings.TrimSpace(req.Reason))
-	}
+	s.recordSentinelWhitelistAudit(r, "remove", "removed; id="+req.ID, req.Reason)
 	s.writeJSON(w, http.StatusOK, map[string]string{"status": "removed", "id": req.ID})
 }

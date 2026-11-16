@@ -21,26 +21,31 @@ import (
 
 // writeCachedBlockingFeed plants one validated last-known-good BLOCK source so
 // the real threatintel manager publishes a blocking/enforcement generation
-// without any network access.
+// without any network access. FIND-WIN-015: the generation is attested by a
+// provisioned signed feed authority; unsigned cached data is annotation-only.
 func writeCachedBlockingFeed(t *testing.T, root string) {
 	t.Helper()
 	indicators := []string{"45.155.205.0/24"}
 	sort.Strings(indicators)
 	digest := sha256.Sum256([]byte("feodo\n" + string(threatintel.ActionBlock) + "\n" + strings.Join(indicators, "\n")))
+	generated := time.Now().UTC().Add(-time.Minute)
+	intelRoot := filepath.Join(root, "intelligence")
+	authority := provisionSignedFeedAuthority(t, intelRoot, generated, map[string][]string{"feodo": indicators})
 	snapshot := map[string]any{
 		"schemaVersion":    threatintel.SchemaVersion,
 		"key":              "feodo",
-		"generatedUtc":     time.Now().UTC().Format(time.RFC3339Nano),
+		"generatedUtc":     generated.Format(time.RFC3339Nano),
 		"action":           string(threatintel.ActionBlock),
 		"attribution":      map[string]any{"name": "Feodo Tracker C2", "url": "https://feodotracker.abuse.ch/"},
 		"generationSha256": hex.EncodeToString(digest[:]),
 		"indicators":       indicators,
+		"authority":        authority,
 	}
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sources := filepath.Join(root, "intelligence", "sources")
+	sources := filepath.Join(intelRoot, "sources")
 	if err := os.MkdirAll(sources, 0o700); err != nil {
 		t.Fatal(err)
 	}

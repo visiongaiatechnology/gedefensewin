@@ -1,4 +1,4 @@
-// STATUS: DIAMANT VGT SUPREME
+// STATUS: PLATIN VGT SUPREME
 //go:build windows
 
 package mhx
@@ -504,7 +504,30 @@ func TestTriageProcessCreationBehaviorSignalUnknownImage(t *testing.T) {
 	}
 }
 
+// setTriagePolicyForTest publishes a deterministic Sentinel triage policy for
+// one test and restores the previous policy afterwards, so package-level tests
+// (killerdom_test.go opens a store and enables Paranoia Mode) can never leak a
+// policy into the triage contract tests.
+func setTriagePolicyForTest(t *testing.T, cfg SentinelConfig) {
+	t.Helper()
+	previous := activeSentinelTriagePolicy.Load()
+	publishSentinelTriagePolicyFromConfig(cfg)
+	t.Cleanup(func() { activeSentinelTriagePolicy.Store(previous) })
+}
+
+// preserveTriagePolicy restores the package-level triage policy after a test
+// that publishes through a real SentinelStore.
+func preserveTriagePolicy(t *testing.T) {
+	t.Helper()
+	previous := activeSentinelTriagePolicy.Load()
+	t.Cleanup(func() { activeSentinelTriagePolicy.Store(previous) })
+}
+
+// TestTriageProcessCreationBenignUnknownImageDropped keeps the performance
+// contract: a curated low-risk inbox binary with a canonical path and an
+// innocuous command line is dropped without signature work or enrichment.
 func TestTriageProcessCreationBenignUnknownImageDropped(t *testing.T) {
+	setTriagePolicyForTest(t, defaultSentinelConfig())
 	notepad := filepath.Join(os.Getenv("SystemRoot"), "System32", "notepad.exe")
 	if info, err := os.Stat(notepad); err != nil || !info.Mode().IsRegular() {
 		t.Skip("notepad.exe is unavailable")
@@ -519,7 +542,7 @@ func TestTriageProcessCreationBenignUnknownImageDropped(t *testing.T) {
 		CommandLine:  `notepad.exe C:\Temp\notes.txt`,
 	}
 	if probe.triageProcessCreation(&event) {
-		t.Fatalf("benign unknown image was observed: %+v", event)
+		t.Fatalf("benign curated system binary was observed: %+v", event)
 	}
 	if event.SignerStatus != "" || event.OriginalImageName != "" || event.ImageVersionCompany != "" {
 		t.Fatalf("dropped event received enrichment: %+v", event)
@@ -544,6 +567,204 @@ func TestTriageProcessCreationRelativeImageKnownName(t *testing.T) {
 	}
 	if event.SignerStatus != "" || event.OriginalImageName != "" {
 		t.Fatalf("relative image path was probed: %+v", event)
+	}
+}
+
+// TestTriageProcessCreationNonLolbinImagesForwarded is the FIND-WIN-003
+// regression: interpreters and credential tooling that are not on the static
+// LOLBin list must reach the engine, where Killerdom/Evaluator reacts.
+func TestTriageProcessCreationNonLolbinImagesForwarded(t *testing.T) {
+	setTriagePolicyForTest(t, defaultSentinelConfig())
+	cases := []struct {
+		name    string
+		image   string
+		path    string
+		parent  string
+		command string
+	}{
+		{"python-suspicious-parent", "python.exe", `C:\Users\Public\python.exe`, "winword.exe", `python.exe -c "import socket"`},
+		{"bash-suspicious-parent", "bash.exe", `C:\Program Files\Git\bin\bash.exe`, "outlook.exe", `bash.exe -c "curl http://example.invalid"`},
+		{"mimikatz", "mimikatz.exe", `C:\Users\Public\mimikatz.exe`, "cmd.exe", `mimikatz.exe sekurlsa::logonpasswords`},
+		{"miner", "xmrig.exe", `C:\Users\Public\xmrig.exe`, "explorer.exe", `xmrig.exe --coin monero --url stratum+tcp://example.invalid:3333`},
+	}
+	probe := &processImageProbe{}
+	for index, testCase := range cases {
+		event := ProcessEvent{
+			TimestampUTC: time.Now().UTC(),
+			PID:          uint32(5100 + index),
+			ParentPID:    4,
+			Image:        testCase.image,
+			ImagePath:    testCase.path,
+			ParentImage:  testCase.parent,
+			CommandLine:  testCase.command,
+		}
+		if !probe.triageProcessCreation(&event) {
+			t.Fatalf("%s: non-LOLBin image was dropped", testCase.name)
+		}
+	}
+}
+
+func TestTriageProcessCreationParanoiaForwardsEveryImage(t *testing.T) {
+	notepad := filepath.Join(os.Getenv("SystemRoot"), "System32", "notepad.exe")
+	if info, err := os.Stat(notepad); err != nil || !info.Mode().IsRegular() {
+		t.Skip("notepad.exe is unavailable")
+	}
+	cfg := defaultSentinelConfig()
+	cfg.ParanoiaMode = true
+	setTriagePolicyForTest(t, cfg)
+	probe := &processImageProbe{}
+	event := ProcessEvent{
+		TimestampUTC: time.Now().UTC(),
+		PID:          5200,
+		ParentPID:    4,
+		Image:        "notepad.exe",
+		ImagePath:    notepad,
+		CommandLine:  `notepad.exe C:\Temp\notes.txt`,
+	}
+	if !probe.triageProcessCreation(&event) {
+		t.Fatal("Paranoia Mode must forward every image to the default-deny engine")
+	}
+	assertEmbeddedSignerState(t, event.SignerStatus)
+}
+
+func TestTriageProcessCreationStrictLineageParentForwards(t *testing.T) {
+	notepad := filepath.Join(os.Getenv("SystemRoot"), "System32", "notepad.exe")
+	if info, err := os.Stat(notepad); err != nil || !info.Mode().IsRegular() {
+		t.Skip("notepad.exe is unavailable")
+	}
+	setTriagePolicyForTest(t, defaultSentinelConfig())
+	probe := &processImageProbe{}
+	// taskhostw.exe is a strict-lineage image; even a curated low-risk child
+	// must reach the engine so the lineage parent cannot hide.
+	event := ProcessEvent{
+		TimestampUTC: time.Now().UTC(),
+		PID:          5201,
+		ParentPID:    4,
+		Image:        "notepad.exe",
+		ImagePath:    notepad,
+		ParentImage:  "taskhostw.exe",
+		ParentPath:   filepath.Join(os.Getenv("SystemRoot"), "System32", "taskhostw.exe"),
+		CommandLine:  `notepad.exe C:\Temp\notes.txt`,
+	}
+	if !probe.triageProcessCreation(&event) {
+		t.Fatal("strict-lineage parent must force the event through triage")
+	}
+	assertEmbeddedSignerState(t, event.SignerStatus)
+}
+
+func TestTriageProcessCreationGhostTelemetryProcessForwards(t *testing.T) {
+	werfault := filepath.Join(os.Getenv("SystemRoot"), "System32", "werfault.exe")
+	if info, err := os.Stat(werfault); err != nil || !info.Mode().IsRegular() {
+		t.Skip("werfault.exe is unavailable")
+	}
+	cfg := defaultSentinelConfig()
+	cfg.GhostModeTelemetryKill = true
+	setTriagePolicyForTest(t, cfg)
+	probe := &processImageProbe{}
+	event := ProcessEvent{
+		TimestampUTC: time.Now().UTC(),
+		PID:          5202,
+		ParentPID:    4,
+		Image:        "werfault.exe",
+		ImagePath:    werfault,
+		CommandLine:  `werfault.exe -u -p 4242`,
+	}
+	if !probe.triageProcessCreation(&event) {
+		t.Fatal("Ghost Mode telemetry process must be forwarded for correlation")
+	}
+}
+
+func TestTriageProcessCreationCuratedCLISignalForwards(t *testing.T) {
+	notepad := filepath.Join(os.Getenv("SystemRoot"), "System32", "notepad.exe")
+	if info, err := os.Stat(notepad); err != nil || !info.Mode().IsRegular() {
+		t.Skip("notepad.exe is unavailable")
+	}
+	setTriagePolicyForTest(t, defaultSentinelConfig())
+	probe := &processImageProbe{}
+	// A Killerdom signature match on the command line (sekurlsa) must forward a
+	// curated image instead of dropping it on the filename fast path.
+	event := ProcessEvent{
+		TimestampUTC: time.Now().UTC(),
+		PID:          5203,
+		ParentPID:    4,
+		Image:        "notepad.exe",
+		ImagePath:    notepad,
+		CommandLine:  `notepad.exe sekurlsa::logonpasswords`,
+	}
+	if !probe.triageProcessCreation(&event) {
+		t.Fatal("Killerdom CLI signature match must forward the event")
+	}
+	assertEmbeddedSignerState(t, event.SignerStatus)
+	if event.OriginalImageName == "" {
+		t.Fatal("forwarded CLI branch did not record PE provenance")
+	}
+}
+
+func TestTriageProcessCreationUnknownReadableImageEnriched(t *testing.T) {
+	source := windowsPowerShellImagePath(t)
+	destination := filepath.Join(t.TempDir(), "vgt-unknown-probe.exe")
+	copyTestImage(t, source, destination)
+	setTriagePolicyForTest(t, defaultSentinelConfig())
+	probe := &processImageProbe{}
+	event := ProcessEvent{
+		TimestampUTC: time.Now().UTC(),
+		PID:          5204,
+		ParentPID:    4,
+		Image:        "vgt-unknown-probe.exe",
+		ImagePath:    destination,
+		CommandLine:  `vgt-unknown-probe.exe -NoProfile`,
+	}
+	if !probe.triageProcessCreation(&event) {
+		t.Fatal("unknown readable image must be forwarded")
+	}
+	// Every forwarded branch must fill the signature signal for Fair Scoring.
+	assertEmbeddedSignerState(t, event.SignerStatus)
+	if event.OriginalImageName == "" {
+		t.Fatal("forwarded unknown image did not record PE provenance")
+	}
+}
+
+// TestTriagePolicyReflectsSentinelStore proves the wiring from the live
+// SentinelStore to the process sensor: enabling Paranoia Mode through the store
+// must immediately change the triage verdict.
+func TestTriagePolicyReflectsSentinelStore(t *testing.T) {
+	preserveTriagePolicy(t)
+	store, err := OpenSentinelStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	notepad := filepath.Join(os.Getenv("SystemRoot"), "System32", "notepad.exe")
+	if info, err := os.Stat(notepad); err != nil || !info.Mode().IsRegular() {
+		t.Skip("notepad.exe is unavailable")
+	}
+	buildEvent := func() ProcessEvent {
+		return ProcessEvent{
+			TimestampUTC: time.Now().UTC(),
+			PID:          5205,
+			ParentPID:    4,
+			Image:        "notepad.exe",
+			ImagePath:    notepad,
+			CommandLine:  `notepad.exe C:\Temp\notes.txt`,
+		}
+	}
+	probe := &processImageProbe{}
+	event := buildEvent()
+	if probe.triageProcessCreation(&event) {
+		t.Fatal("default policy must still filter a benign curated binary")
+	}
+	if err := store.SetParanoiaMode(true, "FIND-WIN-003 triage test"); err != nil {
+		t.Fatalf("SetParanoiaMode: %v", err)
+	}
+	event = buildEvent()
+	if !probe.triageProcessCreation(&event) {
+		t.Fatal("Paranoia Mode published through the store must forward every image")
+	}
+	if err := store.SetParanoiaMode(false, "FIND-WIN-003 triage test rollback"); err != nil {
+		t.Fatalf("SetParanoiaMode rollback: %v", err)
+	}
+	event = buildEvent()
+	if probe.triageProcessCreation(&event) {
+		t.Fatal("disabling Paranoia Mode must restore the performance filter")
 	}
 }
 

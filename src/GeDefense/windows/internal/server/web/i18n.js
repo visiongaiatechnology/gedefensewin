@@ -7,6 +7,13 @@ import { TRANSLATIONS } from './i18n-data.js';
 
 export const LANGUAGES = ['de', 'en', 'ru', 'zh'];
 export const LANGUAGE_NAMES = { de: 'Deutsch', en: 'English', ru: 'Русский', zh: '中文' };
+/** Canonical language-change event. Dispatched on `document` with
+ *  detail `{ language, locale }` after every successful language switch, so
+ *  DOM listeners (overview map feed, metadata, labels) re-render in the new
+ *  language. Import this constant instead of repeating the event name. */
+export const LANGUAGE_EVENT = 'gedefense:language';
+/** Pre-5.3 event name, dispatched on `globalThis` for compatibility. */
+const LEGACY_LANGUAGE_EVENT = 'geodefense:languagechange';
 const INTL_LOCALES = { de: 'de-DE', en: 'en-US', ru: 'ru-RU', zh: 'zh-CN' };
 const LANGUAGE_LABELS = { de: 'Sprache', en: 'Language', ru: 'Язык', zh: '语言' };
 const COOKIE_NAME = 'vgt.lang';
@@ -321,7 +328,14 @@ export function setLanguage(languageCode) {
   writeCookie(code);
   document.documentElement.lang = code;
   applyAll();
-  globalThis.dispatchEvent(new CustomEvent('geodefense:languagechange', { detail: { language: code } }));
+  const detail = { language: code, locale: INTL_LOCALES[code] || INTL_LOCALES.en };
+  // Documented contract: LANGUAGE_EVENT on the document tree with the language
+  // code and the Intl locale in detail. This is what overview-map.js and any
+  // other DOM listener subscribe to.
+  document.dispatchEvent(new CustomEvent(LANGUAGE_EVENT, { detail }));
+  // Legacy contract: the same detail on globalThis under the old event name so
+  // an out-of-tree consumer implemented against 5.2 does not silently break.
+  globalThis.dispatchEvent(new CustomEvent(LEGACY_LANGUAGE_EVENT, { detail }));
 }
 
 export function initI18n() {

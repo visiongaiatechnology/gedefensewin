@@ -21,6 +21,7 @@ import (
 type settingsApplier struct {
 	hardening *hardening.Engine
 	mhx       *mhx.Engine
+	v6        *v6Runtime
 	ledger    *evidence.Ledger
 }
 
@@ -41,6 +42,9 @@ func (a *settingsApplier) Apply(ctx context.Context, change settings.Change) err
 		return err
 	}
 	if err := a.applyThreatIntelligence(ctx, change); err != nil {
+		return err
+	}
+	if err := a.applyV6(ctx, change); err != nil {
 		return err
 	}
 	// A profile activation must not be persisted as the new level until the MHX
@@ -382,6 +386,28 @@ func (a *settingsApplier) applyThreatIntelligence(ctx context.Context, change se
 		if _, err := a.mhx.SetProtectedNetworkPolicy(ctx, stringListValue(values["protectedNetworks"])); err != nil {
 			return fmt.Errorf("protected network policy rejected: %w", err)
 		}
+	}
+	return nil
+}
+
+func (a *settingsApplier) applyV6(ctx context.Context, change settings.Change) error {
+	changed := changedFields(change.Changed, settings.SectionV6)
+	if len(changed) == 0 {
+		return nil
+	}
+	if a.v6 == nil {
+		return errors.New("V6 Sovereign runtime unavailable")
+	}
+	for key := range changed {
+		switch key {
+		case "spywareEnabled", "spywareByovd", "spywareCapability", "spywarePersistence", "spywareLsass", "witnessEnabled":
+		default:
+			return fmt.Errorf("V6 Sovereign setting %q is not enforceable by this build", key)
+		}
+	}
+	cfg := v6ConfigFromValues(change.Sections[settings.SectionV6])
+	if err := a.v6.Configure(ctx, cfg); err != nil {
+		return fmt.Errorf("V6 Sovereign configuration rejected: %w", err)
 	}
 	return nil
 }

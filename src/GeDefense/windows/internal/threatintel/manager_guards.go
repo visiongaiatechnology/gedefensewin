@@ -30,13 +30,22 @@ func applyFeedAuthorityState(state *FeedState, snapshot *sourceSnapshot) {
 }
 
 // applyFreshnessAndAuthenticity is the read-time safety projection. It converts
-// an expired generation or a detected clock rollback into a fail-closed status:
-// blocking counters and the enforcement generation are withdrawn, so the MHX
-// layer refuses to apply a stale or untrusted rule generation.
+// an expired generation, a detected clock rollback or an unavailable signed feed
+// authority into a fail-closed status: blocking counters and the enforcement
+// generation are withdrawn, so the MHX layer refuses to apply a stale or
+// untrusted rule generation.
+//
+// FIND-WIN-015: without a verified signed-authority key ring the status is
+// explicitly UNVERIFIED / DISABLED_UNAUTHORIZED. Feed data remains visible for
+// display and audit as ANNOTATE_ONLY, but no status field can advertise blocking
+// enforcement. A rejected clock high-water anchor is surfaced through
+// FeedClockError and also withdraws enforcement (fail closed).
 func (m *Manager) applyFreshnessAndAuthenticity(status Status) Status {
 	now := m.effectiveNowUTC()
 	maxAge := m.maxFeedAge()
 	rollback := m.clockRollbackDetected()
+	clockError := m.clockErrorText()
+	authorityAvailable := m.authorityEnforcementAvailable()
 	expiredBlocking := false
 	for index := range status.Feeds {
 		feed := &status.Feeds[index]
@@ -65,19 +74,35 @@ func (m *Manager) applyFreshnessAndAuthenticity(status Status) Status {
 			status.Error = "hard feed freshness TTL exceeded: stale blocking generations are not enforced"
 		}
 	}
-	m.authorityMu.RLock()
-	status.FeedAuthenticity = feedAuthenticityUnconfigured
-	if m.authorityConfigured {
-		status.FeedAuthenticity = feedAuthenticityEnforced
-		if m.authorityError != "" {
-			status.FeedAuthenticity = feedAuthenticityFailed
+	if !authorityAvailable {
+		// Fail closed independently of freshness: unsigned/unverified data may be
+		// displayed and audited, never enforced.
+		status.BlockingIndicators = 0
+		status.BlockingFeedsReady = 0
+		status.BlockingFeedsTotal = 0
+		status.EnforcementGeneration = ""
+		if status.State == "CURRENT" || status.State == "CACHED" {
+			status.State = "DEGRADED"
 		}
 	}
-	status.FeedAuthorityKeys = len(m.authorityKeys)
-	status.FeedAuthoritySequence = m.authorityState.LastSequence
-	status.FeedAuthorityError = m.authorityError
-	m.authorityMu.RUnlock()
-	status.FeedClockRollback = rollback
+	authenticity, enforcement, authorityDetail, keys, sequence := m.authorityStatus()
+	status.FeedAuthenticity = authenticity
+	status.FeedEnforcement = enforcement
+	status.FeedAuthorityError = authorityDetail
+	status.FeedAuthorityKeys = keys
+	status.FeedAuthoritySequence = sequence
+	if !authorityAvailable && status.Error == "" {
+		status.Error = authorityDetail
+	}
+	if clockError != "" {
+		status.FeedClockError = clockError
+		if status.Error == "" {
+			status.Error = clockError
+		}
+	}
+	m.clockMu.RLock()
+	status.FeedClockRollback = m.clockRollback
+	m.clockMu.RUnlock()
 	status.MaxFeedAgeSeconds = int(maxAge / time.Second)
 	return status
 }

@@ -12,7 +12,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $serviceName = 'VGTGeDefense'
 $installRoot = Join-Path $env:ProgramFiles 'VGT\GeDefense'
+$programDataVgtRoot = Join-Path $env:ProgramData 'VGT'
 $dataRoot = Join-Path $env:ProgramData 'VGT\GeDefense'
+$securityCenterRoot = Join-Path $env:ProgramData 'VGT\SecurityCenter'
+$installerCacheRoot = Join-Path $env:ProgramData 'VGT\InstallerCache'
 $brandingRoot = Join-Path $env:ProgramData 'VGT\Branding'
 $installerLogRoot = Join-Path $env:ProgramData 'VGT\InstallerLogs'
 $installerLog = Join-Path $installerLogRoot 'uninstall.log'
@@ -91,7 +94,9 @@ function Initialize-VgtUninstallLogging {
     $localAppDataRoot = [IO.Path]::GetFullPath([Environment]::GetFolderPath('LocalApplicationData'))
     if ([string]::IsNullOrWhiteSpace($programDataRoot) -or [string]::IsNullOrWhiteSpace($localAppDataRoot)) { throw [IO.InvalidDataException]::new('ProgramData/LocalAppData environment is unavailable.') }
     Assert-VgtNoReparseTraversal -Path $installRoot -AllowedRoot ([IO.Path]::GetFullPath($env:ProgramFiles))
+    Assert-VgtNoReparseTraversal -Path $programDataVgtRoot -AllowedRoot $programDataRoot
     Assert-VgtNoReparseTraversal -Path $dataRoot -AllowedRoot $programDataRoot
+    Assert-VgtNoReparseTraversal -Path $securityCenterRoot -AllowedRoot $programDataRoot
     Assert-VgtNoReparseTraversal -Path $brandingRoot -AllowedRoot $programDataRoot
     Assert-VgtNoReparseTraversal -Path $installerLogRoot -AllowedRoot $programDataRoot
     Assert-VgtNoReparseTraversal -Path $startMenu -AllowedRoot $programDataRoot
@@ -103,9 +108,13 @@ function Initialize-VgtUninstallLogging {
         New-VgtSafeDirectory -Path ([IO.Path]::GetDirectoryName($candidateDiagnosticLog)) -AllowedRoot $localAppDataRoot | Out-Null
         $script:resolvedDiagnosticLog = $candidateDiagnosticLog
     }
+    New-VgtSafeDirectory -Path $programDataVgtRoot -AllowedRoot $programDataRoot | Out-Null
+    # Uninstall hardening is defense-in-depth only: it must never abort a valid
+    # uninstall on a pre-existing user-owned product root, so the owner takeover
+    # step is skipped here (the DACL is still replaced and read-back verified).
+    Set-VgtRestrictedAcl -Path $programDataVgtRoot -SkipOwnerHardening -ErrorAction Stop | Out-Null
     New-VgtSafeDirectory -Path $installerLogRoot -AllowedRoot $programDataRoot | Out-Null
-    $nativeOutput = (& "$env:SystemRoot\System32\icacls.exe" $installerLogRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) { throw [Security.SecurityException]::new(('Uninstall log ACL hardening failed: {0}' -f $nativeOutput)) }
+    Set-VgtRestrictedAcl -Path $installerLogRoot -SkipOwnerHardening -ErrorAction Stop | Out-Null
     Assert-VgtSafeFileTarget -Path $installerLog -AllowedRoot $installerLogRoot | Out-Null
     $script:uninstallLogReady = $true
     foreach ($bufferedLine in $script:uninstallLogBuffer) { Write-VgtLogLine -Line $bufferedLine }
@@ -129,16 +138,44 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw [Security.SecurityException]::new('Administrative token required.') }
 $resolvedPayload = (Resolve-Path -LiteralPath $PayloadRoot -ErrorAction Stop).Path
-$certificatePath = Join-Path $resolvedPayload 'vgt-release.cer'
+# Two supported trust modes:
+#   1. Full signed payload (standalone installer / Bootstrap path): the release
+#      certificate, the signed payload catalog and the catalog verification must
+#      all succeed.
+#   2. Installed maintenance mode (Inno uninstaller): the install transaction
+#      stored the signed uninstaller, the verified release certificate and a
+#      thumbprint marker under {app}\installer. The marker is bound to the
+#      certificate thumbprint and the running script must be Valid and signed by
+#      exactly that certificate.
+$catalogCertificatePath = Join-Path $resolvedPayload 'vgt-release.cer'
 $catalogPath = Join-Path $resolvedPayload 'vgt-payload.cat'
-if (-not (Test-Path -LiteralPath $certificatePath -PathType Leaf) -or -not (Test-Path -LiteralPath $catalogPath -PathType Leaf)) { throw [IO.FileNotFoundException]::new('Signed uninstall payload is incomplete.') }
-$certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath)
+$fullPayloadMode = (Test-Path -LiteralPath $catalogCertificatePath -PathType Leaf) -and (Test-Path -LiteralPath $catalogPath -PathType Leaf)
+if ($fullPayloadMode) {
+    $trustedCertificatePath = $catalogCertificatePath
+} else {
+    $supportDirectory = Join-Path $resolvedPayload 'installer'
+    $trustedCertificatePath = Join-Path $supportDirectory 'vgt-release.cer'
+    $trustMarkerPath = Join-Path $supportDirectory 'release-trust.txt'
+    if (-not (Test-Path -LiteralPath $trustedCertificatePath -PathType Leaf) -or -not (Test-Path -LiteralPath $trustMarkerPath -PathType Leaf)) {
+        throw [IO.FileNotFoundException]::new('Signed uninstall payload trust anchor is incomplete.')
+    }
+    Assert-VgtNoReparseTraversal -Path $trustMarkerPath -AllowedRoot $resolvedPayload
+    Assert-VgtNoReparseTraversal -Path $trustedCertificatePath -AllowedRoot $resolvedPayload
+    $markerThumbprint = (Get-Content -LiteralPath $trustMarkerPath -Raw -Encoding ASCII).Trim().ToUpperInvariant()
+    if ($markerThumbprint -notmatch '^[A-F0-9]{40}$') { throw [Security.SecurityException]::new('Installed uninstaller trust marker is invalid.') }
+}
+$certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($trustedCertificatePath)
+if (-not $fullPayloadMode -and $certificate.Thumbprint.ToUpperInvariant() -ne $markerThumbprint) {
+    throw [Security.SecurityException]::new('Installed uninstaller trust marker does not match the release certificate.')
+}
 $signature = Get-AuthenticodeSignature -LiteralPath $PSCommandPath
 if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) { throw [Security.SecurityException]::new('Uninstaller signature validation failed.') }
-$catalogSignature = Get-AuthenticodeSignature -LiteralPath $catalogPath
-if ($catalogSignature.Status -ne 'Valid' -or -not $catalogSignature.SignerCertificate -or $catalogSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) { throw [Security.SecurityException]::new('Uninstall catalog signer validation failed.') }
-$catalog = Test-FileCatalog -Path $resolvedPayload -CatalogFilePath $catalogPath -Detailed
-if ($catalog.Status -ne 'Valid') { throw [Security.SecurityException]::new('Uninstall payload catalog validation failed.') }
+if ($fullPayloadMode) {
+    $catalogSignature = Get-AuthenticodeSignature -LiteralPath $catalogPath
+    if ($catalogSignature.Status -ne 'Valid' -or -not $catalogSignature.SignerCertificate -or $catalogSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) { throw [Security.SecurityException]::new('Uninstall catalog signer validation failed.') }
+    $catalog = Test-FileCatalog -Path $resolvedPayload -CatalogFilePath $catalogPath -Detailed
+    if ($catalog.Status -ne 'Valid') { throw [Security.SecurityException]::new('Uninstall payload catalog validation failed.') }
+}
 
 # Paths are validated (and the restricted uninstall log is created) before the
 # first persistent write or removal.
@@ -220,7 +257,11 @@ if (Get-LocalGroup -Name $operatorGroup -ErrorAction SilentlyContinue) {
 
 if (Test-Path -LiteralPath $installRoot) {
     $installedSetup = Join-Path $installRoot 'GeDefense-Setup.exe'
-    Get-ChildItem -LiteralPath $installRoot -Force | Where-Object Name -ne 'GeDefense-Setup.exe' | ForEach-Object {
+    # Never delete the running Inno Setup uninstaller (unins000.exe/.dat) or the
+    # support scripts this process is executing from; Inno removes them itself
+    # after this transaction returns (FIND-WIN-014).
+    $preservedNames = @('GeDefense-Setup.exe','unins000.exe','unins000.dat','unins001.exe','unins001.dat','installer')
+    Get-ChildItem -LiteralPath $installRoot -Force | Where-Object { $preservedNames -notcontains $_.Name } | ForEach-Object {
         if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) {
             [IO.Directory]::Delete($_.FullName,$false)
         } elseif ($_.PSIsContainer) {
@@ -239,13 +280,17 @@ public static class VgtPendingDelete {
     public static bool Schedule(string path) { return MoveFileEx(path, null, 4); }
 }
 '@
-        if (-not [VgtPendingDelete]::Schedule($installedSetup)) { throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
+        if (-not [VgtPendingDelete]::Schedule($installedSetup)) {
+            # The standalone setup can be the currently running uninstaller; a
+            # pending delete failure must not break the completed uninstall.
+            Write-VgtUninstallPhase -Phase 'ProgramFiles' -State 'WARN' -Detail 'setup delete-on-reboot could not be scheduled'
+        }
     }
     Write-VgtUninstallPhase -Phase 'ProgramFiles' -State 'OK' -Detail $installRoot
 }
 
 # Remove only the publisher trust anchor that matches the signed payload
-# certificate. /Root is never touched (the installer never self-roots).
+# certificate.
 $publisherStorePath = "Cert:\LocalMachine\TrustedPublisher\$($certificate.Thumbprint)"
 if ($KeepPublisherTrust) {
     Write-VgtUninstallPhase -Phase 'PublisherTrust' -State 'KEPT' -Detail 'explicitly retained'
@@ -262,6 +307,33 @@ if ($KeepPublisherTrust) {
     Write-VgtUninstallPhase -Phase 'PublisherTrust' -State 'ABSENT' -Detail $certificate.Thumbprint
 }
 
+# Root-store trust (FIND-WIN-014): the Inno beta certificate import recorded a
+# marker with the imported thumbprint. The Root certificate is removed only when
+# the marker proves that this product imported exactly this certificate; a
+# machine-wide Root anchor is never touched blindly.
+$rootTrustMarkerName = 'RootCertImportedThumbprint'
+$rootStorePath = "Cert:\LocalMachine\Root\$($certificate.Thumbprint)"
+$rootTrustMarker = $null
+if (Test-Path -LiteralPath $stateKey) {
+    $stateItem = Get-ItemProperty -LiteralPath $stateKey -ErrorAction SilentlyContinue
+    if ($null -ne $stateItem -and $null -ne $stateItem.PSObject.Properties[$rootTrustMarkerName]) { $rootTrustMarker = [string]$stateItem.$rootTrustMarkerName }
+}
+if ($KeepPublisherTrust) {
+    Write-VgtUninstallPhase -Phase 'RootTrust' -State 'KEPT' -Detail 'explicitly retained'
+} elseif ([string]::IsNullOrWhiteSpace($rootTrustMarker)) {
+    Write-VgtUninstallPhase -Phase 'RootTrust' -State 'ABSENT' -Detail 'no product import marker; machine Root store untouched'
+} elseif ($rootTrustMarker.Trim().ToUpperInvariant() -ne ([string]$certificate.Thumbprint).ToUpperInvariant()) {
+    Write-VgtUninstallPhase -Phase 'RootTrust' -State 'SKIPPED' -Detail 'marker thumbprint mismatch; machine Root store untouched'
+} elseif (Test-Path -LiteralPath $rootStorePath) {
+    $storedRoot = Get-Item -LiteralPath $rootStorePath -ErrorAction Stop
+    if ($storedRoot.Thumbprint -ne $certificate.Thumbprint) { throw [Security.SecurityException]::new('Root trust anchor thumbprint mismatch during removal.') }
+    Remove-Item -LiteralPath $rootStorePath -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $rootStorePath) { throw [Security.SecurityException]::new('Root trust anchor removal failed.') }
+    Write-VgtUninstallPhase -Phase 'RootTrust' -State 'OK' -Detail ('product-imported Root anchor removed: {0}' -f $certificate.Thumbprint)
+} else {
+    Write-VgtUninstallPhase -Phase 'RootTrust' -State 'ABSENT' -Detail 'product-imported Root anchor already absent'
+}
+
 # Runtime credential: overwrite with random bytes, then delete. Evidence/Titan
 # data is retained unless -PurgeData is requested so upgrades/reinstalls and
 # forensic review do not lose the chain.
@@ -276,10 +348,12 @@ if (Test-Path -LiteralPath $tokenPath -PathType Leaf) {
     Write-VgtUninstallPhase -Phase 'RuntimeToken' -State 'ABSENT' -Detail 'no dashboard token present'
 }
 if ($PurgeData) {
-    if (Test-Path -LiteralPath $dataRoot) {
-        Assert-VgtNoReparseTraversal -Path $dataRoot -AllowedRoot ([IO.Path]::GetFullPath($env:ProgramData))
-        Remove-VgtTreeSafely -Path $dataRoot
-        Write-VgtUninstallPhase -Phase 'RuntimeData' -State 'OK' -Detail ('purged: {0}' -f $dataRoot)
+    $programDataRoot = [IO.Path]::GetFullPath($env:ProgramData)
+    foreach ($purgeTarget in @($dataRoot,$securityCenterRoot,$installerCacheRoot)) {
+        if (-not (Test-Path -LiteralPath $purgeTarget)) { continue }
+        Assert-VgtNoReparseTraversal -Path $purgeTarget -AllowedRoot $programDataRoot
+        Remove-VgtTreeSafely -Path $purgeTarget
+        Write-VgtUninstallPhase -Phase 'RuntimeData' -State 'OK' -Detail ('purged: {0}' -f $purgeTarget)
     }
 } else {
     Write-VgtUninstallPhase -Phase 'RuntimeData' -State 'RETAINED' -Detail 'use -PurgeData to remove evidence/runtime data'

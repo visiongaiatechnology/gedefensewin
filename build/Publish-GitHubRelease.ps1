@@ -33,7 +33,7 @@ Import-Module -Name (Join-Path $PSScriptRoot 'PublishVerification.psm1') -Force
 Import-Module -Name (Join-Path $projectRoot 'tools\VgtSupplyChain.psm1') -Force
 
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = Read-VgtVersion -ProjectRoot $projectRoot }
-if ($Version -notmatch '^5\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') { throw [IO.InvalidDataException]::new('Release version is invalid.') }
+if ($Version -notmatch '^[56]\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') { throw [IO.InvalidDataException]::new('Release version is invalid.') }
 $tag = 'v' + $Version
 if ([string]::IsNullOrWhiteSpace($ReleaseDirectory)) { $ReleaseDirectory = Join-Path $projectRoot 'release' }
 $ReleaseDirectory = [IO.Path]::GetFullPath($ReleaseDirectory)
@@ -54,6 +54,12 @@ $jsonName = 'GeDefense-Setup-x64-{0}.json' -f $tag
 $sourceZipName = 'VGT_GeDefense_Windows_{0}_Source.zip' -f $Version
 $sbomName = 'GeDefense-SBOM-{0}.cdx.json' -f $tag
 $provenanceName = 'GeDefense-Provenance-{0}.json' -f $tag
+# FIND-WIN-022: the Inno beta-onboarding installer is an optional, verified
+# additional publish asset. The mandatory standalone asset set above is
+# unchanged; the Inno triple is only required when the installer exists.
+$innoExeName = 'GeDefense-Setup-Inno-x64-{0}.exe' -f $tag
+$innoSidecarName = $innoExeName + '.sha256'
+$innoJsonName = $innoExeName + '.json'
 
 $exePath = Get-VgtAssetPath -Name $exeName
 $exeSidecarPath = Get-VgtAssetPath -Name ($exeName + '.sha256')
@@ -110,6 +116,36 @@ if ([string]$sidecarBinding.ProvenanceSha256 -ne $provenanceHash) { throw [Secur
 if ([int]$sidecarBinding.SbomComponents -ne [int]$sbomValidation.Components) { throw [Security.SecurityException]::new('Release sidecar SBOM component count does not match the validated SBOM.') }
 if ([string]$sidecarBinding.SourceTreeDigest -ne [string]$provenanceValidation.SourceTreeDigest) { throw [Security.SecurityException]::new('Release sidecar source-tree digest does not match the validated provenance.') }
 
+# ---------------------------------------------------------------------------
+# 1b. Optional Inno beta-onboarding installer (FIND-WIN-022): first-class publish
+#     asset, verified with the same measured-hash and Authenticode rules as the
+#     standalone installer. Absent is allowed (existing standalone release
+#     path); a partial or tampered Inno triple fails closed.
+# ---------------------------------------------------------------------------
+$innoExePath = Join-Path $ReleaseDirectory $innoExeName
+$innoSidecarPath = ''
+$innoJsonPath = ''
+$innoHash = ''
+$innoSignature = $null
+$hasInnoInstaller = Test-Path -LiteralPath $innoExePath -PathType Leaf
+if ($hasInnoInstaller) {
+    $innoSidecarPath = Get-VgtAssetPath -Name $innoSidecarName
+    $innoJsonPath = Get-VgtAssetPath -Name $innoJsonName
+    $innoHash = Assert-VgtAssetHash -Path $innoExePath -SidecarPath $innoSidecarPath
+    $innoManifest = Assert-VgtJsonManifestMatchesAsset -ManifestPath $innoJsonPath -AssetPath $innoExePath -ExpectedVersion $Version
+    $innoManifestThumbprint = ([string]$innoManifest.signerThumbprint).ToUpperInvariant()
+    if ($innoManifestThumbprint -and $innoManifestThumbprint -ne $expectedThumbprint) {
+        throw [Security.SecurityException]::new(('Inno installer sidecar signer {0} does not match the release signer {1}.' -f $innoManifestThumbprint,$expectedThumbprint))
+    }
+    $innoSignature = Assert-VgtPublisherSignature -Path $innoExePath -ExpectedThumbprint $expectedThumbprint
+} else {
+    foreach ($orphanName in @($innoSidecarName,$innoJsonName)) {
+        if (Test-Path -LiteralPath (Join-Path $ReleaseDirectory $orphanName) -PathType Leaf) {
+            throw [Security.SecurityException]::new(('Inno sidecar asset is present without the Inno installer: {0}. Rebuild the Inno installer or remove the orphaned sidecar.' -f $orphanName))
+        }
+    }
+}
+
 # 2. Clean tagged revision (fail closed; explicit override for dry runs only).
 $vcs = Assert-VgtCleanTag -ProjectRoot $projectRoot -Tag $tag -AllowMissingVcs:$AllowMissingVcs
 if ($vcs.State -ne 'verified') { Write-Warning 'VCS state is NOT verified (explicit -AllowMissingVcs override): the release cannot claim a clean tagged revision.' }
@@ -125,6 +161,14 @@ $sumsAssets = @(
     [pscustomobject]@{ Name = $sbomName; Path = $sbomPath },
     [pscustomobject]@{ Name = $provenanceName; Path = $provenancePath }
 )
+if ($hasInnoInstaller) {
+    # FIND-WIN-022: SHA256SUMS.txt must cover the Inno installer and its sidecars.
+    $sumsAssets += @(
+        [pscustomobject]@{ Name = $innoExeName; Path = $innoExePath },
+        [pscustomobject]@{ Name = $innoSidecarName; Path = $innoSidecarPath },
+        [pscustomobject]@{ Name = $innoJsonName; Path = $innoJsonPath }
+    )
+}
 $sums = Write-VgtSha256Sums -Assets $sumsAssets -OutputPath $sumsPath
 $sumsText = Get-Content -LiteralPath $sumsPath -Raw -Encoding UTF8
 foreach ($sumsAsset in $sumsAssets) {
@@ -168,6 +212,11 @@ $measured = [ordered]@{
     sidecarSbomSha256 = ([string]$sidecarBinding.SbomSha256).ToUpperInvariant()
     sidecarProvenanceSha256 = ([string]$sidecarBinding.ProvenanceSha256).ToUpperInvariant()
     sidecarSourceTreeDigest = ([string]$sidecarBinding.SourceTreeDigest).ToUpperInvariant()
+    innoState = $(if ($hasInnoInstaller) { 'verified' } else { 'absent' })
+    innoName = $innoExeName
+    innoBytes = $(if ($hasInnoInstaller) { [long](Get-Item -LiteralPath $innoExePath).Length } else { 0 })
+    innoSha256 = $(if ($hasInnoInstaller) { $innoHash.ToUpperInvariant() } else { '' })
+    innoSignatureStatus = $(if ($hasInnoInstaller) { [string]$innoSignature.Status } else { 'not-present' })
     sumsSha256 = (Get-VgtFileSha256Lower -Path $sumsPath).ToUpperInvariant()
     sumsCoverageState = [string]$sumsCoverage.Status
     sumsCoverageEntries = [int]$sumsCoverage.Entries
@@ -185,6 +234,7 @@ $verificationSummary = @(
     ('SBOM validated: {0} components, SHA-256 {1}' -f $measured.sbomComponents,$measured.sbomSha256),
     ('Provenance validated: source tree {0}, source manifest {1}' -f $measured.sourceTreeDigest,$measured.sourceManifestState),
     ('Release sidecar binding verified: SBOM SHA-256 {0}, provenance SHA-256 {1}, source tree {2}' -f $measured.sidecarSbomSha256,$measured.sidecarProvenanceSha256,$measured.sidecarSourceTreeDigest),
+    $(if ($hasInnoInstaller) { ('Inno beta installer verified: {0} SHA-256 {1} (Authenticode {2})' -f $innoExeName,$measured.innoSha256,$measured.innoSignatureStatus) } else { 'Inno beta installer: absent (optional beta onboarding asset)' }),
     ('SHA256SUMS.txt covers all {0} published assets (SHA-256 {1})' -f $sumsAssets.Count,$measured.sumsSha256),
     ('VCS: state={0} commit={1} tag={2} tagSignature={3}' -f $measured.vcsState,$measured.vcsCommit,$measured.vcsTag,$measured.vcsTagSignature)
 )
@@ -218,6 +268,11 @@ $headers = @{
     Accept = 'application/vnd.github+json'
     'X-GitHub-Api-Version' = '2022-11-28'
 }
+$innoBodyRow = if ($hasInnoInstaller) {
+    ('`{0}` - SHA-256 `{1}` - Authenticode {2}' -f $innoExeName,$measured.innoSha256,$measured.innoSignatureStatus)
+} else {
+    'not present (optional beta onboarding asset)'
+}
 $releaseBody = @"
 # VGT GeDefense Windows $Version
 
@@ -239,6 +294,7 @@ Official release candidate for **VGT GeDefense Windows $Version** by VisionGaia 
 | SBOM | ``$sbomName`` - $($measured.sbomComponents) components - SHA-256 ``$($measured.sbomSha256)`` |
 | Provenance | ``$provenanceName`` - source tree ``$($measured.sourceTreeDigest)`` - SHA-256 ``$($measured.provenanceSha256)`` |
 | Release sidecar binding | SBOM SHA-256 ``$($measured.sidecarSbomSha256)``, provenance SHA-256 ``$($measured.sidecarProvenanceSha256)``, source tree ``$($measured.sidecarSourceTreeDigest)`` |
+| Inno beta installer | $innoBodyRow |
 | Source manifest | state: $($measured.sourceManifestState) |
 | Git revision | state: $($measured.vcsState); commit: ``$($measured.vcsCommit)``; tag: ``$($measured.vcsTag)``; tag signature: $($measured.vcsTagSignature) |
 | SHA256SUMS.txt | SHA-256 ``$($measured.sumsSha256)`` (covers $($sumsAssets.Count) assets, coverage state: $($measured.sumsCoverageState)) |
@@ -301,6 +357,15 @@ $assetsToUpload = @(
     [pscustomobject]@{ Name = $provenanceName; Path = $provenancePath; ContentType = 'application/json' },
     [pscustomobject]@{ Name = 'SHA256SUMS.txt'; Path = $sumsPath; ContentType = 'text/plain' }
 )
+if ($hasInnoInstaller) {
+    # FIND-WIN-022: the verified Inno beta onboarding installer triple is uploaded
+    # as an additional publish asset only when it exists.
+    $assetsToUpload += @(
+        [pscustomobject]@{ Name = $innoExeName; Path = $innoExePath; ContentType = 'application/octet-stream' },
+        [pscustomobject]@{ Name = $innoSidecarName; Path = $innoSidecarPath; ContentType = 'text/plain' },
+        [pscustomobject]@{ Name = $innoJsonName; Path = $innoJsonPath; ContentType = 'application/json' }
+    )
+}
 foreach ($asset in $assetsToUpload) {
     $bytes = [IO.File]::ReadAllBytes($asset.Path)
     $uploadHeaders = @{
@@ -359,6 +424,7 @@ if ($PublishImmediately) {
     URL = $release.html_url
     Assets = $assetsToUpload.Count
     DigestsVerified = $digestVerifiedCount
+    InnoInstaller = [string]$measured.innoState
     SidecarBinding = 'verified'
     SumsCoverage = [string]$sumsCoverage.Status
     Measured = $measured
