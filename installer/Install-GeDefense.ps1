@@ -80,7 +80,7 @@ trap {
 function Invoke-ScChecked {
     param([Parameter(Mandatory)][string[]]$Arguments)
     $operation = if ($Arguments.Count -gt 0) { $Arguments[0] } else { 'unknown' }
-    $maxAttempts = 6
+    $maxAttempts = 15
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         $nativeOutput = (& "$env:SystemRoot\System32\sc.exe" @Arguments 2>&1 | Out-String).Trim()
         $nativeExitCode = $LASTEXITCODE
@@ -188,7 +188,13 @@ function Initialize-VgtProtectedPayloadStage {
     $stage = Join-Path $stagingParent ([Guid]::NewGuid().ToString('N'))
     New-VgtSafeDirectory -Path $stage -AllowedRoot $programDataRoot | Out-Null
     Set-VgtInstallAcl -Target $stage -Phase 'StagingACL'
-    Copy-Item -LiteralPath (Join-Path $SourcePayload '*') -Destination $stage -Recurse -Force
+    $stagedEntries = @(Get-ChildItem -LiteralPath $SourcePayload -Force)
+    if ($stagedEntries.Count -eq 0) {
+        throw [IO.IOException]::new('Source payload directory is empty during staging.')
+    }
+    foreach ($entry in $stagedEntries) {
+        Copy-Item -LiteralPath $entry.FullName -Destination $stage -Recurse -Force
+    }
     Assert-VgtNoReparseTraversal -Path $stage -AllowedRoot $programDataRoot
     $script:protectedPayloadStage = $stage
     Write-VgtInstallPhase -Phase 'PayloadStaging' -State 'OK' -Detail $stage
@@ -323,7 +329,7 @@ $resolvedPayload = Initialize-VgtProtectedPayloadStage -SourcePayload $resolvedS
 $versionPath = Join-Path $resolvedPayload 'VERSION'
 if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) { throw [IO.FileNotFoundException]::new('GeDefense release version metadata is missing.') }
 $releaseVersion = (Get-Content -LiteralPath $versionPath -Raw -Encoding UTF8).Trim()
-if ($releaseVersion -notmatch '^5\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') { throw [IO.InvalidDataException]::new('GeDefense release version metadata is invalid.') }
+if ($releaseVersion -notmatch '^[56]\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$') { throw [IO.InvalidDataException]::new('GeDefense release version metadata is invalid.') }
 
 # Downgrade guard (SC-FIND-003 local hardening): never silently replace a newer
 # installation with an older one. The externally anchored, manipulation-proof
@@ -635,7 +641,8 @@ Assert-VgtSafeFileTarget -Path $tokenPath -AllowedRoot $dataRoot | Out-Null
 Set-VgtInstallAcl -Target $tokenPath -Phase 'TokenACL'
 $defenderDeadline = [DateTime]::UtcNow.AddMinutes(2)
 do {
-    $defenderReady = [bool]((Get-MpComputerStatus -ErrorAction SilentlyContinue).AntivirusEnabled)
+    $mpStatus = Get-MpComputerStatus -ErrorAction SilentlyContinue
+    $defenderReady = [bool]($null -ne $mpStatus -and $null -ne $mpStatus.PSObject.Properties['AntivirusEnabled'] -and $mpStatus.AntivirusEnabled)
     if (-not $defenderReady) { Start-Sleep -Seconds 2 }
 } while (-not $defenderReady -and [DateTime]::UtcNow -lt $defenderDeadline)
 if (-not $defenderReady) { throw [InvalidOperationException]::new('Microsoft Defender did not become ready for initial hardening.') }

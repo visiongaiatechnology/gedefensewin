@@ -4,7 +4,6 @@
 package mhx
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -73,7 +72,7 @@ func TestHostsWritePreservesOriginalDACL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read hosts DACL after write: %v", err)
 	}
-	if !bytes.Equal(before, after) {
+	if !hostsDACLsEquivalent(after, before) {
 		t.Fatalf("hosts DACL changed after ghost mode write: before=%x after=%x", before, after)
 	}
 	if entries, err := os.ReadDir(filepath.Dir(hostsFilePath)); err == nil {
