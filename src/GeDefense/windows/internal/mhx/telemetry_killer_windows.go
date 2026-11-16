@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -440,12 +441,14 @@ func stageAndReplaceHosts(content string, original string, originalDescriptor []
 		return fmt.Errorf("read back hosts DACL: %w", err)
 	}
 	if !hostsDACLsEquivalent(applied, originalDescriptor) {
+		sddlA, _ := hostsDescriptorToSDDL(applied)
+		sddlO, _ := hostsDescriptorToSDDL(originalDescriptor)
 		// Roll the content back so a DACL change never survives as a silent
 		// access-control regression.
 		if restoreErr := stageAndReplaceHosts(original, original, applied); restoreErr != nil {
 			return fmt.Errorf("hosts DACL read-back mismatch and rollback failed: %w", restoreErr)
 		}
-		return fmt.Errorf("hosts DACL read-back mismatch; original content restored")
+		return fmt.Errorf("hosts DACL read-back mismatch (applied=%q original=%q); original content restored", normalizeDACLSDDL(sddlA), normalizeDACLSDDL(sddlO))
 	}
 	return nil
 }
@@ -543,8 +546,34 @@ func normalizeDACLSDDL(sddl string) string {
 		return sddl
 	}
 	prefix := strings.ReplaceAll(sddl[:idx], "AI", "")
-	aces := strings.ReplaceAll(sddl[idx:], ";ID;", ";")
-	return prefix + aces
+	rest := sddl[idx:]
+	var aces []string
+	hasDeny := false
+	for len(rest) > 0 {
+		start := strings.IndexByte(rest, '(')
+		end := strings.IndexByte(rest, ')')
+		if start < 0 || end < start {
+			return prefix + strings.ReplaceAll(sddl[idx:], ";ID;", ";")
+		}
+		ace := strings.ReplaceAll(rest[start:end+1], ";ID;", ";")
+		ace = strings.ReplaceAll(ace, "(D;", "(D;")
+		if strings.HasPrefix(ace, "(D;") || strings.HasPrefix(ace, "(OD;") {
+			hasDeny = true
+		}
+		aces = append(aces, ace)
+		rest = rest[end+1:]
+	}
+	if !hasDeny && len(aces) > 1 {
+		sort.Strings(aces)
+		dedup := aces[:0]
+		for _, a := range aces {
+			if len(dedup) == 0 || dedup[len(dedup)-1] != a {
+				dedup = append(dedup, a)
+			}
+		}
+		aces = dedup
+	}
+	return prefix + strings.Join(aces, "")
 }
 
 func flushDNSCache() {
