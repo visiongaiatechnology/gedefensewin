@@ -395,8 +395,26 @@ foreach ($asset in $assetsToUpload) {
         # Older GitHub API responses may omit the digest: download and re-hash.
         $downloadPath = Join-Path $env:TEMP ('vgt-publish-verify-' + [Guid]::NewGuid().ToString('N') + '.bin')
         try {
-            $redirectResp = Invoke-WebRequest -Uri ([string]$remoteAsset.url) -Headers @{ Authorization = "Bearer $token"; Accept = 'application/octet-stream'; 'User-Agent' = 'VGT-Release-Bot' } -MaximumRedirection 0 -UseBasicParsing -ErrorAction SilentlyContinue
-            $assetLocation = $redirectResp.Headers['Location']
+            $req = [System.Net.HttpWebRequest]::Create([string]$remoteAsset.url)
+            $req.Method = 'GET'
+            $req.AllowAutoRedirect = $false
+            $req.Headers['Authorization'] = "Bearer $token"
+            $req.Accept = 'application/octet-stream'
+            $req.UserAgent = 'VGT-Release-Bot'
+            $assetLocation = $null
+            try {
+                $resp = [System.Net.HttpWebResponse]$req.GetResponse()
+                $assetLocation = $resp.Headers['Location']
+                $resp.Close()
+            } catch [System.Net.WebException] {
+                $errResp = [System.Net.HttpWebResponse]$_.Exception.Response
+                if ($errResp -and ([int]$errResp.StatusCode -ge 300 -and [int]$errResp.StatusCode -lt 400)) {
+                    $assetLocation = $errResp.Headers['Location']
+                    $errResp.Close()
+                } else {
+                    throw
+                }
+            }
             if ([string]::IsNullOrWhiteSpace($assetLocation)) {
                 Invoke-WebRequest -Uri ([string]$remoteAsset.url) -Headers @{ Authorization = "Bearer $token"; Accept = 'application/octet-stream'; 'User-Agent' = 'VGT-Release-Bot' } -OutFile $downloadPath -UseBasicParsing | Out-Null
             } else {
