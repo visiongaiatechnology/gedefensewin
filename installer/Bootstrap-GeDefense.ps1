@@ -48,6 +48,9 @@ function Write-BootstrapFailureLog {
 }
 
 try {
+    if ($Operation -eq 'Install' -and (Test-Path -LiteralPath $diagnosticLog -PathType Leaf)) {
+        Remove-Item -LiteralPath $diagnosticLog -Force -ErrorAction SilentlyContinue
+    }
     $resolvedPayload = (Resolve-Path -LiteralPath $PayloadRoot -ErrorAction Stop).Path
     $resolvedInstaller = ''
     if ($InstallerPath) {
@@ -101,7 +104,16 @@ try {
     }
     $catalog = Test-FileCatalog -Path $resolvedPayload -CatalogFilePath $catalogPath -Detailed
     if ($catalog.Status -ne 'Valid') {
-        $detail = if ($catalog.CatalogItems) { "status=$($catalog.Status) hashAlgo=$($catalog.HashAlgorithm)" } else { "status=$($catalog.Status)" }
+        $detail = if ($catalog.CatalogItems) {
+            $mismatches = [Collections.Generic.List[string]]::new()
+            foreach ($k in ($catalog.CatalogItems.Keys | Sort-Object)) {
+                if ($catalog.PathItems[$k] -ne $catalog.CatalogItems[$k]) { [void]$mismatches.Add($k) }
+            }
+            $sample = if ($mismatches.Count -gt 0) { ' sample=' + (($mismatches | Select-Object -First 5) -join ',') } else { '' }
+            "status=$($catalog.Status) hashAlgo=$($catalog.HashAlgorithm) cat=$($catalog.CatalogItems.Count) path=$($catalog.PathItems.Count)$sample"
+        } else {
+            "status=$($catalog.Status)"
+        }
         throw [Security.SecurityException]::new("Bootstrap payload catalog validation failed ($detail).")
     }
 

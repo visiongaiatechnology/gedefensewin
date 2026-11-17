@@ -136,7 +136,8 @@ Add-Check -Name 'common-reparse-checks' -Passed ($common.Contains('function Test
 # 6. Inno thumbprint pin, transient payload, uninstaller preservation.
 Add-Check -Name 'inno-thumbprint-pinned' -Passed ($inno.Contains('#define ExpectedReleaseThumbprint "1E7B1641FC2E8EB82735216829C13721E3B9D895"') -and $inno.Contains('VerifyEmbeddedCertificateThumbprint'))
 Assert-Order -Name 'inno-thumbprint-check-before-root-import' -Text $inno -First 'VerifyEmbeddedCertificateThumbprint(CertificatePath)' -Second 'certutil.exe'
-Add-Check -Name 'inno-no-permanent-app-payload' -Passed (-not $inno.Contains('DestDir: "{app}\payload"') -and $inno.Contains('DestDir: "{tmp}\vgt-payload"') -and $inno.Contains('DelTree(PayloadRoot, True, True, True)'))
+Add-Check -Name 'inno-no-permanent-app-payload' -Passed (-not $inno.Contains('DestDir: "{app}\payload"') -and -not $inno.Contains('DestDir: "{tmp}\vgt-payload"') -and $inno.Contains('DestDir: "{commonappdata}\VGT\GeDefense\inno-transport"') -and $inno.Contains('PrepareInnoTransportStage') -and $inno.Contains('DelTree(PayloadRoot, True, True, True)'))
+Assert-Order -Name 'inno-transport-stage-hardened-before-bootstrap' -Text $inno -First 'PrepareInnoTransportStage;' -Second 'RunBootstrap;'
 Add-Check -Name 'inno-uninstall-uses-installed-script' -Passed ($inno.Contains('{app}\installer\Uninstall-GeDefense.ps1') -and -not $inno.Contains('-Operation Uninstall'))
 Add-Check -Name 'inno-import-readback-verified' -Passed ($inno.Contains('VerifyImportedCertificate') -and $inno.Contains('Get-ChildItem Cert:\LocalMachine\Root'))
 Add-Check -Name 'inno-records-root-import-marker' -Passed ($inno.Contains('RootCertImportedThumbprint'))

@@ -667,7 +667,8 @@ function Repair-VgtDataTreeAccess {
             throw [Security.SecurityException]::new(('Data tree contains a reparse point: {0}' -f $dir))
         }
         foreach ($child in @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop)) {
-            if ($child.FullName.StartsWith((Join-Path $normalizedRoot 'staging'), [StringComparison]::OrdinalIgnoreCase)) {
+            if ($child.FullName.StartsWith((Join-Path $normalizedRoot 'staging'), [StringComparison]::OrdinalIgnoreCase) -or
+                $child.FullName.StartsWith((Join-Path $normalizedRoot 'inno-transport'), [StringComparison]::OrdinalIgnoreCase)) {
                 continue
             }
             if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) {

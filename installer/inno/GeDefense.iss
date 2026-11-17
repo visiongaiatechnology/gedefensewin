@@ -105,11 +105,12 @@ zh.RepairDetected=检测到现有安装：将就地修复/更新 GeDefense %1。
 zh.ApplyingTransaction=正在执行已签名的 GeDefense 安装事务与状态迁移...
 
 [Files]
-; The payload is staged into the Setup temp directory only. It is consumed by the
-; signed Install-GeDefense.ps1 transaction (which copies it into an
-; Administrators/SYSTEM-only staging directory and verifies it there) and removed
-; again, so no writable/permanent second payload copy remains in {app}.
-Source: "..\..\payload\VGT\GeDefense\*"; DestDir: "{tmp}\vgt-payload"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Stage payload directly in a pre-hardened Administrators/SYSTEM-only ProgramData
+; transport directory (never %TEMP%, which Titan ingress watchers monitor, and never
+; {app}\payload). PrepareInnoTransportStage validates ancestor reparse safety and
+; locks ACLs before extraction, Install-GeDefense.ps1 re-stages and verifies, and
+; RunBootstrap / DeinitializeSetup always remove this transient transport tree.
+Source: "..\..\payload\VGT\GeDefense\*"; DestDir: "{commonappdata}\VGT\GeDefense\inno-transport"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\certificates\vgt-release.cer"; DestDir: "{tmp}"; Flags: dontcopy
 Source: "terms\terms.de.txt"; DestDir: "{tmp}"; Flags: dontcopy
 Source: "terms\terms.en.txt"; DestDir: "{tmp}"; Flags: dontcopy
@@ -122,6 +123,7 @@ Type: filesandordirs; Name: "{app}\payload"
 [UninstallDelete]
 Type: files; Name: "{app}\GeDefense-Setup.exe"
 Type: filesandordirs; Name: "{app}\installer"
+Type: filesandordirs; Name: "{commonappdata}\VGT\GeDefense\inno-transport"
 Type: dirifempty; Name: "{app}"
 
 [UninstallRun]
@@ -358,27 +360,69 @@ begin
   RegWriteStringValue(HKEY_LOCAL_MACHINE, 'SOFTWARE\VGT\GeDefense', 'RootCertImportedThumbprint', ReleaseThumbprint);
 end;
 
+procedure PrepareInnoTransportStage;
+var
+  PowerShell: String;
+  Parameters: String;
+  Command: String;
+  ResultCode: Integer;
+begin
+  PowerShell := ExpandConstant('{sysnative}\WindowsPowerShell\v1.0\powershell.exe');
+  Command :=
+    '$ErrorActionPreference=''Stop''; try { ' +
+    '$pd=[IO.Path]::GetFullPath([Environment]::GetFolderPath(''CommonApplicationData'')); ' +
+    '$v=Join-Path $pd ''VGT''; $g=Join-Path $v ''GeDefense''; $t=Join-Path $g ''inno-transport''; ' +
+    'foreach($p in @($v,$g,$t)){ if([IO.File]::Exists($p)){ exit 61 }; if([IO.Directory]::Exists($p)){ if((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){ exit 62 } } }; ' +
+    'if([IO.Directory]::Exists($t)){ foreach($c in @(Get-ChildItem -LiteralPath $t -Recurse -Force -ErrorAction Stop)){ if($c.Attributes -band [IO.FileAttributes]::ReparsePoint){ exit 63 } }; Remove-Item -LiteralPath $t -Recurse -Force -ErrorAction Stop }; ' +
+    '$sys=[Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::LocalSystemSid,$null); ' +
+    '$adm=[Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid,$null); ' +
+    '$inh=[Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit; ' +
+    '$prop=[Security.AccessControl.PropagationFlags]::None; ' +
+    '$r1=[Security.AccessControl.FileSystemAccessRule]::new($sys,[Security.AccessControl.FileSystemRights]::FullControl,$inh,$prop,[Security.AccessControl.AccessControlType]::Allow); ' +
+    '$r2=[Security.AccessControl.FileSystemAccessRule]::new($adm,[Security.AccessControl.FileSystemRights]::FullControl,$inh,$prop,[Security.AccessControl.AccessControlType]::Allow); ' +
+    'foreach($p in @($v,$g,$t)){ $created=$false; if(-not [IO.Directory]::Exists($p)){ [void][IO.Directory]::CreateDirectory($p); $created=$true }; ' +
+    '$cur=[IO.DirectoryInfo]::new($p).GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner); ' +
+    '$ownerSid=try{$cur.GetOwner([Security.Principal.SecurityIdentifier]).Value}catch{''''}; ' +
+    '$ownerOk=($ownerSid -eq $sys.Value) -or ($ownerSid -eq $adm.Value); ' +
+    '$ok=$cur.AreAccessRulesProtected -and $ownerOk; ' +
+    'if($ok){ foreach($ar in $cur.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){ if($ar.IsInherited -or (($ar.IdentityReference.Value -ne $sys.Value) -and ($ar.IdentityReference.Value -ne $adm.Value))){ $ok=$false } } }; ' +
+    'if($created -or ($p -eq $t) -or (-not $ok)){ if(-not $ownerOk){ & takeown.exe /F $p /A | Out-Null; if($LASTEXITCODE -ne 0){ exit 66 } }; ' +
+    '$acl=[Security.AccessControl.DirectorySecurity]::new(); $acl.SetAccessRuleProtection($true,$false); $acl.AddAccessRule($r1); $acl.AddAccessRule($r2); [IO.DirectoryInfo]::new($p).SetAccessControl($acl); ' +
+    '$rb=[IO.DirectoryInfo]::new($p).GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner); ' +
+    '$rbOwner=try{$rb.GetOwner([Security.Principal.SecurityIdentifier]).Value}catch{''''}; ' +
+    'if((-not $rb.AreAccessRulesProtected) -or (($rbOwner -ne $sys.Value) -and ($rbOwner -ne $adm.Value))){ exit 64 } } }; ' +
+    'exit 0 } catch { exit 65 }';
+  Parameters := '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Command + '"';
+  if (not Exec(PowerShell, Parameters, '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+  begin
+    RaiseException(CustomMessage('InstallFailed'));
+  end;
+end;
+
 procedure RunBootstrap;
 var
   PowerShell: String;
   PayloadRoot: String;
   Parameters: String;
   ResultCode: Integer;
+  ExecOk: Boolean;
   Uninstaller: String;
   ProgramDataRoot: String;
   DiagLine: String;
   ErrorText: String;
 begin
-  // Transient payload stage; the signed Install transaction copies it into a
-  // protected ProgramData staging directory and verifies the final destination.
+  // Transient payload stage in ProgramData\VGT\GeDefense\inno-transport; the
+  // signed Install transaction re-stages and verifies the final destination.
   WizardForm.StatusLabel.Caption := CustomMessage('ApplyingTransaction');
   WizardForm.FilenameLabel.Caption := 'Bootstrap-GeDefense.ps1';
-  PayloadRoot := ExpandConstant('{tmp}\vgt-payload');
+  PayloadRoot := ExpandConstant('{commonappdata}\VGT\GeDefense\inno-transport');
   PowerShell := ExpandConstant('{sysnative}\WindowsPowerShell\v1.0\powershell.exe');
   Parameters := '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy AllSigned -File "' +
     PayloadRoot + '\installer\Bootstrap-GeDefense.ps1" -PayloadRoot "' + PayloadRoot +
     '" -Operation Install';
-  if (not Exec(PowerShell, Parameters, '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+  ExecOk := Exec(PowerShell, Parameters, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  DelTree(PayloadRoot, True, True, True);
+  if (not ExecOk) or (ResultCode <> 0) then
   begin
     ErrorText := CustomMessage('InstallFailed');
     DiagLine := ReadLatestDiagnosticFailure;
@@ -388,9 +432,6 @@ begin
     SuppressibleMsgBox(ErrorText, mbError, MB_OK, IDOK);
     Abort;
   end;
-  // No permanent {app}\payload: the transient stage is removed immediately after
-  // the verified installation. Inno also removes {tmp} at exit.
-  DelTree(PayloadRoot, True, True, True);
   ProgramDataRoot := ExpandConstant('{commonappdata}\VGT\GeDefense\staging');
   if DirExists(ProgramDataRoot) then
   begin
@@ -464,9 +505,19 @@ begin
   if CurStep = ssInstall then
   begin
     ImportBetaCertificate;
+    PrepareInnoTransportStage;
   end
   else if CurStep = ssPostInstall then
   begin
     RunBootstrap;
   end;
+end;
+
+procedure DeinitializeSetup;
+var
+  TransportStage: String;
+begin
+  TransportStage := ExpandConstant('{commonappdata}\VGT\GeDefense\inno-transport');
+  if DirExists(TransportStage) then
+    DelTree(TransportStage, True, True, True);
 end;
