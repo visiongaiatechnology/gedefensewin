@@ -87,6 +87,22 @@ try {
     try { Assert-VgtSafeFileTarget -Path $fresh -AllowedRoot $allowedRoot | Out-Null } catch { $fileTargetIsDirectoryRejected = $true }
     Add-Check -Name 'file-target-directory-rejected' -Passed $fileTargetIsDirectoryRejected
 
+    # 7. Fast in-process ACL repair helper rejects junctions unconditionally, and
+    # verifies idempotent DACL repair when running with an elevated token.
+    $repairJunctionRejected = $false
+    try { Repair-VgtRestrictedEntryAcl -Path $junctionLink -IsDirectory | Out-Null } catch { $repairJunctionRejected = $true }
+    Add-Check -Name 'repair-entry-acl-rejects-junction' -Passed $repairJunctionRejected
+
+    $isAdmin = ([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($isAdmin) {
+        $aclTestFile = Join-Path $fresh 'acl-test.txt'
+        [IO.File]::WriteAllText($aclTestFile, 'test', [Text.UTF8Encoding]::new($false))
+        $repairFirst = Repair-VgtRestrictedEntryAcl -Path $aclTestFile
+        Add-Check -Name 'repair-entry-acl-passed' -Passed ([bool]$repairFirst.Passed)
+        $repairSecond = Repair-VgtRestrictedEntryAcl -Path $aclTestFile
+        Add-Check -Name 'repair-entry-acl-idempotent' -Passed ([bool]$repairSecond.Passed -and -not [bool]$repairSecond.Changed)
+    }
+
     [pscustomobject][ordered]@{
         Status = 'PASS'
         Checks = $results.Count

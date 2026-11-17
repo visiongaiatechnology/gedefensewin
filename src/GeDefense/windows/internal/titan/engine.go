@@ -131,7 +131,7 @@ func New(root, version string, ledger *evidence.Ledger) (*Engine, error) {
 				len(vaultIntegrity.Issues), vaultIntegrity),
 			SeverityHigh, TrustCompromised)
 	}
-	verification := journal.Verify()
+	verification := journal.initialVerification()
 	engine.journalVerified = verification.Verified
 	engine.lastVerification = verification
 	for _, definition := range []struct{ id, label string }{

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -187,9 +188,7 @@ func (s *State) CompleteSetup(profile, version string) (SetupResult, error) {
 	if version == "" {
 		return SetupResult{}, errors.New("setup version is required")
 	}
-	switch profile {
-	case "personal", "business", "server", "developer":
-	default:
+	if !isValidSetupProfile(profile) {
 		return SetupResult{}, errors.New("setup profile is invalid")
 	}
 	s.mu.Lock()
@@ -206,36 +205,85 @@ func (s *State) CompleteSetup(profile, version string) (SetupResult, error) {
 	previous.UptimeMS = readUptime()
 	previous.SetupCompletedUTC = now
 	previous.SetupProfile = profile
-	payload, err := json.Marshal(previous)
-	if err != nil {
+	if err := s.writeLocked(previous); err != nil {
 		return SetupResult{}, err
+	}
+	return SetupResult{Complete: true, Profile: profile, CompletedUTC: now, CurrentVersion: version}, nil
+}
+
+// PreserveSetupOnUpgrade marks first-run setup as complete when upgrading an
+// existing installation whose startup-state predates SetupCompletedUTC or never
+// recorded it, while leaving already-completed setup timestamps/profiles intact.
+func (s *State) PreserveSetupOnUpgrade(defaultProfile, version string) error {
+	if version == "" {
+		return errors.New("setup version is required")
+	}
+	profile := strings.ToLower(strings.TrimSpace(defaultProfile))
+	if !isValidSetupProfile(profile) {
+		profile = "business"
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	previous, loadErr := s.loadLocked()
+	if loadErr == nil && !previous.SetupCompletedUTC.IsZero() {
+		return nil
+	}
+	if loadErr != nil {
+		previous = persisted{Version: version, AcknowledgedUTC: now}
+	}
+	if previous.AcknowledgedUTC.IsZero() {
+		previous.AcknowledgedUTC = now
+	}
+	previous.Version = version
+	previous.UptimeMS = readUptime()
+	previous.SetupCompletedUTC = now
+	if !isValidSetupProfile(previous.SetupProfile) {
+		previous.SetupProfile = profile
+	}
+	return s.writeLocked(previous)
+}
+
+func isValidSetupProfile(profile string) bool {
+	switch profile {
+	case "personal", "business", "server", "developer":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *State) writeLocked(value persisted) error {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return err
 	}
 	payload = append(payload, '\n')
 	temp, err := os.CreateTemp(filepath.Dir(s.path), ".startup-state-*.tmp")
 	if err != nil {
-		return SetupResult{}, err
+		return err
 	}
 	tempName := temp.Name()
 	defer func() { _ = os.Remove(tempName) }()
 	if err := temp.Chmod(0o600); err != nil {
 		_ = temp.Close()
-		return SetupResult{}, err
+		return err
 	}
 	if _, err := temp.Write(payload); err != nil {
 		_ = temp.Close()
-		return SetupResult{}, err
+		return err
 	}
 	if err := temp.Sync(); err != nil {
 		_ = temp.Close()
-		return SetupResult{}, err
+		return err
 	}
 	if err := temp.Close(); err != nil {
-		return SetupResult{}, err
+		return err
 	}
 	if err := os.Rename(tempName, s.path); err != nil {
-		return SetupResult{}, fmt.Errorf("setup state commit: %w", err)
+		return fmt.Errorf("setup state commit: %w", err)
 	}
-	return SetupResult{Complete: true, Profile: profile, CompletedUTC: now, CurrentVersion: version}, nil
+	return nil
 }
 
 func (s *State) loadLocked() (persisted, error) {

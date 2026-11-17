@@ -10,6 +10,7 @@ let renderer = null;
 let payload = null;
 let rows = [];
 let filter = 'all';
+let mapMode = 'threats';
 let paused = false;
 let stale = false;
 let visible = true;
@@ -225,7 +226,7 @@ async function refresh() {
   request = controller;
   const deadline = setTimeout(() => controller.abort(), 10000);
   try {
-    const raw = await getOverviewThreatMap(250, 120, controller.signal);
+    const raw = await getOverviewThreatMap(250, 120, controller.signal, mapMode);
     if (request !== controller || !active()) return;
     updateOverviewThreatMap(raw);
     renderer?.setMotion(!media.matches);
@@ -270,6 +271,22 @@ export function startOverviewThreatMap() {
       else status('loading');
       syncActivity();
     }
+    if (target.dataset.mapMode && target.dataset.mapMode !== mapMode) {
+      mapMode = target.dataset.mapMode === 'programs' ? 'programs' : 'threats';
+      for (const button of panel.querySelectorAll('[data-map-mode]')) {
+        button.setAttribute('aria-pressed', String(button.dataset.mapMode === mapMode));
+      }
+      const subtitleEl = panel.querySelector('.overview-threat-title p');
+      if (subtitleEl) {
+        subtitleEl.textContent = t(mapMode === 'programs' ? 'overview.map.programsSubtitle' : 'overview.map.subtitle');
+      }
+      feedSignature = '';
+      selectedIP = '';
+      hideSourceCard(false);
+      if (request) { request.abort(); request = null; }
+      status('loading');
+      void refresh();
+    }
     if (target.dataset.filter) {
       filter = target.dataset.filter;
       for (const button of panel.querySelectorAll('[data-filter]')) {
@@ -293,6 +310,10 @@ export function startOverviewThreatMap() {
   document.addEventListener('visibilitychange', syncActivity, options);
   document.addEventListener(LANGUAGE_EVENT, () => {
     const currentStatus = $('overviewMapStatus').dataset.state;
+    const subtitleEl = panel.querySelector('.overview-threat-title p');
+    if (subtitleEl) {
+      subtitleEl.textContent = t(mapMode === 'programs' ? 'overview.map.programsSubtitle' : 'overview.map.subtitle');
+    }
     renderMetadata(); renderFeed(true);
     status(currentStatus || 'loading');
     if (currentStatus === 'failed') {

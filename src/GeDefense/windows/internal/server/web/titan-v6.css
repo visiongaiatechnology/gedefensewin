@@ -403,3 +403,18 @@
   .titan-rule-row{grid-template-columns:1fr;gap:3px}
   .titan-event-evidence{grid-template-columns:1fr}
 }
+
+/* StyX expandable breakdown & whitelist controls */
+.v6-styx-detail-row td{padding:0!important;background:rgba(8,18,30,.75)!important}
+.v6-styx-detail-card{padding:14px 16px;border-top:1px solid rgba(143,220,232,.16);display:grid;gap:12px}
+.v6-styx-detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.v6-styx-detail-box{padding:10px 12px;border-radius:10px;border:1px solid rgba(190,220,238,.12);background:rgba(255,255,255,.025);min-width:0}
+.v6-styx-detail-box small{display:block;color:#8eb0c4;font-size:.62rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.v6-styx-detail-box strong,.v6-styx-detail-box code{display:block;font-size:.76rem;color:#eaf4fa;overflow-wrap:anywhere;word-break:break-word}
+.v6-styx-detail-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.v6-whitelist-form{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+.v6-whitelist-form .input{flex:1 1 320px;min-width:0}
+.v6-whitelist-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:10px}
+.v6-chip-list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.v6-chip-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border-radius:10px;border:1px solid rgba(190,220,238,.12);background:rgba(255,255,255,.025);font-size:.76rem;overflow-wrap:anywhere}
+@media(max-width:960px){.v6-styx-detail-grid,.v6-whitelist-columns{grid-template-columns:1fr}}

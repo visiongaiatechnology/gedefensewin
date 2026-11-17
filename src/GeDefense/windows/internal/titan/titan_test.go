@@ -411,3 +411,26 @@ func TestEngineRejectsInvalidRoot(t *testing.T) {
 		t.Fatal("relative Titan root accepted")
 	}
 }
+
+func TestLegacyPre600EventWithoutCreationUTCVerifiesInJournalAndArchive(t *testing.T) {
+	ev := Event{
+		ID:           "evt-legacy-530",
+		Sequence:     1,
+		TimestampUTC: time.Now().UTC(),
+		Type:         EventFileCreated,
+		Severity:     SeverityLow,
+		Actor: Actor{
+			PID:                1234,
+			Image:              "explorer.exe",
+			CorrelationQuality: CorrelationObserved,
+		},
+	}
+	ev.Hash = legacyEventHashPre600(ev)
+	if !eventHashMatches(ev) {
+		t.Fatal("legacy pre-6.0.0 event hash (without creationUtc) was rejected by eventHashMatches")
+	}
+	ev.Hash = eventHash(ev)
+	if !eventHashMatches(ev) {
+		t.Fatal("current 6.0.0 event hash was rejected by eventHashMatches")
+	}
+}

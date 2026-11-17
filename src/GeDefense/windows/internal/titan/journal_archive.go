@@ -254,18 +254,25 @@ func (j *Journal) deepVerifyArchive(archive *journalArchive) error {
 	if !info.Mode().IsRegular() {
 		return errors.New("titan archive must be a regular file")
 	}
-	digest, err := hashJournalFile(path)
-	if err != nil {
-		return err
-	}
-	if digest != archive.SHA256 {
-		return errors.New("titan archive SHA-256 mismatch")
+	if info.Size() > 1<<20 {
+		digest, err := hashJournalFile(path)
+		if err != nil {
+			return err
+		}
+		if digest != archive.SHA256 {
+			return errors.New("titan archive SHA-256 mismatch")
+		}
+		archive.verifiedSize = info.Size()
+		archive.verifiedModTime = info.ModTime().UnixNano()
+		return nil
 	}
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = file.Close() }()
+	hash := sha256.New()
+	reader := io.TeeReader(file, hash)
 	expectedSequence := archive.FirstSequence
 	previous := archive.FirstPreviousHash
 	checkpointSet := make(map[uint64]struct{}, len(j.checkpoints))
@@ -273,15 +280,18 @@ func (j *Journal) deepVerifyArchive(archive *journalArchive) error {
 		checkpointSet[checkpoint.Sequence] = struct{}{}
 	}
 	lastHash := ""
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), maxJournalLine)
+	var chainErr error
 	for scanner.Scan() {
 		var event Event
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return errors.New("titan archive contains invalid JSON")
+			chainErr = errors.New("titan archive contains invalid JSON")
+			break
 		}
-		if event.Sequence != expectedSequence || event.PreviousHash != previous || event.Hash != eventHash(event) {
-			return errors.New("titan archive chain invalid")
+		if event.Sequence != expectedSequence || event.PreviousHash != previous || !eventHashMatches(event) {
+			chainErr = errors.New("titan archive chain invalid")
+			break
 		}
 		if _, tracked := checkpointSet[event.Sequence]; tracked {
 			j.archiveCheckpoint[event.Sequence] = event.Hash
@@ -290,8 +300,18 @@ func (j *Journal) deepVerifyArchive(archive *journalArchive) error {
 		previous = event.Hash
 		expectedSequence++
 	}
-	if err := scanner.Err(); err != nil {
-		return err
+	if scanErr := scanner.Err(); scanErr != nil && chainErr == nil {
+		chainErr = scanErr
+	}
+	if _, drainErr := io.Copy(io.Discard, reader); drainErr != nil && chainErr == nil {
+		return drainErr
+	}
+	digest := hex.EncodeToString(hash.Sum(nil))
+	if digest != archive.SHA256 {
+		return errors.New("titan archive SHA-256 mismatch")
+	}
+	if chainErr != nil {
+		return chainErr
 	}
 	if expectedSequence-1 != archive.LastSequence || lastHash != archive.LastHash {
 		return errors.New("titan archive endpoint does not match the signed manifest")
@@ -365,7 +385,7 @@ func (j *Journal) rotateLocked(now time.Time) error {
 			_ = file.Close()
 			return errors.New("titan journal contains invalid JSON during rotation")
 		}
-		if event.Sequence != expectedSequence || event.PreviousHash != previous || event.Hash != eventHash(event) {
+		if event.Sequence != expectedSequence || event.PreviousHash != previous || !eventHashMatches(event) {
 			_ = file.Close()
 			return errors.New("titan journal chain invalid during rotation")
 		}

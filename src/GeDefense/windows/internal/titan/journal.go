@@ -79,10 +79,15 @@ type Journal struct {
 	archives          []journalArchive
 	archivedEvents    uint64
 	archiveCheckpoint map[uint64]string
+	activeCheckpoint  map[uint64]string
 	fileFirstSequence uint64
 	fileFirstHash     string
 	lastTimestamp     time.Time
 	clockRollback     bool
+	openVerified      bool
+	openVerifiedFirst uint64
+	openVerifiedLast  uint64
+	openVerifiedCount uint64
 }
 
 func OpenJournal(root string, ledger *evidence.Ledger) (*Journal, error) {
@@ -104,7 +109,7 @@ func OpenJournal(root string, ledger *evidence.Ledger) (*Journal, error) {
 		root: root, path: filepath.Join(root, journalName), bootID: hex.EncodeToString(bootRandom),
 		privateKey: privateKey, publicKey: publicKey, publicSHA256: fingerprint, ledger: ledger,
 		reviews: make(map[string]time.Time), archiveCheckpoint: make(map[uint64]string),
-		fileFirstSequence: 1,
+		activeCheckpoint: make(map[uint64]string), fileFirstSequence: 1,
 	}
 	// Checkpoints are loaded before the archive scan so the archive verification
 	// can resolve checkpoint sequences without keeping the whole archive in RAM.
@@ -135,6 +140,7 @@ func OpenJournal(root string, ledger *evidence.Ledger) (*Journal, error) {
 	if len(journal.ring) > 0 {
 		journal.lastTimestamp = journal.ring[len(journal.ring)-1].TimestampUTC
 	}
+	journal.openVerified = !journal.journalBad
 	return journal, nil
 }
 
@@ -199,6 +205,10 @@ func (j *Journal) loadJournal() error {
 		return err
 	}
 	j.size = info.Size()
+	checkpointSet := make(map[uint64]struct{}, len(j.checkpoints))
+	for _, checkpoint := range j.checkpoints {
+		checkpointSet[checkpoint.Sequence] = struct{}{}
+	}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64<<10), maxJournalLine)
 	for scanner.Scan() {
@@ -210,11 +220,16 @@ func (j *Journal) loadJournal() error {
 		if event.Sequence != expectedSequence || event.PreviousHash != previous {
 			return errors.New("titan journal chain linkage invalid")
 		}
-		provided, decodeErr := hex.DecodeString(event.Hash)
-		expected := eventHash(event)
-		expectedBytes, expectedErr := hex.DecodeString(expected)
-		if decodeErr != nil || expectedErr != nil || len(provided) != sha256.Size || !bytes.Equal(provided, expectedBytes) {
+		if !eventHashMatches(event) {
 			return errors.New("titan journal authentication failed")
+		}
+		if j.openVerifiedFirst == 0 {
+			j.openVerifiedFirst = event.Sequence
+		}
+		j.openVerifiedLast = event.Sequence
+		j.openVerifiedCount++
+		if _, tracked := checkpointSet[event.Sequence]; tracked {
+			j.activeCheckpoint[event.Sequence] = event.Hash
 		}
 		if event.Type == EventReviewed && event.Object.Name != "" {
 			j.reviews[event.Object.Name] = event.TimestampUTC
@@ -278,13 +293,28 @@ func (j *Journal) resetCorruptJournal(cause error) error {
 	}
 	j.journalError = "Journal war nicht verifizierbar und wurde unverändert als Forensikkopie gesichert: " + cause.Error()
 	j.journalBad = true
-	j.sequence = 0
-	j.lastHash = ""
+	if len(j.archives) > 0 {
+		last := j.archives[len(j.archives)-1]
+		j.sequence = last.LastSequence
+		j.lastHash = last.LastHash
+		j.fileFirstSequence = last.LastSequence + 1
+		j.fileFirstHash = last.LastHash
+	} else {
+		j.sequence = 0
+		j.lastHash = ""
+		j.fileFirstSequence = 1
+		j.fileFirstHash = ""
+	}
 	j.ring = nil
 	j.reviews = make(map[string]time.Time)
 	j.eventTotal = 0
 	j.checkpoints = nil
 	j.lastCheck = CheckpointStatus{}
+	j.activeCheckpoint = make(map[uint64]string)
+	j.openVerified = false
+	j.openVerifiedFirst = 0
+	j.openVerifiedLast = 0
+	j.openVerifiedCount = 0
 	return nil
 }
 
@@ -566,6 +596,9 @@ func (j *Journal) checkpointLocked(now time.Time) (Checkpoint, error) {
 	}
 	j.lastCheck = CheckpointStatus{Sequence: checkpoint.Sequence, CreatedUTC: checkpoint.CreatedUTC,
 		PublicKeySHA256: checkpoint.PublicKeySHA256, Signature: checkpoint.Signature, Verified: true}
+	if j.activeCheckpoint != nil {
+		j.activeCheckpoint[checkpoint.Sequence] = checkpoint.LastHash
+	}
 	if j.ledger != nil {
 		if err := j.ledger.Append("titan.evidence", "checkpoint", fmt.Sprintf("sequence=%d", checkpoint.Sequence)); err != nil {
 			j.journalError = "Ledger-Checkpoint konnte nicht geschrieben werden: " + err.Error()
@@ -636,7 +669,7 @@ func (j *Journal) Verify() VerificationResult {
 				result.Detail = "Journal enthält ungültiges JSON."
 				return result
 			}
-			if event.Sequence != expectedSequence || event.PreviousHash != previous || event.Hash != eventHash(event) {
+			if event.Sequence != expectedSequence || event.PreviousHash != previous || !eventHashMatches(event) {
 				result.Detail = "Journal-Kette oder Ereignis-Hash ist ungültig."
 				return result
 			}
@@ -665,6 +698,60 @@ func (j *Journal) Verify() VerificationResult {
 			return result
 		}
 		if hash, exists := checkpointHashes[checkpoint.Sequence]; exists && hash != checkpoint.LastHash {
+			result.Detail = "Checkpoint verweist nicht auf den verifizierten Journal-Hash."
+			return result
+		}
+		previousCheckpoint = checkpoint.Sequence
+	}
+	result.Verified = true
+	result.Detail = "Journal-Kette, signierte Retentionsarchive und alle Checkpoint-Signaturen sind gültig."
+	return result
+}
+
+// initialVerification returns the verification result established during
+// OpenJournal without re-scanning the active journal file a second time.
+func (j *Journal) initialVerification() VerificationResult {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if !j.openVerified {
+		return VerificationResult{
+			CheckedUTC:  journalNow().UTC(),
+			Events:      len(j.ring),
+			Checkpoints: len(j.checkpoints),
+			Detail:      j.journalError,
+		}
+	}
+	total := j.archivedEvents + j.eventTotal
+	if total == 0 {
+		return VerificationResult{
+			CheckedUTC:  journalNow().UTC(),
+			Verified:    true,
+			Checkpoints: len(j.checkpoints),
+			Detail:      "Noch keine Titan-Ereignisse aufgezeichnet.",
+		}
+	}
+	result := VerificationResult{
+		CheckedUTC:    journalNow().UTC(),
+		Events:        int(j.openVerifiedCount),
+		Checkpoints:   len(j.checkpoints),
+		FirstSequence: j.openVerifiedFirst,
+		LastSequence:  j.openVerifiedLast,
+	}
+	var previousCheckpoint uint64
+	for _, checkpoint := range j.checkpoints {
+		if err := j.verifyCheckpoint(checkpoint); err != nil {
+			result.Detail = err.Error()
+			return result
+		}
+		if checkpoint.Sequence <= previousCheckpoint || checkpoint.Sequence > total {
+			result.Detail = "Checkpoint deckt keine gültige Journal-Position ab."
+			return result
+		}
+		if hash, exists := j.archiveCheckpoint[checkpoint.Sequence]; exists && hash != checkpoint.LastHash {
+			result.Detail = "Checkpoint verweist nicht auf den verifizierten Journal-Hash."
+			return result
+		}
+		if hash, exists := j.activeCheckpoint[checkpoint.Sequence]; exists && hash != checkpoint.LastHash {
 			result.Detail = "Checkpoint verweist nicht auf den verifizierten Journal-Hash."
 			return result
 		}
@@ -839,6 +926,39 @@ func (j *Journal) Close() error {
 func eventHash(event Event) string {
 	event.Hash = ""
 	raw, _ := json.Marshal(event)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// eventHashMatches verifies an event's SHA-256 content hash in constant time,
+// accepting both the current 6.0.0 Actor serialization and the pre-6.0.0 (5.2.0/5.3.0)
+// Actor serialization where Actor.CreationUTC did not exist yet (Go's encoding/json
+// emits "creationUtc":"0001-01-01T00:00:00Z" for a zero time.Time struct with omitempty).
+func eventHashMatches(event Event) bool {
+	provided, decodeErr := hex.DecodeString(event.Hash)
+	if decodeErr != nil || len(provided) != sha256.Size {
+		return false
+	}
+	event.Hash = ""
+	raw, _ := json.Marshal(event)
+	expected := sha256.Sum256(raw)
+	if bytes.Equal(provided, expected[:]) {
+		return true
+	}
+	if event.Actor.CreationUTC.IsZero() {
+		legacyRaw := bytes.Replace(raw, []byte(`,"creationUtc":"0001-01-01T00:00:00Z"`), nil, 1)
+		legacy := sha256.Sum256(legacyRaw)
+		if bytes.Equal(provided, legacy[:]) {
+			return true
+		}
+	}
+	return false
+}
+
+func legacyEventHashPre600(event Event) string {
+	event.Hash = ""
+	raw, _ := json.Marshal(event)
+	raw = bytes.Replace(raw, []byte(`,"creationUtc":"0001-01-01T00:00:00Z"`), nil, 1)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }

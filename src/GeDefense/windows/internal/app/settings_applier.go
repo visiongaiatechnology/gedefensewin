@@ -398,16 +398,38 @@ func (a *settingsApplier) applyV6(ctx context.Context, change settings.Change) e
 	if a.v6 == nil {
 		return errors.New("V6 Sovereign runtime unavailable")
 	}
+	sectionValues := change.Sections[settings.SectionV6]
 	for key := range changed {
 		switch key {
-		case "spywareEnabled", "spywareByovd", "spywareCapability", "spywarePersistence", "spywareLsass", "witnessEnabled":
+		case "spywareEnabled", "spywareMode", "styxMode", "styxWhitelist", "spywareByovd", "spywareCapability", "spywarePersistence", "spywareLsass", "witnessEnabled":
 		default:
 			return fmt.Errorf("V6 Sovereign setting %q is not enforceable by this build", key)
 		}
 	}
-	cfg := v6ConfigFromValues(change.Sections[settings.SectionV6])
+	if changed["spywareMode"] {
+		if _, err := normalizeSpywareMode(stringValue(sectionValues["spywareMode"])); err != nil {
+			return fmt.Errorf("V6 Sovereign configuration rejected: %w", err)
+		}
+	}
+	cfg := v6ConfigFromValues(sectionValues)
 	if err := a.v6.Configure(ctx, cfg); err != nil {
 		return fmt.Errorf("V6 Sovereign configuration rejected: %w", err)
+	}
+	if changed["styxWhitelist"] {
+		if a.mhx == nil {
+			return errors.New("StyX runtime unavailable")
+		}
+		if _, err := a.mhx.SetStyxWhitelist(ctx, styxWhitelistFromValues(sectionValues)); err != nil {
+			return fmt.Errorf("V6 StyX whitelist rejected: %w", err)
+		}
+	}
+	if changed["styxMode"] {
+		if a.mhx == nil {
+			return errors.New("StyX runtime unavailable")
+		}
+		if _, err := a.mhx.SetStyxMode(ctx, styxModeFromValues(sectionValues)); err != nil {
+			return fmt.Errorf("V6 StyX configuration rejected: %w", err)
+		}
 	}
 	return nil
 }

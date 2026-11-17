@@ -29,6 +29,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 # naming contract; the builder proves its output matches it before declaring
 # success (an unregistered Inno asset would make the channel gate fail closed).
 Import-Module -Name (Join-Path $projectRoot 'tools\VgtSupplyChain.psm1') -Force
+Import-Module -Name (Join-Path $PSScriptRoot 'PublishVerification.psm1') -Force
 $payloadRoot = Join-Path $projectRoot 'payload\VGT\GeDefense'
 $installerSource = Join-Path $projectRoot 'installer\inno\GeDefense.iss'
 $releaseRoot = Join-Path $projectRoot 'release'
@@ -140,6 +141,18 @@ foreach ($emittedPath in @($installerPath, $shaPath, $sidecarPath)) {
     if ($registeredVersion -ne $version) {
         throw "Inno release asset is not registered for VERSION $version : $emittedName (Get-VgtReleaseAssetVersion returned '$registeredVersion')."
     }
+}
+
+$releaseSums = Join-Path $releaseRoot 'SHA256SUMS.txt'
+if (Test-Path -LiteralPath $releaseSums -PathType Leaf) {
+    $sumsEntries = [Collections.Generic.List[object]]::new()
+    foreach ($releaseFile in @(Get-ChildItem -LiteralPath $releaseRoot -File -Force | Sort-Object Name)) {
+        if ($releaseFile.Name -eq 'SHA256SUMS.txt') { continue }
+        $sumsEntries.Add([pscustomobject]@{ Name = $releaseFile.Name; Path = $releaseFile.FullName })
+    }
+    $null = Write-VgtSha256Sums -Assets @($sumsEntries.ToArray()) -OutputPath $releaseSums
+    $null = Assert-VgtSha256SumsCoverage -ReleaseDirectory $releaseRoot
+    Write-Host "Updated:   $releaseSums"
 }
 
 Write-Host "Installer: $installerPath"

@@ -84,6 +84,9 @@ func (f *fixedMHX) StyxCollectorStatus() mhx.StyxCollectorStatus {
 func (f *fixedMHX) StyxIncidents(int) []mhx.StyxIncident {
 	return []mhx.StyxIncident{}
 }
+func (f *fixedMHX) SetStyxMode(_ context.Context, mode string) (mhx.StyxStatus, error) {
+	return mhx.StyxStatus{Mode: mode, Enforcing: mode == mhx.StyxModeEnforce, SensorState: "active", Capability: "known", Top: []mhx.StyxFlowSnapshot{}}, nil
+}
 func (f *fixedIntegrity) Status() integrity.Status { return f.status }
 func (f *fixedIntegrity) Configure(enabled bool, hours int) (integrity.Status, error) {
 	f.status.Enabled = enabled

@@ -43,3 +43,28 @@ func TestV6RuntimeWitnessEnableRequiresProvisioning(t *testing.T) {
 		t.Fatalf("expected MISSING witness settings state, got %q", state)
 	}
 }
+
+func TestV6RuntimeSpywareActiveMode(t *testing.T) {
+	root := t.TempDir()
+	ledger, err := evidence.Open(filepath.Join(root, "evidence.jsonl"), filepath.Join(root, "evidence.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ledger.Close() })
+
+	runtime := newV6Runtime(root, root, "6.0.0", ledger)
+	t.Cleanup(func() { _ = runtime.Close() })
+
+	if status := runtime.SpywareStatus(); status.Mode != v6SpywareModeObserve || status.ActiveEnforced {
+		t.Fatalf("expected default observe mode, got %+v", status)
+	}
+	if err := runtime.SetSpywareMode(context.Background(), "active"); err != nil {
+		t.Fatalf("SetSpywareMode active: %v", err)
+	}
+	if status := runtime.SpywareStatus(); status.Mode != v6SpywareModeActive || !status.ActiveEnforced {
+		t.Fatalf("expected active mode, got %+v", status)
+	}
+	if err := runtime.SetSpywareMode(context.Background(), "bogus"); err == nil {
+		t.Fatal("expected invalid spywareMode rejection")
+	}
+}

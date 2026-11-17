@@ -69,6 +69,33 @@
   flex-wrap: wrap;
   gap: 8px;
 }
+.overview-map-mode-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 9px;
+  border: 1px solid #52c7ff33;
+  background: rgba(6, 15, 28, .82);
+}
+.overview-mode-btn {
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #a4b4c9;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .16s, border-color .16s, color .16s;
+}
+.overview-mode-btn:hover {
+  color: #fff;
+}
+.overview-mode-btn[aria-pressed='true'] {
+  background: rgba(0, 243, 255, .14);
+  border-color: rgba(0, 243, 255, .45);
+  color: #7eeeff;
+}
 .overview-threat-live {
   display: inline-flex;
   align-items: center;

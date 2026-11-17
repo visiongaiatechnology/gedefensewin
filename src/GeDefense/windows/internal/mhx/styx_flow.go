@@ -96,6 +96,7 @@ type StyxFlowSample struct {
 	PID                    int        `json:"pid"`
 	Remote                 netip.Addr `json:"remote"`
 	RemotePort             uint16     `json:"remotePort"`
+	LocalPort              uint16     `json:"localPort,omitempty"`
 	Proto                  uint8      `json:"proto"`
 	TxBytes                uint64     `json:"txBytes"`
 	RxBytes                uint64     `json:"rxBytes"`
@@ -103,6 +104,7 @@ type StyxFlowSample struct {
 	RxObservationAvailable bool       `json:"rxObservationAvailable"`
 	Timestamp              time.Time  `json:"timestamp"`
 	Comm                   string     `json:"comm,omitempty"`
+	ProcessPath            string     `json:"processPath,omitempty"`
 }
 
 // FlowKey validates the sample and returns its canonical flow identity. It is
@@ -137,6 +139,8 @@ func (s StyxFlowSample) FlowKey() (FlowKey, error) {
 type FlowAggregate struct {
 	Key                    FlowKey   `json:"key"`
 	Comm                   string    `json:"comm,omitempty"`
+	ProcessPath            string    `json:"processPath,omitempty"`
+	LocalPort              uint16    `json:"localPort,omitempty"`
 	FirstSeen              time.Time `json:"firstSeen"`
 	LastSeen               time.Time `json:"lastSeen"`
 	Samples                int64     `json:"samples"`
@@ -253,6 +257,8 @@ type StyxFlowSnapshot struct {
 	Score                  int      `json:"score"`
 	Signals                []string `json:"signals,omitempty"`
 	Process                string   `json:"process,omitempty"`
+	ProcessPath            string   `json:"processPath,omitempty"`
+	LocalPort              uint16   `json:"localPort,omitempty"`
 }
 
 func (a *FlowAggregate) snapshot() StyxFlowSnapshot {
@@ -273,6 +279,8 @@ func (a *FlowAggregate) snapshot() StyxFlowSnapshot {
 		Score:                  a.LastScore,
 		Signals:                append([]string(nil), a.LastSignals...),
 		Process:                a.Comm,
+		ProcessPath:            a.ProcessPath,
+		LocalPort:              a.LocalPort,
 	}
 	out.CV = finiteOrZero(a.IntervalCV())
 	return out

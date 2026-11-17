@@ -63,7 +63,10 @@ const strings = {
   "overview.map.originKnown": "Eigener Standort: {place}",
   "overview.map.originLocal": "Lokales Netzwerk (Host {ip}). Eigener öffentlicher Standort nicht bestimmt.",
   "overview.map.originUnknown": "Eigener Standort nicht aus lokalen Schnittstellen / CSV bestimmbar. Hinter NAT optional GEDEFENSE_MAP_HOST_IP konfigurieren.",
-  "overview.map.ti": "Threat-IP"
+  "overview.map.ti": "Threat-IP",
+  "overview.map.modeThreats": "Angriffsvektoren",
+  "overview.map.modePrograms": "Programm-Traffic",
+  "overview.map.programsSubtitle": "Ausgehender Live-Traffic einzelner Windows-Programme · lokale GeoIP/ASN-CSV · keine externen IP-Abfragen."
 };
 export const locale = () => activeLocale();
 export function t(key, values = {}) {

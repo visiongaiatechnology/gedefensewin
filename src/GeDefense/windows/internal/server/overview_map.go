@@ -338,12 +338,20 @@ func (s *Server) overviewThreatMap(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid event window")
 		return
 	}
+	mode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
 	s.initGeo()
-	status := s.mhx.Status()
-	sources := s.collectMapSources(status, limit)
-	totals := map[string]int{"sources": len(sources), "placed": 0, "blocked": 0, "countries": 0, "kinetic": 0, "ti": 0, "xdr": 0}
+	var sources []mapSource
+	var recent []mapEvent
+	totals := map[string]int{"sources": 0, "placed": 0, "blocked": 0, "countries": 0, "kinetic": 0, "ti": 0, "xdr": 0, "host": 0}
+	if mode == "programs" {
+		sources, recent = s.collectProgramMapSources(limit, eventLimit)
+	} else {
+		status := s.mhx.Status()
+		sources = s.collectMapSources(status, limit)
+		recent = make([]mapEvent, 0, eventLimit)
+	}
+	totals["sources"] = len(sources)
 	countries := make(map[string]bool)
-	recent := make([]mapEvent, 0, eventLimit)
 	for _, source := range sources {
 		if source.Latitude != nil && source.Longitude != nil {
 			totals["placed"]++
@@ -357,7 +365,7 @@ func (s *Server) overviewThreatMap(w http.ResponseWriter, r *http.Request) {
 		for _, area := range source.Areas {
 			totals[area]++
 		}
-		if len(recent) < eventLimit {
+		if mode != "programs" && len(recent) < eventLimit {
 			recent = append(recent, mapEvent{ID: source.IP + ":" + source.LastSeen.Format(time.RFC3339Nano), Time: source.LastSeen,
 				Remote: source.IP, Area: source.Area, Country: source.Country, CountryCode: source.CountryCode,
 				Blocked: source.Blocked, Severity: source.Severity, Decision: source.State, Summary: source.Summary,
@@ -374,6 +382,411 @@ func (s *Server) overviewThreatMap(w http.ResponseWriter, r *http.Request) {
 		Totals    map[string]int `json:"totals"`
 		Generated time.Time      `json:"generated"`
 	}{sources, recent, s.mapOrigin(), mapGeoStatus{geo.Loaded, geo.Entries}, totals, time.Now().UTC()})
+}
+
+func (s *Server) collectProgramMapSources(limit, eventLimit int) ([]mapSource, []mapEvent) {
+	ctrl, ok := s.mhx.(styxControlProvider)
+	if !ok {
+		return []mapSource{}, []mapEvent{}
+	}
+	blockedSet := make(map[string]bool)
+	for _, cidr := range ctrl.StyxBlockedTargets() {
+		blockedSet[strings.TrimSuffix(cidr, "/32")] = true
+	}
+	progs := ctrl.StyxProgramTraffic()
+	byIP := make(map[string]*mapSource, limit)
+	recent := make([]mapEvent, 0, eventLimit)
+	for _, prog := range progs {
+		for _, dest := range prog.Destinations {
+			ip := net.ParseIP(dest.IP)
+			if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() {
+				continue
+			}
+			ipStr := ip.String()
+			isBlocked := blockedSet[ipStr]
+			state := "OUTBOUND_FLOW"
+			sev := "info"
+			if isBlocked {
+				state = "WFP_BLOCK_OBSERVED"
+				sev = "high"
+			}
+			var cc, country, asn, asName string
+			var latPtr, lonPtr *float64
+			if geo, found := s.geo.Lookup(ip); found {
+				cc, country, asn, asName = geo.CountryCode, geo.Country, geo.ASN, geo.ASName
+				if geo.Latitude != 0 || geo.Longitude != 0 {
+					lat, lon := geo.Latitude, geo.Longitude
+					latPtr, lonPtr = &lat, &lon
+				}
+			} else if special, isSpec := geoip.ClassifySpecial(ip); isSpec {
+				cc, country, asn, asName = special.CountryCode, special.Country, special.ASN, special.ASName
+			}
+			summary := fmt.Sprintf("%s → %s:%d (TX %s · RX %s)", prog.Process, ipStr, dest.Port, formatByteCount(dest.TxBytes), formatByteCount(dest.RxBytes))
+			if len(recent) < eventLimit {
+				procPath := prog.ProcessPath
+				if procPath == "" {
+					procPath = fmt.Sprintf("Port %d → %d", dest.LocalPort, dest.Port)
+				}
+				recent = append(recent, mapEvent{
+					ID:          fmt.Sprintf("%s:%s:%d", prog.Process, ipStr, dest.Port),
+					Time:        dest.LastSeen,
+					Remote:      ipStr,
+					Area:        "host",
+					Country:     country,
+					CountryCode: cc,
+					Blocked:     isBlocked,
+					Severity:    sev,
+					Decision:    state,
+					Summary:     summary,
+					Process:     prog.Process,
+					Path:        procPath,
+					Rules:       []string{fmt.Sprintf("TCP/%d", dest.Port)},
+				})
+			}
+			if existing := byIP[ipStr]; existing != nil {
+				existing.Blocked = existing.Blocked || isBlocked
+				existing.Hits += uint64(maxInt(dest.Connections, 1))
+				if dest.LastSeen.After(existing.LastSeen) {
+					existing.LastSeen = dest.LastSeen
+				}
+				if prog.Process != "" && !strings.Contains(existing.Process, prog.Process) && len(existing.Process) < 180 {
+					existing.Process += ", " + prog.Process
+				}
+				continue
+			}
+			if len(byIP) < limit {
+				hits := uint64(dest.Connections)
+				if hits == 0 {
+					hits = 1
+				}
+				byIP[ipStr] = &mapSource{
+					IP:          ipStr,
+					CountryCode: cc,
+					Country:     country,
+					Latitude:    latPtr,
+					Longitude:   lonPtr,
+					ASN:         asn,
+					ASName:      asName,
+					State:       state,
+					Blocked:     isBlocked,
+					Hits:        hits,
+					Area:        "host",
+					Areas:       []string{"host"},
+					LastSeen:    dest.LastSeen,
+					LocalPort:   dest.LocalPort,
+					Summary:     summary,
+					Severity:    sev,
+					Rules:       []string{fmt.Sprintf("TCP/%d", dest.Port)},
+					Process:     prog.Process,
+					Path:        prog.ProcessPath,
+					Direction:   "outbound",
+				}
+			}
+		}
+	}
+	rows := make([]mapSource, 0, len(byIP))
+	for _, src := range byIP {
+		rows = append(rows, *src)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Hits != rows[j].Hits {
+			return rows[i].Hits > rows[j].Hits
+		}
+		return rows[i].LastSeen.After(rows[j].LastSeen)
+	})
+	return rows, recent
+}
+
+type programTrafficDestinationView struct {
+	IP          string    `json:"ip"`
+	Port        uint16    `json:"port"`
+	CountryCode string    `json:"countryCode,omitempty"`
+	Country     string    `json:"country,omitempty"`
+	ASN         string    `json:"asn,omitempty"`
+	ASName      string    `json:"asName,omitempty"`
+	TxBytes     uint64    `json:"txBytes"`
+	RxBytes     uint64    `json:"rxBytes"`
+	Connections int       `json:"connections"`
+	Blocked     bool      `json:"blocked,omitempty"`
+	LastSeen    time.Time `json:"lastSeen"`
+}
+
+type programTrafficItemView struct {
+	Process      string                          `json:"process"`
+	ProcessPath  string                          `json:"processPath,omitempty"`
+	PIDs         []int                           `json:"pids"`
+	Connections  int                             `json:"connections"`
+	TxBytes      uint64                          `json:"txBytes"`
+	RxBytes      uint64                          `json:"rxBytes"`
+	TotalBytes   uint64                          `json:"totalBytes"`
+	SharePct     float64                         `json:"sharePct"`
+	Whitelisted  bool                            `json:"whitelisted,omitempty"`
+	Blocked      bool                            `json:"blocked,omitempty"`
+	LastSeen     time.Time                       `json:"lastSeen"`
+	Destinations []programTrafficDestinationView `json:"destinations"`
+}
+
+type programTrafficCountryBreakdown struct {
+	Code        string  `json:"code"`
+	Name        string  `json:"name"`
+	Bytes       uint64  `json:"bytes"`
+	Connections int     `json:"connections"`
+	Programs    int     `json:"programs"`
+	SharePct    float64 `json:"sharePct"`
+}
+
+type programTrafficASNBreakdown struct {
+	ASN         string  `json:"asn"`
+	ASName      string  `json:"asName"`
+	CountryCode string  `json:"countryCode,omitempty"`
+	Bytes       uint64  `json:"bytes"`
+	Connections int     `json:"connections"`
+	SharePct    float64 `json:"sharePct"`
+}
+
+func (s *Server) overviewProgramTraffic(w http.ResponseWriter, r *http.Request) {
+	page, err := parseBoundedInteger(r.URL.Query().Get("page"), 1, 1, 1000)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid page parameter")
+		return
+	}
+	pageSize, err := parseBoundedInteger(r.URL.Query().Get("pageSize"), 10, 1, 50)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid pageSize parameter")
+		return
+	}
+	s.initGeo()
+	geo := s.geo.Status()
+
+	var rawPrograms []mhx.StyxProgramTrafficSummary
+	blockedSet := make(map[string]bool)
+	whitelistSet := make(map[string]bool)
+	if ctrl, ok := s.mhx.(styxControlProvider); ok {
+		rawPrograms = ctrl.StyxProgramTraffic()
+		for _, cidr := range ctrl.StyxBlockedTargets() {
+			blockedSet[strings.TrimSuffix(cidr, "/32")] = true
+		}
+		for _, wl := range ctrl.StyxWhitelist() {
+			whitelistSet[strings.ToLower(strings.TrimSpace(wl))] = true
+		}
+	}
+
+	var totalTx, totalRx uint64
+	totalConns := 0
+	countryMap := make(map[string]*programTrafficCountryBreakdown)
+	countryProgs := make(map[string]map[string]struct{})
+	asnMap := make(map[string]*programTrafficASNBreakdown)
+
+	allViews := make([]programTrafficItemView, 0, len(rawPrograms))
+	for _, prog := range rawPrograms {
+		totalTx += prog.TxBytes
+		totalRx += prog.RxBytes
+		totalConns += prog.Connections
+		progKey := strings.ToLower(prog.ProcessPath + "|" + prog.Process)
+		progBlocked := false
+		progWhitelisted := whitelistSet[strings.ToLower(prog.ProcessPath)] || whitelistSet[strings.ToLower(prog.Process)]
+		destViews := make([]programTrafficDestinationView, 0, len(prog.Destinations))
+		for _, dest := range prog.Destinations {
+			ip := net.ParseIP(dest.IP)
+			ipStr := dest.IP
+			if ip != nil {
+				ipStr = ip.String()
+			}
+			isBlocked := blockedSet[ipStr]
+			if isBlocked {
+				progBlocked = true
+			}
+			cc, cname, asn, asName := "UN", "Nicht aufgelöst", "", ""
+			if ip != nil {
+				if g, ok := s.geo.Lookup(ip); ok {
+					if g.CountryCode != "" {
+						cc = g.CountryCode
+					}
+					if g.Country != "" {
+						cname = g.Country
+					}
+					asn, asName = g.ASN, g.ASName
+				} else if sp, ok := geoip.ClassifySpecial(ip); ok {
+					cc, cname, asn, asName = sp.CountryCode, sp.Country, sp.ASN, sp.ASName
+				}
+			}
+			bytes := dest.TxBytes + dest.RxBytes
+			cb := countryMap[cc]
+			if cb == nil {
+				cb = &programTrafficCountryBreakdown{Code: cc, Name: cname}
+				countryMap[cc] = cb
+				countryProgs[cc] = make(map[string]struct{})
+			}
+			cb.Bytes += bytes
+			cb.Connections += maxInt(dest.Connections, 1)
+			countryProgs[cc][progKey] = struct{}{}
+
+			if asn != "" {
+				ab := asnMap[asn]
+				if ab == nil {
+					ab = &programTrafficASNBreakdown{ASN: asn, ASName: asName, CountryCode: cc}
+					asnMap[asn] = ab
+				}
+				ab.Bytes += bytes
+				ab.Connections += maxInt(dest.Connections, 1)
+			}
+
+			destViews = append(destViews, programTrafficDestinationView{
+				IP:          ipStr,
+				Port:        dest.Port,
+				CountryCode: cc,
+				Country:     cname,
+				ASN:         asn,
+				ASName:      asName,
+				TxBytes:     dest.TxBytes,
+				RxBytes:     dest.RxBytes,
+				Connections: dest.Connections,
+				Blocked:     isBlocked,
+				LastSeen:    dest.LastSeen,
+			})
+		}
+		allViews = append(allViews, programTrafficItemView{
+			Process:      prog.Process,
+			ProcessPath:  prog.ProcessPath,
+			PIDs:         prog.PIDs,
+			Connections:  prog.Connections,
+			TxBytes:      prog.TxBytes,
+			RxBytes:      prog.RxBytes,
+			TotalBytes:   prog.TotalBytes,
+			Whitelisted:  progWhitelisted,
+			Blocked:      progBlocked,
+			LastSeen:     prog.LastSeen,
+			Destinations: destViews,
+		})
+	}
+
+	grandTotalBytes := totalTx + totalRx
+	for i := range allViews {
+		if grandTotalBytes > 0 {
+			allViews[i].SharePct = float64(allViews[i].TotalBytes) * 100 / float64(grandTotalBytes)
+		} else if totalConns > 0 {
+			allViews[i].SharePct = float64(allViews[i].Connections) * 100 / float64(totalConns)
+		}
+	}
+
+	countryList := make([]programTrafficCountryBreakdown, 0, len(countryMap))
+	var countryBytesSum uint64
+	countryConnsSum := 0
+	for cc, cb := range countryMap {
+		cb.Programs = len(countryProgs[cc])
+		countryBytesSum += cb.Bytes
+		countryConnsSum += cb.Connections
+	}
+	for _, cb := range countryMap {
+		if countryBytesSum > 0 {
+			cb.SharePct = float64(cb.Bytes) * 100 / float64(countryBytesSum)
+		} else if countryConnsSum > 0 {
+			cb.SharePct = float64(cb.Connections) * 100 / float64(countryConnsSum)
+		}
+		countryList = append(countryList, *cb)
+	}
+	sort.Slice(countryList, func(i, j int) bool {
+		if countryList[i].Bytes != countryList[j].Bytes {
+			return countryList[i].Bytes > countryList[j].Bytes
+		}
+		if countryList[i].Connections != countryList[j].Connections {
+			return countryList[i].Connections > countryList[j].Connections
+		}
+		return countryList[i].Code < countryList[j].Code
+	})
+	if len(countryList) > 10 {
+		countryList = countryList[:10]
+	}
+
+	asnList := make([]programTrafficASNBreakdown, 0, len(asnMap))
+	var asnBytesSum uint64
+	asnConnsSum := 0
+	for _, ab := range asnMap {
+		asnBytesSum += ab.Bytes
+		asnConnsSum += ab.Connections
+	}
+	for _, ab := range asnMap {
+		if asnBytesSum > 0 {
+			ab.SharePct = float64(ab.Bytes) * 100 / float64(asnBytesSum)
+		} else if asnConnsSum > 0 {
+			ab.SharePct = float64(ab.Connections) * 100 / float64(asnConnsSum)
+		}
+		asnList = append(asnList, *ab)
+	}
+	sort.Slice(asnList, func(i, j int) bool {
+		if asnList[i].Bytes != asnList[j].Bytes {
+			return asnList[i].Bytes > asnList[j].Bytes
+		}
+		if asnList[i].Connections != asnList[j].Connections {
+			return asnList[i].Connections > asnList[j].Connections
+		}
+		return asnList[i].ASN < asnList[j].ASN
+	})
+	if len(asnList) > 8 {
+		asnList = asnList[:8]
+	}
+
+	totalPrograms := len(allViews)
+	totalPages := 1
+	if totalPrograms > 0 {
+		totalPages = (totalPrograms + pageSize - 1) / pageSize
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	startIdx := (page - 1) * pageSize
+	endIdx := startIdx + pageSize
+	if startIdx > totalPrograms {
+		startIdx = totalPrograms
+	}
+	if endIdx > totalPrograms {
+		endIdx = totalPrograms
+	}
+	paged := allViews[startIdx:endIdx]
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"pagination": map[string]int{
+			"page":          page,
+			"pageSize":      pageSize,
+			"totalPrograms": totalPrograms,
+			"totalPages":    totalPages,
+		},
+		"totals": map[string]any{
+			"programs":       totalPrograms,
+			"connections":    totalConns,
+			"txBytes":        totalTx,
+			"rxBytes":        totalRx,
+			"totalBytes":     grandTotalBytes,
+			"countries":      len(countryMap),
+			"asns":           len(asnMap),
+			"blockedTargets": len(blockedSet),
+		},
+		"geo":              mapGeoStatus{geo.Loaded, geo.Entries},
+		"countryBreakdown": countryList,
+		"asnBreakdown":     asnList,
+		"programs":         paged,
+		"generated":        time.Now().UTC(),
+	})
+}
+
+func formatByteCount(b uint64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func portDescription(port uint16) string {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -90,6 +91,8 @@ func New(root, version string) (*App, error) {
 	}
 	snapshot := settingsService.Snapshot()
 	v6.Restore(v6ConfigFromValues(snapshot.Values[settings.SectionV6]))
+	_ = mhxEngine.RestoreStyxWhitelist(styxWhitelistFromValues(snapshot.Values[settings.SectionV6]))
+	_ = mhxEngine.RestoreStyxMode(styxModeFromValues(snapshot.Values[settings.SectionV6]))
 	handler := webserver.NewWithV6(version, token, engine, auditEngine, xdrEngine, mhxEngine, integrityEngine, ledger, startupState, settingsService, titanEngine, v6)
 	return &App{monitor: monitor.New(engine, ledger, 5*time.Minute), mhx: mhxEngine, integrity: integrityEngine, hardening: engine, titan: titanEngine, v6: v6, ledger: ledger, server: &http.Server{
 		Addr:              "127.0.0.1:17831",
@@ -150,6 +153,18 @@ func (a *App) supervise(name string, run func(<-chan struct{}), stop <-chan stru
 }
 
 func (a *App) Run(stop <-chan struct{}) error {
+	return a.RunWithReady(stop, nil)
+}
+
+// RunWithReady binds the loopback control-plane listener and starts all
+// security workers before invoking ready so Windows SCM transitions to Running
+// only once 127.0.0.1:17831 is accepting connections.
+func (a *App) RunWithReady(stop <-chan struct{}, ready func()) error {
+	listener, listenErr := net.Listen("tcp", a.server.Addr)
+	if listenErr != nil {
+		return listenErr
+	}
+
 	internalStop := make(chan struct{})
 	var stopOnce sync.Once
 	stopAll := func() { stopOnce.Do(func() { close(internalStop) }) }
@@ -162,7 +177,10 @@ func (a *App) Run(stop <-chan struct{}) error {
 	go func() { defer workers.Done(); a.supervise("v6", a.v6.Run, internalStop) }()
 
 	serverErr := make(chan error, 1)
-	go func() { serverErr <- a.server.ListenAndServe() }()
+	go func() { serverErr <- a.server.Serve(listener) }()
+	if ready != nil {
+		ready()
+	}
 
 	var result error
 	select {
@@ -197,4 +215,28 @@ func (a *App) Run(stop <-chan struct{}) error {
 		result = closeErr
 	}
 	return result
+}
+
+// Close releases background engines and ledger locks held by App.
+func (a *App) Close() error {
+	if a == nil {
+		return nil
+	}
+	var firstErr error
+	if a.v6 != nil {
+		if err := a.v6.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if a.titan != nil {
+		if err := a.titan.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if a.ledger != nil {
+		if err := a.ledger.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }

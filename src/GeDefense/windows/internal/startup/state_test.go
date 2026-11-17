@@ -78,3 +78,35 @@ func TestSetupMarkerSurvivesReadinessAcknowledgement(t *testing.T) {
 		t.Fatal("unknown setup profile accepted")
 	}
 }
+
+func TestPreserveSetupOnUpgradeKeepsExistingAndMigratesLegacy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "startup.json")
+	state, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Legacy pre-wizard startup-state file without setupCompletedUtc.
+	legacy, _ := json.Marshal(persisted{Version: "5.2.0", UptimeMS: 1000, AcknowledgedUTC: time.Now().UTC()})
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.PreserveSetupOnUpgrade("business", "6.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := state.SetupStatus("6.0.0")
+	if err != nil || !status.Complete || status.Profile != "business" {
+		t.Fatalf("legacy upgrade must mark setup complete: %+v err=%v", status, err)
+	}
+
+	// Existing explicit profile must not be overwritten on subsequent upgrades.
+	if _, err := state.CompleteSetup("developer", "6.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.PreserveSetupOnUpgrade("business", "6.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	status, err = state.SetupStatus("6.0.1")
+	if err != nil || !status.Complete || status.Profile != "developer" {
+		t.Fatalf("existing completed setup profile overwritten on upgrade: %+v err=%v", status, err)
+	}
+}

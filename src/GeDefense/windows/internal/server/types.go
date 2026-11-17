@@ -313,6 +313,7 @@ type MHXEngine interface {
 	StyxStatus() mhx.StyxStatus
 	StyxCollectorStatus() mhx.StyxCollectorStatus
 	StyxIncidents(int) []mhx.StyxIncident
+	SetStyxMode(context.Context, string) (mhx.StyxStatus, error)
 }
 
 // V6Provider exposes bounded V6 Sovereign runtime projections to the control
@@ -321,6 +322,7 @@ type V6Provider interface {
 	SpywareStatus() spyware.Status
 	SpywareFindings(int) []spyware.Finding
 	SpywareLockState() string
+	SetSpywareMode(context.Context, string) error
 	WitnessStatus() witness.StatusReport
 	WitnessSettingsState() (string, string)
 	BootPosture() winapi.BootPosture

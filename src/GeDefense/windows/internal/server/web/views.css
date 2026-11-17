@@ -24,3 +24,30 @@
 .kinetic-world-svg{display:block;width:100%;height:auto;max-height:560px;min-height:290px}
 .geo-markers circle{filter:drop-shadow(0 0 3px #42dded)}.kinetic-geocard .table-wrap{max-height:320px;overflow:auto}.geo-attribution{font-size:.68rem;margin-top:8px}
 @media(max-width:700px){.kinetic-geo-map{min-height:190px}.kinetic-world-svg{min-height:190px}}
+
+/* Per-program GeoIP/ASN traffic breakdown under Overview -> Echtzeit-Traffic */
+.program-traffic-section{margin-top:20px;padding-top:18px;border-top:1px solid rgba(118,200,247,.12)}
+.program-traffic-head{margin-bottom:12px}
+.program-traffic-head h4{margin:4px 0 3px;font-size:1rem}
+.program-geo-summary{display:grid;gap:10px;margin-bottom:14px;padding:12px 14px;border:1px solid rgba(118,200,247,.12);border-radius:12px;background:rgba(12,26,44,.42)}
+.program-geo-bar{display:flex;height:12px;width:100%;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.06);gap:2px}
+.program-geo-seg{height:100%;min-width:4px;transition:width .25s ease}
+.program-geo-legend{display:flex;flex-wrap:wrap;gap:8px}
+.program-geo-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;font-size:11px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#dcebf7}
+.program-geo-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.program-traffic-list{display:grid;gap:8px}
+.program-row{border:1px solid rgba(118,200,247,.12);border-radius:12px;background:rgba(11,24,41,.52);overflow:hidden}
+.program-row-summary{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(130px,.9fr) auto;gap:12px;align-items:center;padding:11px 14px;cursor:pointer;list-style:none}
+.program-row-summary::-webkit-details-marker{display:none}
+.program-row-title{min-width:0}
+.program-row-title strong{display:block;font-size:.86rem;color:#eef6fc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.program-row-title small{display:block;color:var(--muted);font-size:.7rem;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.program-row-bar-wrap{display:flex;flex-direction:column;gap:4px}
+.program-row-bar-track{height:7px;width:100%;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden}
+.program-row-bar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#35d7ee,#8e7bff)}
+.program-row-stats{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;font:600 .72rem var(--mono);color:#cde5f7}
+.program-row-dests{padding:0 14px 12px;border-top:1px solid rgba(118,200,247,.08);display:grid;gap:6px;padding-top:10px}
+.program-dest-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:10px;align-items:center;padding:7px 10px;border-radius:8px;background:rgba(255,255,255,.025);font-size:.75rem}
+.program-pagination{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(118,200,247,.08)}
+.program-pagination-btns{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+@media(max-width:760px){.program-row-summary{grid-template-columns:1fr}.program-row-stats{justify-content:flex-start}.program-dest-row{grid-template-columns:1fr auto}}

@@ -59,6 +59,8 @@ type Finding struct {
 // Status is the honest engine state for the control plane.
 type Status struct {
 	Enabled          bool      `json:"enabled"`
+	Mode             string    `json:"mode,omitempty"`
+	ActiveEnforced   bool      `json:"activeEnforced"`
 	BYOVDWatched     bool      `json:"byovdWatched"`
 	CapabilityWatch  bool      `json:"capabilityWatch"`
 	PersistenceWatch bool      `json:"persistenceWatch"`

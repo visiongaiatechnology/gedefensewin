@@ -195,6 +195,7 @@ type WFPConfig struct {
 	BlockMetadata      bool
 	PinDNSToResolvers  bool
 	AllowedDNSServers  []netip.Addr
+	PermitAppPaths     []string
 	BlockAppPaths      []string
 	ExtraBlockPrefixes []netip.Prefix
 }

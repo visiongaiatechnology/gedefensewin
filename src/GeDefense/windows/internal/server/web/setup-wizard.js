@@ -8,6 +8,7 @@
  * posture. Any unavailable or rejected apply remains visible as an error.
  */
 import {api, optionalApi} from './api.js';
+import {LANGUAGES, LANGUAGE_EVENT, LANGUAGE_NAMES, language, setLanguage} from './i18n.js';
 
 const CASES = [
   {
@@ -64,6 +65,7 @@ let step = 0;
 let busy = false;
 let lastVerification = null;
 let previousFocus = null;
+let languageSyncHandler = null;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -121,13 +123,30 @@ function header() {
   copy.append(el('p', 'setup-eyebrow', 'GEDEFENSE TITAN · ERSTEINRICHTUNG'), el('h2', 'setup-title', 'Schutz vollständig aktivieren'));
   copy.append(el('p', 'setup-subtitle', 'Ein geführter Weg von der Installation bis zur verifizierten Schutzlage. Jede Freigabe wird durch die Control Plane geprüft.'));
   brand.append(mark, copy);
+  const actions = el('div', 'setup-head-actions');
+  const langWrap = el('label', 'language-switcher setup-lang-switcher');
+  langWrap.setAttribute('for', 'setupLanguageSwitcher');
+  const langSelect = document.createElement('select');
+  langSelect.id = 'setupLanguageSwitcher';
+  langSelect.setAttribute('aria-label', 'Sprache');
+  langSelect.setAttribute('title', 'Sprache');
+  for (const code of LANGUAGES) {
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = LANGUAGE_NAMES[code] || code;
+    langSelect.append(opt);
+  }
+  langSelect.value = language();
+  langSelect.addEventListener('change', () => setLanguage(langSelect.value));
+  langWrap.append(langSelect);
   const close = el('button', 'setup-close', '×');
   close.type = 'button';
   close.id = 'setupClose';
   close.dataset.allowBusy = 'false';
   close.setAttribute('aria-label', 'Einrichtung später fortsetzen');
   close.addEventListener('click', () => closeWizard());
-  head.append(brand, close);
+  actions.append(langWrap, close);
+  head.append(brand, actions);
   return head;
 }
 
@@ -274,7 +293,7 @@ function recommendationStep() {
     input.id = 'setupOwnerProcesses';
     input.rows = 3;
     input.spellcheck = false;
-    input.placeholder = 'C:\\Program Files\\DeepSeek Harness\\DeepSeek Harness.exe';
+    input.placeholder = 'C:\\Tools\\Dev\\toolchain.exe';
     toolchain.append(input);
     section.append(toolchain);
   }
@@ -376,6 +395,12 @@ function mount() {
   const focusTarget = overlay.querySelector('.setup-case');
   if (focusTarget) focusTarget.focus({preventScroll: true});
   overlay.addEventListener('keydown', trapFocus);
+  languageSyncHandler = event => {
+    const langSelect = overlay?.querySelector('#setupLanguageSwitcher');
+    const nextLang = event?.detail?.language || language();
+    if (langSelect && langSelect.value !== nextLang) langSelect.value = nextLang;
+  };
+  document.addEventListener(LANGUAGE_EVENT, languageSyncHandler);
   if (typeof overlay.showModal === 'function') {
     // A <div> overlay is intentional: the CSP-safe shell has no inline dialog
     // markup. Keep focus inside and restore it on close.
@@ -384,7 +409,7 @@ function mount() {
 
 function trapFocus(event) {
   if (event.key !== 'Tab') return;
-  const focusable = [...overlay.querySelectorAll('button:not([disabled]), summary, [tabindex="0"]')].filter(node => node.offsetParent !== null);
+  const focusable = [...overlay.querySelectorAll('button:not([disabled]), select:not([disabled]), summary, [tabindex="0"]')].filter(node => node.offsetParent !== null);
   if (!focusable.length) return;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
@@ -399,6 +424,10 @@ function trapFocus(event) {
 
 function closeWizard() {
   if (busy) return;
+  if (languageSyncHandler) {
+    document.removeEventListener(LANGUAGE_EVENT, languageSyncHandler);
+    languageSyncHandler = null;
+  }
   overlay?.remove();
   overlay = null;
   if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({preventScroll: true});

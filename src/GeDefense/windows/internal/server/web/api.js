@@ -99,8 +99,11 @@ export async function getSessionState(){
   return api('/api/v1/session/state',{signal:AbortSignal.timeout(15000)});
 }
 
-export const getOverviewThreatMap = (limit=250,events=120,signal) =>
-  api(`/api/v1/overview/threat-map?limit=${encodeURIComponent(limit)}&events=${encodeURIComponent(events)}`,{signal});
+export const getOverviewThreatMap = (limit=250,events=120,signal,mode='threats') =>
+  api(`/api/v1/overview/threat-map?limit=${encodeURIComponent(limit)}&events=${encodeURIComponent(events)}&mode=${encodeURIComponent(mode)}`,{signal});
+
+export const getOverviewProgramTraffic = (page=1,pageSize=10,signal) =>
+  api(`/api/v1/overview/program-traffic?page=${encodeURIComponent(page)}&pageSize=${encodeURIComponent(pageSize)}`,{signal});
 
 /* ------------------------------------------------------------------ */
 /* V5 planned endpoints (graceful fallback when not wired yet)          */
@@ -438,5 +441,21 @@ export function removeSentinelWhitelist(id,{reason=''}={}){
 export function getV6Status(limit=50){
   return api(`/api/v1/v6/status?limit=${encodeURIComponent(String(limit))}`,{
     signal:AbortSignal.timeout(15000),
+  });
+}
+
+export function setV6Mode({spywareMode='',styxMode='',reason='',confirmation=''}={}){
+  return api('/api/v1/v6/mode',{
+    method:'POST',
+    json:{spywareMode,styxMode,reason,confirmation},
+    signal:AbortSignal.timeout(30000),
+  });
+}
+
+export function setStyxWhitelist({action='add',entry='',entries=[],reason=''}={}){
+  return api('/api/v1/v6/styx/whitelist',{
+    method:'POST',
+    json:{action,entry,entries,reason},
+    signal:AbortSignal.timeout(30000),
   });
 }

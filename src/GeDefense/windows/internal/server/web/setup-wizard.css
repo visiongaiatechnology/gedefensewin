@@ -52,12 +52,18 @@
 }
 .setup-title{margin:0;font-size:clamp(20px,2.4vw,30px);line-height:1.12;letter-spacing:-.02em;font-weight:650}
 .setup-subtitle{margin:8px 0 0;max-width:64ch;color:#b5c6c1;font-size:13px;line-height:1.55}
+.setup-head-actions{display:flex;align-items:center;gap:10px;flex:none}
+.setup-lang-switcher select{
+  height:36px;padding:0 12px;border-radius:999px;border:1px solid rgba(190,220,210,.22);
+  background:rgba(16,28,33,.9);color:#e4f2ed;font-size:12px;font-weight:600;cursor:pointer;
+}
+.setup-lang-switcher select:hover{border-color:rgba(169,215,197,.48)}
 .setup-close{
   flex:none;width:36px;height:36px;border-radius:999px;border:1px solid rgba(190,220,210,.18);
   background:rgba(255,255,255,.035);color:#c9d8d3;font:400 21px/1 system-ui;cursor:pointer;
 }
 .setup-close:hover{background:rgba(255,255,255,.08);color:#fff}
-.setup-close:focus-visible,.setup-case:focus-visible,.setup-wizard button:focus-visible,.setup-wizard summary:focus-visible{
+.setup-close:focus-visible,.setup-case:focus-visible,.setup-wizard button:focus-visible,.setup-wizard select:focus-visible,.setup-wizard summary:focus-visible{
   outline:2px solid #a9d7c5;outline-offset:3px;
 }
 .setup-progress-wrap{padding:16px clamp(20px,3vw,36px) 0}

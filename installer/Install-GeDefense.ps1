@@ -467,17 +467,32 @@ foreach ($processName in @('GeDefenseTray','GeDefenseCenter')) {
     }
 }
 
-if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
-    Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
-    foreach ($proc in @(Get-Process -Name 'gedefense-windows' -ErrorAction SilentlyContinue)) {
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+$existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if ($existingService) {
+    if ($existingService.Status -ne 'Stopped') {
+        Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+        $stopDeadline = [DateTime]::UtcNow.AddSeconds(15)
+        do {
+            Start-Sleep -Milliseconds 250
+            $svcNow = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            $procsNow = @(Get-Process -Name 'gedefense-windows' -ErrorAction SilentlyContinue)
+        } while (($null -ne $svcNow -and $svcNow.Status -ne 'Stopped' -or $procsNow.Count -gt 0) -and [DateTime]::UtcNow -lt $stopDeadline)
     }
+}
+$stoppingProcs = @(Get-Process -Name 'gedefense-windows' -ErrorAction SilentlyContinue)
+foreach ($proc in $stoppingProcs) {
+    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+}
+if ($stoppingProcs.Count -gt 0) {
+    $stoppingProcs | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue
+}
+if ($existingService) {
     foreach ($dism in @(Get-Process -Name 'DismHost' -ErrorAction SilentlyContinue)) {
         Stop-Process -Id $dism.Id -Force -ErrorAction SilentlyContinue
     }
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Milliseconds 300
     Invoke-ScChecked @('delete',$serviceName)
-    Start-Sleep -Milliseconds 700
+    Start-Sleep -Milliseconds 500
 }
 Assert-VgtInstallerPaths
 $programFilesRoot = [IO.Path]::GetFullPath($env:ProgramFiles)
@@ -521,6 +536,15 @@ Copy-Item -LiteralPath (Join-Path $resolvedPayload 'branding\vgt-oem-logo.bmp') 
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'branding\gedefense-logo-v1.png') -Destination (Join-Path $brandingRoot 'gedefense-logo.png') -Force
 Copy-Item -LiteralPath (Join-Path $resolvedPayload 'branding\gedefense.ico') -Destination (Join-Path $brandingRoot 'gedefense.ico') -Force
 Copy-VgtInstallerSupportFiles -StageRoot $resolvedPayload -InstallRoot $installRoot -Certificate $certificate
+$legacyInstallPayload = Join-Path $installRoot 'payload'
+if (Test-Path -LiteralPath $legacyInstallPayload) {
+    Assert-VgtNoReparseTraversal -Path $legacyInstallPayload -AllowedRoot $programFilesRoot
+    if (Test-VgtReparsePoint -Path $legacyInstallPayload) {
+        [IO.Directory]::Delete($legacyInstallPayload,$false)
+    } elseif ([IO.Directory]::Exists($legacyInstallPayload)) {
+        Remove-VgtSafeTree -Path $legacyInstallPayload
+    }
+}
 # The final Program Files content is verified again against the protected stage
 # after the copy, so a payload swapped during the copy window fails closed.
 Assert-VgtInstalledPayload -StageRoot $resolvedPayload -InstallRoot $installRoot -BrandingRoot $brandingRoot -Certificate $certificate
@@ -627,14 +651,107 @@ $mhxModeTemporary = "$mhxModePath.$PID.tmp"
 Move-Item -LiteralPath $mhxModeTemporary -Destination $mhxModePath -Force
 Write-VgtInstallPhase -Phase 'MHXState' -State 'OK' -Detail 'Guarded persisted before service start'
 
-Start-Service -Name $serviceName
-$deadline = [DateTime]::UtcNow.AddSeconds(30)
+# Reparse-safe ACL & attribute repair on pre-existing data tree entries (upgrades
+# from older releases can leave legacy files like evidence.jsonl.lock with a
+# SYSTEM-only DACL or ReadOnly/Hidden/System attributes that block elevated migration).
+function Repair-VgtDataTreeAccess {
+    param([Parameter(Mandatory)][string]$RootPath)
+    $normalizedRoot = [IO.Path]::GetFullPath($RootPath)
+    $queue = [System.Collections.Generic.Queue[string]]::new()
+    $queue.Enqueue($normalizedRoot)
+    $checked = 0
+    $repaired = 0
+    while ($queue.Count -gt 0) {
+        $dir = $queue.Dequeue()
+        if (Test-VgtReparsePoint -Path $dir) {
+            throw [Security.SecurityException]::new(('Data tree contains a reparse point: {0}' -f $dir))
+        }
+        foreach ($child in @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop)) {
+            if ($child.FullName.StartsWith((Join-Path $normalizedRoot 'staging'), [StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+            if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw [Security.SecurityException]::new(('Data tree contains a reparse point: {0}' -f $child.FullName))
+            }
+            if (-not $child.PSIsContainer) {
+                $badFlags = [IO.FileAttributes]::ReadOnly -bor [IO.FileAttributes]::Hidden -bor [IO.FileAttributes]::System
+                if ($child.Attributes -band $badFlags) {
+                    [IO.File]::SetAttributes($child.FullName, [IO.FileAttributes]::Normal)
+                }
+            }
+            $aclResult = Repair-VgtRestrictedEntryAcl -Path $child.FullName -IsDirectory:$child.PSIsContainer
+            $checked++
+            if ($aclResult.Changed) { $repaired++ }
+            if ($child.PSIsContainer -and $child.Name -ne 'operations') {
+                $queue.Enqueue($child.FullName)
+            }
+        }
+    }
+    Write-VgtInstallPhase -Phase 'DataTreeACL' -State 'OK' -Detail ("{0} existing entries verified ({1} repaired)" -f $checked,$repaired)
+}
+Repair-VgtDataTreeAccess -RootPath $dataRoot
+Repair-VgtDataTreeAccess -RootPath $securityCenterRoot
+
+$previousErrorAction = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $upgradeCheckOutput = (& $executable -prepare-upgrade 2>&1 | ForEach-Object { $_.ToString() } | Out-String).Trim()
+    $upgradeExitCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorAction
+}
+if ($upgradeExitCode -ne 0) {
+    $detail = if ([string]::IsNullOrWhiteSpace($upgradeCheckOutput)) { "exit=$upgradeExitCode" } else { $upgradeCheckOutput }
+    Write-VgtInstallPhase -Phase 'UpgradePrepare' -State 'FAILED' -Detail $detail
+    throw [InvalidOperationException]::new(("GeDefense pre-start upgrade/initialization check failed: {0}" -f $detail))
+}
+Write-VgtInstallPhase -Phase 'UpgradePrepare' -State 'OK' -Detail 'Legacy state and service initialization verified'
+
+try {
+    Start-Service -Name $serviceName -ErrorAction Stop
+} catch {
+    $svcState = (Get-Service -Name $serviceName -ErrorAction SilentlyContinue).Status
+    if ($svcState -ne 'StartPending' -and $svcState -ne 'Running') {
+        throw
+    }
+}
+$deadline = [DateTime]::UtcNow.AddSeconds(90)
 do {
     Start-Sleep -Milliseconds 500
     $state = (Get-Service -Name $serviceName).Status
 } while ($state -ne 'Running' -and [DateTime]::UtcNow -lt $deadline)
-if ($state -ne 'Running') { throw [InvalidOperationException]::new('GeDefense service did not reach Running state.') }
-Write-VgtInstallPhase -Phase 'ServiceStart' -State 'OK' -Detail $state
+if ($state -ne 'Running') {
+    $svcErrPath = Join-Path $dataRoot 'service-error.log'
+    $svcErrTail = ''
+    if (Test-Path -LiteralPath $svcErrPath -PathType Leaf) {
+        $svcErrTail = (@(Get-Content -LiteralPath $svcErrPath -Tail 5 -ErrorAction SilentlyContinue) -join ' | ').Trim()
+    }
+    if ($svcErrTail) {
+        Write-VgtInstallPhase -Phase 'ServiceStart' -State 'FAILED' -Detail ("state={0}|{1}" -f $state,$svcErrTail)
+        throw [InvalidOperationException]::new(("GeDefense service did not reach Running state: {0}" -f $svcErrTail))
+    }
+    throw [InvalidOperationException]::new('GeDefense service did not reach Running state.')
+}
+$tcpReady = $false
+$tcpDeadline = [DateTime]::UtcNow.AddSeconds(15)
+while (-not $tcpReady -and [DateTime]::UtcNow -lt $tcpDeadline) {
+    $tcpClient = [Net.Sockets.TcpClient]::new()
+    try {
+        $connectAsync = $tcpClient.BeginConnect('127.0.0.1', 17831, $null, $null)
+        if ($connectAsync.AsyncWaitHandle.WaitOne(250) -and $tcpClient.Connected) {
+            $tcpClient.EndConnect($connectAsync)
+            $tcpReady = $true
+        }
+    } catch {} finally {
+        $tcpClient.Dispose()
+    }
+    if (-not $tcpReady) { Start-Sleep -Milliseconds 250 }
+}
+if (-not $tcpReady) {
+    Write-VgtInstallPhase -Phase 'ServiceStart' -State 'FAILED' -Detail 'control-plane port 17831 did not become reachable'
+    throw [InvalidOperationException]::new('GeDefense control plane port 17831 did not become reachable.')
+}
+Write-VgtInstallPhase -Phase 'ServiceStart' -State 'OK' -Detail ("{0}|port=17831" -f $state)
 $tokenPath = Join-Path $dataRoot 'dashboard.token'
 if (-not (Test-Path -LiteralPath $tokenPath -PathType Leaf)) { throw [IO.FileNotFoundException]::new('GeDefense dashboard token was not created.') }
 Assert-VgtSafeFileTarget -Path $tokenPath -AllowedRoot $dataRoot | Out-Null
@@ -656,6 +773,12 @@ Write-VgtInstallPhase -Phase 'MHXRealtime' -State 'OK' -Detail 'Guarded + Defend
 & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy AllSigned -File (Join-Path $installRoot 'xdr\Set-VgtMhxAppControl.ps1') -Action Audit | Out-Null
 if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new('Initial App Control audit policy deployment failed.') }
 Write-VgtInstallPhase -Phase 'AppControl' -State 'OK' -Detail 'Kernel audit policy deployed'
+if (-not [string]::IsNullOrWhiteSpace($installedVersion)) {
+    & $executable -preserve-upgrade-setup 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-VgtInstallPhase -Phase 'UpgradeSetupState' -State 'OK' -Detail ("First-run setup preserved across upgrade from {0}" -f $installedVersion)
+    }
+}
 # The protected payload stage is transient: the installed files have been
 # verified at their final destination, so no staging copy is retained.
 if ($script:protectedPayloadStage -and [IO.Directory]::Exists($script:protectedPayloadStage)) {

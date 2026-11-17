@@ -215,6 +215,39 @@ func (e *StyxBeaconEngine) SetCanaryCorrelation(hook func(pid int, since time.Ti
 	e.mu.Unlock()
 }
 
+// Settings returns a deep copy of the active StyX detector settings.
+func (e *StyxBeaconEngine) Settings() StyxSettings {
+	if e == nil {
+		return DefaultStyxSettings()
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.settings.Clone()
+}
+
+// SetMode switches the StyX detector mode atomically between off, observe and
+// enforce without dropping tracked flows.
+func (e *StyxBeaconEngine) SetMode(mode string) error {
+	if e == nil {
+		return fmt.Errorf("styX beacon engine is nil")
+	}
+	normalized, err := styxNormalizeMode(mode)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	next := e.settings.Clone()
+	e.mu.Unlock()
+	if normalized == StyxModeOff {
+		next.Enabled = false
+		next.Mode = StyxModeOff
+	} else {
+		next.Enabled = true
+		next.Mode = normalized
+	}
+	return e.SetSettings(next)
+}
+
 // SetSettings applies a validated settings revision. Tracked flows are kept (the
 // TTL bounds them); the capability flags are not changed by this call.
 func (e *StyxBeaconEngine) SetSettings(settings StyxSettings) error {
@@ -289,6 +322,12 @@ func (e *StyxBeaconEngine) observeLocked(sample StyxFlowSample, now time.Time) (
 	}
 	if aggregate.Comm == "" {
 		aggregate.Comm = sanitizeStyxProcess(sample.Comm)
+	}
+	if aggregate.ProcessPath == "" {
+		aggregate.ProcessPath = sanitizeStyxProcessPath(sample.ProcessPath)
+	}
+	if aggregate.LocalPort == 0 && sample.LocalPort != 0 {
+		aggregate.LocalPort = sample.LocalPort
 	}
 	activity := sample.TxObservationAvailable && (sample.TxBytes > 0 || (sample.RxObservationAvailable && sample.RxBytes > 0))
 	observedAt := sample.Timestamp
@@ -509,4 +548,17 @@ func sanitizeStyxProcess(name string) string {
 		return ""
 	}
 	return name
+}
+
+func sanitizeStyxProcessPath(path string) string {
+	cleaned := strings.TrimSpace(path)
+	if cleaned == "" || len(cleaned) > 512 {
+		return ""
+	}
+	if strings.IndexFunc(cleaned, func(character rune) bool {
+		return character < 0x20 || character == 0x7f
+	}) >= 0 {
+		return ""
+	}
+	return cleaned
 }

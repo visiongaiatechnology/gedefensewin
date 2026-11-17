@@ -126,6 +126,22 @@ func BuildWFPPlan(cfg WFPConfig) ([]WFPRuleSpec, error) {
 		}
 	}
 
+	for _, rawPath := range cfg.PermitAppPaths {
+		cleaned := strings.TrimSpace(rawPath)
+		if cleaned == "" || !filepath.IsAbs(cleaned) || len(cleaned) > 512 {
+			return nil, fmt.Errorf("winapi wfp: permit app path %q must be bounded & absolute", rawPath)
+		}
+		for _, layer := range []syscall.GUID{FWPMLayerALEAuthConnectV4, FWPMLayerALEAuthConnectV6} {
+			rules = append(rules, WFPRuleSpec{
+				Name:      "GeDefense-V6-PermitApp-" + filepath.Base(cleaned),
+				LayerGUID: layer,
+				Action:    fwpActionPermit,
+				Weight:    13,
+				AppPath:   cleaned,
+			})
+		}
+	}
+
 	for _, rawPath := range cfg.BlockAppPaths {
 		cleaned := strings.TrimSpace(rawPath)
 		if cleaned == "" || !filepath.IsAbs(cleaned) || len(cleaned) > 512 {

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -676,15 +677,26 @@ func (l *Ledger) verifyLocked() (err error) {
 	expectedSequence := startSequence
 	previous := startMAC
 	checkpointMACs := make(map[uint64]string, len(l.checkpoints))
+	archiveCheckpoints := make(map[string]checkpointRecord, len(l.archives))
 	for _, checkpoint := range l.checkpoints {
 		checkpointMACs[checkpoint.Sequence] = checkpoint.LastMAC
+		if checkpoint.Kind == checkpointKindArchive && checkpoint.ArchiveName != "" {
+			archiveCheckpoints[checkpoint.ArchiveName] = checkpoint
+		}
 	}
+	mac := hmac.New(sha256.New, l.key)
+	var sumBuf [sha256.Size]byte
+	var providedBuf [sha256.Size]byte
 	var lastArchiveSequence uint64
 	for _, archive := range l.archives {
 		if archive.FirstSequence != expectedSequence {
 			return errors.New("evidence archive chain gap detected")
 		}
 		archivePath := filepath.Join(l.dir, archive.Name)
+		if l.tryFastVerifyArchive(archive, archivePath, archiveCheckpoints, &expectedSequence, &previous, checkpointMACs) {
+			lastArchiveSequence = archive.LastSequence
+			continue
+		}
 		if err := scanLedgerFile(archivePath, func(raw []byte) error {
 			record, err := decodeRecord(raw)
 			if err != nil {
@@ -693,7 +705,7 @@ func (l *Ledger) verifyLocked() (err error) {
 			if record.Sequence != expectedSequence || record.PreviousMAC != previous {
 				return errors.New("evidence archive chain linkage invalid")
 			}
-			if err := l.authenticate(record); err != nil {
+			if err := authenticateFast(mac, record, sumBuf[:0], providedBuf[:]); err != nil {
 				return err
 			}
 			checkpointMACs[record.Sequence] = record.MAC
@@ -716,7 +728,7 @@ func (l *Ledger) verifyLocked() (err error) {
 		if record.Sequence != expectedSequence || record.PreviousMAC != previous {
 			return errors.New("evidence chain linkage invalid")
 		}
-		if err := l.authenticate(record); err != nil {
+		if err := authenticateFast(mac, record, sumBuf[:0], providedBuf[:]); err != nil {
 			return err
 		}
 		checkpointMACs[record.Sequence] = record.MAC
@@ -778,16 +790,66 @@ func (l *Ledger) retentionStart() (uint64, string, error) {
 }
 
 func (l *Ledger) authenticate(record Record) error {
-	expected, err := l.calculate(record)
+	mac := hmac.New(sha256.New, l.key)
+	var sumBuf [sha256.Size]byte
+	var providedBuf [sha256.Size]byte
+	return authenticateFast(mac, record, sumBuf[:0], providedBuf[:])
+}
+
+func authenticateFast(mac hash.Hash, record Record, sumBuf, providedBuf []byte) error {
+	if len(record.MAC) != sha256.Size*2 {
+		return errors.New("evidence chain authentication failed")
+	}
+	n, providedErr := hex.Decode(providedBuf, []byte(record.MAC))
+	if providedErr != nil || n != sha256.Size {
+		return errors.New("evidence chain authentication failed")
+	}
+	record.MAC = ""
+	raw, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
-	provided, providedErr := hex.DecodeString(record.MAC)
-	expectedBytes, expectedErr := hex.DecodeString(expected)
-	if providedErr != nil || expectedErr != nil || len(provided) != sha256.Size || !hmac.Equal(expectedBytes, provided) {
+	mac.Reset()
+	_, _ = mac.Write(raw)
+	expectedBytes := mac.Sum(sumBuf)
+	if !hmac.Equal(expectedBytes, providedBuf) {
 		return errors.New("evidence chain authentication failed")
 	}
 	return nil
+}
+
+// tryFastVerifyArchive verifies a large (>1 MiB) rotated archive in one streaming
+// SHA-256 pass when it is covered by an already-Ed25519-verified ARCHIVE
+// checkpoint and no TIP checkpoint falls inside its sequence range.
+func (l *Ledger) tryFastVerifyArchive(
+	archive ledgerArchive,
+	archivePath string,
+	archiveCheckpoints map[string]checkpointRecord,
+	expectedSequence *uint64,
+	previous *string,
+	checkpointMACs map[uint64]string,
+) bool {
+	cp, ok := archiveCheckpoints[archive.Name]
+	if !ok || cp.Sequence != archive.LastSequence || cp.ArchiveSHA256 == "" {
+		return false
+	}
+	info, err := os.Stat(archivePath)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 1<<20 {
+		return false
+	}
+	for _, existing := range l.checkpoints {
+		if existing.Kind == checkpointKindTip && existing.Sequence >= archive.FirstSequence && existing.Sequence < archive.LastSequence {
+			return false
+		}
+	}
+	digest, err := hashFileSHA256(archivePath)
+	if err != nil || !strings.EqualFold(digest, cp.ArchiveSHA256) {
+		return false
+	}
+	checkpointMACs[archive.LastSequence] = cp.LastMAC
+	*expectedSequence = archive.LastSequence + 1
+	*previous = cp.LastMAC
+	return true
 }
 
 func (l *Ledger) calculate(record Record) (string, error) {

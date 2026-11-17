@@ -73,11 +73,20 @@ func EnsureSecretDir(dir string) (Restriction, error) {
 	}
 	cleaned := filepath.Clean(dir)
 	if err := os.MkdirAll(cleaned, secretDirMode); err != nil {
-		return Restriction{}, err
+		// If the directory already exists with an empty/damaged DACL owned by this
+		// service principal, re-apply the protected DACL first and retry.
+		_, _ = restrictPath(cleaned, true)
+		if retryErr := os.MkdirAll(cleaned, secretDirMode); retryErr != nil {
+			return Restriction{}, err
+		}
 	}
 	info, err := os.Stat(cleaned)
 	if err != nil {
-		return Restriction{}, err
+		_, _ = restrictPath(cleaned, true)
+		info, err = os.Stat(cleaned)
+		if err != nil {
+			return Restriction{}, err
+		}
 	}
 	if !info.IsDir() {
 		return Restriction{}, errors.New("secret path is not a directory")
@@ -113,6 +122,13 @@ func LoadOrCreateRawKey(path string, size int) ([]byte, error) {
 		return nil, errors.New("secret key size rejected")
 	}
 	raw, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		// Self-heal if a legacy installer left an empty DACL on the parent keys
+		// directory or key file while owned by LocalSystem/Administrators.
+		_, _ = EnsureSecretDir(filepath.Dir(path))
+		_, _ = restrictPath(filepath.Clean(path), false)
+		raw, err = os.ReadFile(path)
+	}
 	if err == nil {
 		key, decodeErr := base64.RawStdEncoding.DecodeString(strings.TrimSpace(string(raw)))
 		if decodeErr != nil || len(key) != size {

@@ -5,6 +5,7 @@ package mhx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -127,4 +128,113 @@ func TestStyxLoopStopsOnCancellation(t *testing.T) {
 	// A nil detector must not panic or block.
 	var empty Engine
 	empty.styxLoop(context.Background())
+}
+
+type fakeStyxEnforcer struct {
+	syncErr    error
+	syncCalls  int
+	closeCalls int
+	lastCfg    styxEnforceConfig
+	state      styxEnforceState
+}
+
+func (f *fakeStyxEnforcer) Sync(_ context.Context, cfg styxEnforceConfig) (styxEnforceState, error) {
+	f.syncCalls++
+	f.lastCfg = cfg
+	if f.syncErr != nil {
+		f.state = styxEnforceState{LastError: f.syncErr.Error()}
+		return f.state, f.syncErr
+	}
+	f.state = styxEnforceState{Active: true, FilterCount: 4 + len(cfg.BlockPrefixes)}
+	return f.state, nil
+}
+
+func (f *fakeStyxEnforcer) Close() error {
+	f.closeCalls++
+	f.state = styxEnforceState{}
+	return nil
+}
+
+func (f *fakeStyxEnforcer) State() styxEnforceState { return f.state }
+
+func TestStyxModeTransitionsAndFailClosedWFP(t *testing.T) {
+	engine := newWiredStyxEngine(t)
+	enforcer := &fakeStyxEnforcer{}
+	engine.styxWFP = enforcer
+	engine.styxIncidents = []StyxIncident{
+		{ID: "inc-1", Decision: StyxDecisionContain, Remote: "198.51.100.42:443", Score: 250},
+		{ID: "inc-lan", Decision: StyxDecisionContain, Remote: "192.168.1.10:443", Score: 250},
+	}
+
+	status, err := engine.SetStyxMode(context.Background(), StyxModeEnforce)
+	if err != nil {
+		t.Fatalf("SetStyxMode enforce: %v", err)
+	}
+	if !status.Enforcing || !status.WFPActive || status.WFPFilterCount != 5 || enforcer.syncCalls != 1 {
+		t.Fatalf("expected active WFP enforce with 1 public prefix, got status=%+v syncCalls=%d", status, enforcer.syncCalls)
+	}
+	if len(enforcer.lastCfg.BlockPrefixes) != 1 || enforcer.lastCfg.BlockPrefixes[0].String() != "198.51.100.42/32" {
+		t.Fatalf("expected only public IP blocked, got %v", enforcer.lastCfg.BlockPrefixes)
+	}
+
+	// Switching to observe releases dynamic WFP filters cleanly.
+	status, err = engine.SetStyxMode(context.Background(), StyxModeObserve)
+	if err != nil {
+		t.Fatalf("SetStyxMode observe: %v", err)
+	}
+	if status.Enforcing || status.WFPActive || enforcer.closeCalls != 1 {
+		t.Fatalf("expected WFP closed in observe, got %+v closeCalls=%d", status, enforcer.closeCalls)
+	}
+
+	// Failed WFP sync rolls back detector mode fail-closed.
+	enforcer.syncErr = errors.New("BFE access denied")
+	status, err = engine.SetStyxMode(context.Background(), StyxModeEnforce)
+	if err == nil {
+		t.Fatal("expected failed WFP sync to error")
+	}
+	if status.Mode != StyxModeObserve || status.Enforcing {
+		t.Fatalf("expected rollback to observe, got %+v", status)
+	}
+}
+
+func TestStyxWhitelistReleasesWFPBlockAndUnblocksApp(t *testing.T) {
+	engine := newWiredStyxEngine(t)
+	enforcer := &fakeStyxEnforcer{}
+	engine.styxEnforceMu.Lock()
+	engine.styxWFP = enforcer
+	engine.styxEnforceMu.Unlock()
+
+	if _, err := engine.SetStyxMode(context.Background(), StyxModeEnforce); err != nil {
+		t.Fatalf("SetStyxMode enforce: %v", err)
+	}
+	inc := StyxIncident{
+		ID:          "INC-STYX-WL-1",
+		PID:         9120,
+		Process:     "tool.exe",
+		ProcessPath: `C:\Tools\tool.exe`,
+		Remote:      "198.51.100.44:443",
+		Score:       250,
+		Decision:    StyxDecisionContain,
+	}
+	engine.enforceStyxIncident(context.Background(), &inc)
+	engine.recordStyxIncident(inc)
+	if inc.Action != "wfp-blocked" || len(engine.StyxBlockedTargets()) != 1 {
+		t.Fatalf("expected active WFP block before whitelist, action=%s blocked=%v", inc.Action, engine.StyxBlockedTargets())
+	}
+
+	syncBefore := enforcer.syncCalls
+	wl, err := engine.SetStyxWhitelist(context.Background(), []string{`C:\Tools\tool.exe`})
+	if err != nil {
+		t.Fatalf("SetStyxWhitelist: %v", err)
+	}
+	if len(wl) != 1 || enforcer.syncCalls != syncBefore+1 {
+		t.Fatalf("expected immediate WFP resync on whitelist, wl=%v syncCalls=%d", wl, enforcer.syncCalls)
+	}
+	if len(engine.StyxBlockedTargets()) != 0 {
+		t.Fatalf("expected WFP block released after whitelisting process path, still blocked: %v", engine.StyxBlockedTargets())
+	}
+	latest := engine.StyxIncidents(5)
+	if len(latest) != 1 || !latest[0].Whitelisted || latest[0].Action != "whitelisted" {
+		t.Fatalf("expected stored incident marked whitelisted, got %+v", latest)
+	}
 }

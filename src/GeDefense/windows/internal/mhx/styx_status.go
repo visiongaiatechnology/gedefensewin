@@ -43,6 +43,10 @@ type StyxBeaconSnapshot struct {
 type StyxStatus struct {
 	Enabled                    bool               `json:"enabled"`
 	Mode                       string             `json:"mode"`
+	Enforcing                  bool               `json:"enforcing"`
+	WFPActive                  bool               `json:"wfpActive"`
+	WFPFilterCount             int                `json:"wfpFilterCount"`
+	WFPLastError               string             `json:"wfpLastError,omitempty"`
 	SensorState                string             `json:"sensorState"`
 	Capability                 string             `json:"capability"`
 	FlowsTracked               int                `json:"flowsTracked"`
@@ -112,6 +116,7 @@ func (e *StyxBeaconEngine) Status() StyxStatus {
 	status := StyxStatus{
 		Enabled:                    e.settings.Enabled,
 		Mode:                       e.settings.EffectiveMode(),
+		Enforcing:                  e.settings.IsEnforcing(),
 		SensorState:                e.sensorStateLocked(),
 		Capability:                 "missing",
 		FlowsTracked:               e.flows.len(),
@@ -145,6 +150,8 @@ type StyxIncident struct {
 	ResponseScore    int       `json:"responseScore"`
 	PID              int       `json:"pid"`
 	Process          string    `json:"process"`
+	ProcessPath      string    `json:"processPath,omitempty"`
+	LocalPort        uint16    `json:"localPort,omitempty"`
 	Remote           string    `json:"remote"`
 	EventType        string    `json:"eventType"`
 	Category         string    `json:"category"`
@@ -158,6 +165,32 @@ type StyxIncident struct {
 	RxBytes          uint64    `json:"rxBytes"`
 	IntervalSamples  int64     `json:"intervalSamples"`
 	CanaryCorrelated bool      `json:"canaryCorrelated"`
+	Whitelisted      bool      `json:"whitelisted,omitempty"`
+}
+
+// StyxProgramDestination aggregates live outbound traffic from a program to
+// one remote endpoint (enriched with GeoIP/ASN by the control plane).
+type StyxProgramDestination struct {
+	IP          string    `json:"ip"`
+	Port        uint16    `json:"port"`
+	LocalPort   uint16    `json:"localPort,omitempty"`
+	TxBytes     uint64    `json:"txBytes"`
+	RxBytes     uint64    `json:"rxBytes"`
+	Connections int       `json:"connections"`
+	LastSeen    time.Time `json:"lastSeen"`
+}
+
+// StyxProgramTrafficSummary aggregates live TCP traffic per Windows executable.
+type StyxProgramTrafficSummary struct {
+	Process      string                   `json:"process"`
+	ProcessPath  string                   `json:"processPath,omitempty"`
+	PIDs         []int                    `json:"pids"`
+	Connections  int                      `json:"connections"`
+	TxBytes      uint64                   `json:"txBytes"`
+	RxBytes      uint64                   `json:"rxBytes"`
+	TotalBytes   uint64                   `json:"totalBytes"`
+	LastSeen     time.Time                `json:"lastSeen"`
+	Destinations []StyxProgramDestination `json:"destinations"`
 }
 
 // buildIncidentLocked renders one finding from a flow aggregate. It never
@@ -188,6 +221,8 @@ func (e *StyxBeaconEngine) buildIncidentLocked(aggregate *FlowAggregate, now tim
 		ResponseScore:    aggregate.LastScore,
 		PID:              key.PID,
 		Process:          sanitizeStyxProcess(process),
+		ProcessPath:      aggregate.ProcessPath,
+		LocalPort:        aggregate.LocalPort,
 		Remote:           key.Remote(),
 		EventType:        aggregate.lastEvent,
 		Category:         aggregate.lastCategory,

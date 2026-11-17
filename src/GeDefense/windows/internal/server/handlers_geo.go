@@ -30,6 +30,7 @@ type mapSource struct {
 	Severity               string    `json:"severity"`
 	Rules                  []string  `json:"rules"`
 	Process                string    `json:"process"`
+	Path                   string    `json:"path,omitempty"`
 	CorrelationID          string    `json:"correlation_id,omitempty"`
 	Direction              string    `json:"direction"`
 	VerifiedGeDefenseBlock bool      `json:"verified_gedefense_block"`

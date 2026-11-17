@@ -21,6 +21,10 @@ type Settings struct {
 	LSASS                 bool
 	CapabilityAllowed     func(path string) bool
 	VerifyDriverSignature func(path string) error
+	// OnFindingRecorded is an optional active-response adapter evaluated right
+	// before a finding is stored and written to the ledger. Returning a non-empty
+	// response replaces finding.Response only when enforcement actually ran.
+	OnFindingRecorded func(finding Finding) string
 }
 
 // Engine classifies sensor observations into bounded, deduplicated findings and
@@ -167,6 +171,18 @@ func (e *Engine) Enabled(source Source) bool {
 	}
 }
 
+// SetFindingResponseHook installs an optional post-classification active response
+// hook. The callback runs outside the engine lock and must only return a new
+// Response label when an actual enforcement action ran.
+func (e *Engine) SetFindingResponseHook(hook func(Finding) string) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.settings.OnFindingRecorded = hook
+	e.mu.Unlock()
+}
+
 // record deduplicates and stores a finding. Repeated identical observations
 // inside the dedupe window are suppressed but still count as observed, so a
 // sustained capture attempt cannot hide behind deduplication.
@@ -198,8 +214,19 @@ func (e *Engine) record(finding *Finding) *Finding {
 		}
 	}
 	e.dedupe[key] = e.now()
+	hook := e.settings.OnFindingRecorded
 	copied := *finding
 	copied.Evidence = append([]string(nil), finding.Evidence...)
+	e.mu.Unlock()
+
+	if hook != nil {
+		if response := strings.TrimSpace(hook(copied)); response != "" {
+			copied.Response = response
+			finding.Response = response
+		}
+	}
+
+	e.mu.Lock()
 	e.findings = append(e.findings, copied)
 	if len(e.findings) > MaxFindings {
 		copy(e.findings, e.findings[len(e.findings)-MaxFindings:])

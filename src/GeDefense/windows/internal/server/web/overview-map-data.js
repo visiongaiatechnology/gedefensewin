@@ -42,6 +42,7 @@ export function normalizePayload(payload) {
     position: positionOf(source.latitude, source.longitude), blocked: source.blocked === true,
     severity: text(source.severity, 16).toLowerCase(), summary: text(source.summary, 500), rules: strings(source.rules),
     hits: count(source.hits), lastSeen: text(source.last_seen, 48), process: text(source.process, 240),
+    path: text(source.path, 500),
     service: typeof source.local_port === 'number' && source.local_port > 0 ? `Lokaler Port ${count(source.local_port)}` : 'Kein Transportport gemeldet'
   })).filter(source => source.ip);
   const byIP = new Map(sources.map(source => [source.ip, source]));

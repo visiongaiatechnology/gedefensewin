@@ -151,6 +151,29 @@ func Open() error {
 	return openDedicatedWindow()
 }
 
+// acquireCenterSessionWithStartupWait retries transient connection-refused
+// broker errors during service startup/restart up to 15 seconds while returning
+// definite authorization rejections immediately.
+func acquireCenterSessionWithStartupWait(ctx context.Context) (operatorclient.Session, error) {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		session, err := operatorclient.Acquire(ctx, controlPlaneBaseURL, operatorclient.CenterClient)
+		if err == nil {
+			return session, nil
+		}
+		if !strings.Contains(err.Error(), "operator broker unavailable") || time.Now().After(deadline) {
+			return operatorclient.Session{}, err
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return operatorclient.Session{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func openDedicatedWindow() (err error) {
 	elevated := winapi.IsProcessElevated()
 	browserPath := ""
@@ -168,7 +191,7 @@ func openDedicatedWindow() (err error) {
 	// asks the service for a short-lived operator session; the service verifies
 	// this process's Windows token (operator group / Administrators) via the
 	// loopback peer (UI-FIND-001 / AN-FIND-004).
-	session, err := operatorclient.Acquire(context.Background(), controlPlaneBaseURL, operatorclient.CenterClient)
+	session, err := acquireCenterSessionWithStartupWait(context.Background())
 	if err != nil {
 		return failure(FailureBroker, err)
 	}

@@ -114,10 +114,26 @@ function Invoke-VgtIcaclsMutation {
     )
     $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
     if (-not (Test-Path -LiteralPath $icacls -PathType Leaf)) { throw [IO.FileNotFoundException]::new('Windows icacls.exe is unavailable.') }
-    $nativeOutput = (& $icacls $Path @Arguments 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) {
+    $prevEA = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $nativeOutput = (& $icacls $Path @Arguments 2>&1 | ForEach-Object { $_.ToString() } | Out-String).Trim()
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEA
+    }
+    if ($exitCode -ne 0) {
         throw [Security.SecurityException]::new(('ACL {0} failed for {1}: {2}' -f $Operation,$Path,$nativeOutput))
     }
+}
+
+function Invoke-VgtTakeOwnershipCommon {
+    param([Parameter(Mandatory)][string]$Path)
+    $takeown = Join-Path $env:SystemRoot 'System32\takeown.exe'
+    if (-not (Test-Path -LiteralPath $takeown -PathType Leaf)) { return }
+    $prevEA = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $takeown /F $Path /A 2>&1 | Out-Null } finally { $ErrorActionPreference = $prevEA }
 }
 
 # Set-VgtServiceAcl applies an inheritance-protected explicit DACL, moves the
@@ -135,17 +151,33 @@ function Set-VgtServiceAcl {
     $isDirectory = [IO.Directory]::Exists($full)
     if (-not $isDirectory -and -not [IO.File]::Exists($full)) { throw [IO.FileNotFoundException]::new(('ACL target is missing: {0}' -f $full)) }
     $inheritFlags = if ($isDirectory) { '(OI)(CI)' } else { '' }
-    Invoke-VgtIcaclsMutation -Path $full -Arguments @('/reset') -Operation 'reset'
-    Invoke-VgtIcaclsMutation -Path $full -Arguments @('/inheritance:r') -Operation 'inheritance-remove'
-    Invoke-VgtIcaclsMutation -Path $full -Arguments @('/grant:r',("*S-1-5-18:{0}F" -f $inheritFlags),("*S-1-5-32-544:{0}F" -f $inheritFlags)) -Operation 'grant-service'
+    try {
+        Invoke-VgtIcaclsMutation -Path $full -Arguments @('/reset') -Operation 'reset'
+    } catch {
+        if ($SkipOwnerCheck) { throw }
+        Invoke-VgtTakeOwnershipCommon -Path $full
+        Invoke-VgtIcaclsMutation -Path $full -Arguments @('/reset') -Operation 'reset'
+    }
+    $grantArgs = @('/inheritance:r','/grant:r',("*S-1-5-18:{0}F" -f $inheritFlags),("*S-1-5-32-544:{0}F" -f $inheritFlags))
     if ($AllowsUsersRead) {
         $userRights = if ($isDirectory) { '(OI)(CI)RX' } else { 'R' }
-        Invoke-VgtIcaclsMutation -Path $full -Arguments @('/grant:r',("*S-1-5-32-545:{0}" -f $userRights)) -Operation 'grant-users-read'
+        $grantArgs += ("*S-1-5-32-545:{0}" -f $userRights)
+    }
+    try {
+        Invoke-VgtIcaclsMutation -Path $full -Arguments $grantArgs -Operation 'grant-service'
+    } catch {
+        if ($SkipOwnerCheck) { throw }
+        Invoke-VgtTakeOwnershipCommon -Path $full
+        Invoke-VgtIcaclsMutation -Path $full -Arguments $grantArgs -Operation 'grant-service'
     }
     if (-not $SkipOwnerCheck) {
         $ownerSid = Resolve-VgtIdentitySid -Identity (Get-Acl -LiteralPath $full).Owner
         if ($ownerSid -ne $script:VgtSystemSid -and $ownerSid -ne $script:VgtAdministratorsSid) {
-            Invoke-VgtIcaclsMutation -Path $full -Arguments @('/setowner','*S-1-5-32-544') -Operation 'setowner'
+            try {
+                Invoke-VgtIcaclsMutation -Path $full -Arguments @('/setowner','*S-1-5-32-544') -Operation 'setowner'
+            } catch {
+                Invoke-VgtTakeOwnershipCommon -Path $full
+            }
             $hardenedOwner = Resolve-VgtIdentitySid -Identity (Get-Acl -LiteralPath $full).Owner
             if ($hardenedOwner -ne $script:VgtAdministratorsSid) {
                 throw [Security.SecurityException]::new(('ACL owner hardening failed for {0}: owner={1}' -f $full,$hardenedOwner))

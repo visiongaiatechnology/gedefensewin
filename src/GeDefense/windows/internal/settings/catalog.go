@@ -247,7 +247,7 @@ func sectionDefinitions() []Section {
 		{ID: SectionThreatIntelligence, Label: "Threat Intelligence", Description: "Abrufintervall, Feed-Aktionen, blockierende Abdeckung und geschützte Netze.", Order: 6},
 		{ID: SectionStartup, Label: "Start & Hintergrund", Description: "Dienststart, Tray-Verhalten, Bereitschaftsprüfung und Health-Refresh.", Order: 7},
 		{ID: SectionNotifications, Label: "Benachrichtigungen", Description: "Ereignisbenachrichtigungen, Startzusammenfassung, Ton und Detailtiefe.", Order: 8},
-		{ID: SectionV6, Label: "V6 Sovereign", Description: "Anti-Spyware-Sensoren (BYOVD, Fähigkeiten, Persistenz, LSASS) und der externe Evidenz-Witness. Sensoren sind ausschließlich erkennend (OBSERVE_ONLY).", Order: 9},
+		{ID: SectionV6, Label: "V6 Sovereign", Description: "Anti-Spyware-Sensoren (BYOVD, Fähigkeiten, Persistenz, LSASS), StyX Egress-/WFP-Schutz und der externe Evidenz-Witness (Observe oder Active/Enforce).", Order: 9},
 	}
 }
 
@@ -435,7 +435,10 @@ func notificationControls() []Control {
 func v6Controls() []Control {
 	levels := allLevelIDs
 	return []Control{
-		newBool("v6.spywareEnabled", "Anti-Spyware-Sensoren", "V6 SOVEREIGN", "Aktiviert die V6-Anti-Spyware-Erkennung im Dienst. Sensoren klassifizieren ausschließlich und antworten mit OBSERVE_ONLY.", RiskHigh, true, levels),
+		newBool("v6.spywareEnabled", "Anti-Spyware-Sensoren", "V6 SOVEREIGN", "Aktiviert die V6-Anti-Spyware-Erkennung im Dienst.", RiskHigh, true, levels),
+		newEnum("v6.spywareMode", "Anti-Spyware-Modus", "V6 SOVEREIGN", "Betriebsmodus der V6-Anti-Spyware-Sensoren: observe (nur Erkennung) oder active (aktive Überwachung und Evidenz-Eskalation).", RiskHigh, "observe", []string{"observe", "active"}, levels),
+		newEnum("v6.styxMode", "StyX Egress-Modus", "V6 SOVEREIGN", "StyX Egress-/Beaconing-Schutz: off (aus), observe (Telemetrie) oder enforce (aktive Kernel-WFP-Filter in GeDefense-V6-Sovereign-WFP).", RiskHigh, "observe", []string{"off", "observe", "enforce"}, levels),
+		newStringList("v6.styxWhitelist", "StyX Whitelist (Programme / IPs)", "V6 SOVEREIGN", "Explizite Freigaben für StyX Egress / WFP: vollständige .exe-Pfade, Dateinamen oder IP-/CIDR-Ziele.", RiskMedium, []string{}, 512, 512, levels),
 		newBool("v6.spywareByovd", "BYOVD-Treibererkennung", "V6 SOVEREIGN", "Scannt Kernel-Dienste und Signaturstatus auf bekannte verwundbare Treiber (BYOVD).", RiskHigh, true, levels),
 		newBool("v6.spywareCapability", "Fähigkeitszugriffe", "V6 SOVEREIGN", "Überwacht Kamera-, Mikrofon-, Bildschirm- und Standortzugriffe im Windows-Consent-Store.", RiskHigh, true, levels),
 		newBool("v6.spywarePersistence", "Persistenz-Mechanismen", "V6 SOVEREIGN", "Prüft registry-basierte Persistenz (IFEO, AppInit/AppCert, LSA-Pakete, Druckmonitore).", RiskHigh, true, levels),

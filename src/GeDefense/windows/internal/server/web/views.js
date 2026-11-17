@@ -16,6 +16,7 @@ import {
   getEvidenceSnapshot,
   getHardeningCatalog,
   getHardeningComponents,
+  getOverviewProgramTraffic,
   getProtectedNetworks,
   getThreatIntelStatus,
   rollbackHardening,
@@ -49,6 +50,7 @@ import {
 let lastStatus=null;
 let lastIntegrity=null;
 const trafficSeries=[];
+const programTrafficState={page:1,pageSize:10,expanded:new Set(),tick:0,busy:false};
 
 const modeLabel={monitor:'MONITOR',guarded:'GUARDED',sovereign:'SOVEREIGN'};
 const modeTone=mode=>mode==='sovereign'?'bad':mode==='guarded'?'good':'warn';
@@ -166,6 +168,165 @@ export function renderKinetic(status){
 export async function loadTraffic(){
   const status=await api('/api/v1/mhx/status');
   renderTraffic(status.traffic);
+  programTrafficState.tick=(programTrafficState.tick+1)%2;
+  if(programTrafficState.tick===0&&document.querySelector('[data-page].active')?.dataset.page==='overview'){
+    void loadProgramTraffic({silent:true});
+  }
+}
+
+const GEO_PALETTE=['#35d7ee','#8e7bff','#34d399','#fbbf24','#fb7185','#60a5fa','#a78bfa','#f472b6','#2dd4bf','#94a3b8'];
+
+export async function loadProgramTraffic({page=programTrafficState.page,silent=false}={}){
+  if(programTrafficState.busy)return;
+  programTrafficState.busy=true;
+  try{
+    const data=await getOverviewProgramTraffic(page,programTrafficState.pageSize);
+    if(data?.pagination?.page)programTrafficState.page=data.pagination.page;
+    renderProgramTraffic(data);
+  }catch(error){
+    if(!silent){
+      setText('programTrafficMeta',`Programm-Traffic nicht verfügbar: ${error?.message||error}`);
+    }
+  }finally{
+    programTrafficState.busy=false;
+  }
+}
+
+function renderProgramTraffic(data){
+  const list=clear('programTrafficList');
+  const summaryEl=clear('programTrafficSummary');
+  const paginationEl=clear('programTrafficPagination');
+  if(!list||!summaryEl||!paginationEl)return;
+
+  const totals=data?.totals||{};
+  const pag=data?.pagination||{page:1,pageSize:10,totalPrograms:0,totalPages:1};
+  const countries=Array.isArray(data?.countryBreakdown)?data.countryBreakdown:[];
+  const asns=Array.isArray(data?.asnBreakdown)?data.asnBreakdown:[];
+  const programs=Array.isArray(data?.programs)?data.programs:[];
+
+  setPill('programTrafficBadge',`${formatNumber(totals.programs||0)} PROGRAMME`,totals.programs?'info':'warn');
+  setText('programTrafficMeta',`${formatNumber(totals.programs||0)} Programme · ${formatNumber(totals.connections||0)} Verbindungen · ${formatNumber(totals.countries||0)} Länder · TX ${formatBytes(totals.txBytes||0)} / RX ${formatBytes(totals.rxBytes||0)}`);
+
+  if(countries.length){
+    const bar=node('div','program-geo-bar');
+    bar.setAttribute('role','img');
+    bar.setAttribute('aria-label','Grafische Zielverteilung nach Land');
+    const legend=node('div','program-geo-legend');
+    countries.forEach((c,idx)=>{
+      const color=GEO_PALETTE[idx%GEO_PALETTE.length];
+      const pct=Math.max(1,Number(c.sharePct||0));
+      const seg=node('div','program-geo-seg');
+      seg.style.width=`${pct.toFixed(2)}%`;
+      seg.style.background=color;
+      seg.title=`${c.name||c.code} (${c.code}): ${pct.toFixed(1)}% · ${c.connections} Verbindungen`;
+      bar.append(seg);
+
+      const chip=node('span','program-geo-chip');
+      const dot=node('i','program-geo-dot');
+      dot.style.background=color;
+      chip.append(dot,document.createTextNode(`${c.code} · ${c.name||c.code} (${pct.toFixed(1)}% · ${formatNumber(c.programs)} Prog.)`));
+      legend.append(chip);
+    });
+    summaryEl.append(bar,legend);
+    if(asns.length){
+      const asnLine=node('p','mono muted',`Top ASNs: ${asns.slice(0,5).map(a=>`${a.asn} ${a.asName||''} (${Number(a.sharePct||0).toFixed(1)}%)`).join(' · ')}`);
+      asnLine.style.margin='2px 0 0';
+      asnLine.style.fontSize='.7rem';
+      summaryEl.append(asnLine);
+    }
+  }else{
+    summaryEl.append(node('span','muted','Noch keine aktiven ausgehenden Programm-Verbindungen beobachtet.'));
+  }
+
+  if(!programs.length){
+    list.append(emptyState('Aktuell keine ausgehenden Programm-Verbindungen in diesem Fenster.'));
+  }else{
+    const topBytes=Math.max(1,...programs.map(p=>Number(p.totalBytes||0)),1);
+    for(const prog of programs){
+      const progKey=String(prog.processPath||prog.process||'unknown');
+      const details=document.createElement('details');
+      details.className='program-row';
+      if(programTrafficState.expanded.has(progKey))details.open=true;
+      details.addEventListener('toggle',()=>{
+        if(details.open)programTrafficState.expanded.add(progKey);
+        else programTrafficState.expanded.delete(progKey);
+      });
+
+      const summary=document.createElement('summary');
+      summary.className='program-row-summary';
+
+      const title=node('div','program-row-title');
+      title.append(
+        node('strong','',prog.process||'Unbekanntes Programm'),
+        node('small','',prog.processPath||`PIDs: ${(prog.pids||[]).join(', ')||'—'}`),
+      );
+
+      const barWrap=node('div','program-row-bar-wrap');
+      const track=node('div','program-row-bar-track');
+      const fill=node('div','program-row-bar-fill');
+      const relWidth=prog.totalBytes>0?Math.max(4,Math.round((Number(prog.totalBytes)/topBytes)*100)):Math.min(100,Math.max(6,Number(prog.connections||1)*8));
+      fill.style.width=`${relWidth}%`;
+      track.append(fill);
+      const destCountries=[...new Set((prog.destinations||[]).map(d=>d.countryCode).filter(Boolean))];
+      barWrap.append(track,node('small','mono muted',`${destCountries.slice(0,6).join(', ')||'—'} · ${Number(prog.sharePct||0).toFixed(1)}%`));
+
+      const stats=node('div','program-row-stats');
+      stats.append(
+        node('span','',`${formatNumber(prog.connections||0)} Verb.`),
+        node('span','',`↑ ${formatBytes(prog.txBytes||0)}`),
+        node('span','',`↓ ${formatBytes(prog.rxBytes||0)}`),
+        ...(prog.blocked?[pill('WFP BLOCK','bad')]:[]),
+        ...(prog.whitelisted?[pill('WHITELIST','good')]:[]),
+      );
+
+      summary.append(title,barWrap,stats);
+      details.append(summary);
+
+      const destWrap=node('div','program-row-dests');
+      const dests=Array.isArray(prog.destinations)?prog.destinations:[];
+      if(!dests.length){
+        destWrap.append(node('span','muted','Keine Ziel-IPs zugeordnet.'));
+      }else{
+        for(const d of dests){
+          const row=node('div','program-dest-row');
+          row.append(
+            node('code','',`${d.ip}:${d.port}`),
+            node('span','',`${d.countryCode||'UN'} · ${d.country||'Nicht aufgelöst'}`),
+            node('span','muted',`${[d.asn,d.asName].filter(Boolean).join(' · ')||'—'}`),
+            node('span','mono',`↑ ${formatBytes(d.txBytes||0)} / ↓ ${formatBytes(d.rxBytes||0)}`),
+          );
+          destWrap.append(row);
+        }
+      }
+      details.append(destWrap);
+      list.append(details);
+    }
+  }
+
+  const info=node('span','mono muted',`Seite ${pag.page} von ${pag.totalPages} · ${pag.totalPrograms} Programme`);
+  const btns=node('div','program-pagination-btns');
+  const prevBtn=node('button','button ghost small','« Zurück');
+  prevBtn.type='button';
+  prevBtn.disabled=pag.page<=1;
+  prevBtn.addEventListener('click',()=>{void loadProgramTraffic({page:Math.max(1,pag.page-1)});});
+  btns.append(prevBtn);
+
+  const startPage=Math.max(1,pag.page-2);
+  const endPage=Math.min(pag.totalPages,startPage+4);
+  for(let p=startPage;p<=endPage;p++){
+    const pgBtn=node('button',p===pag.page?'button primary small':'button ghost small',String(p));
+    pgBtn.type='button';
+    pgBtn.disabled=p===pag.page;
+    pgBtn.addEventListener('click',()=>{void loadProgramTraffic({page:p});});
+    btns.append(pgBtn);
+  }
+
+  const nextBtn=node('button','button ghost small','Weiter »');
+  nextBtn.type='button';
+  nextBtn.disabled=pag.page>=pag.totalPages;
+  nextBtn.addEventListener('click',()=>{void loadProgramTraffic({page:Math.min(pag.totalPages,pag.page+1)});});
+  btns.append(nextBtn);
+  paginationEl.append(info,btns);
 }
 
 export async function loadKinetic(options={}){
@@ -197,6 +358,7 @@ export async function loadOverview(){
   lastStatus=status.value;
   renderStatus(status.value);
   renderStories('overviewStories',stories.status==='fulfilled'?stories.value:[]);
+  void loadProgramTraffic({page:programTrafficState.page,silent:true});
 }
 
 export function renderStatus(status){

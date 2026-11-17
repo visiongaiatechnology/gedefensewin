@@ -92,6 +92,10 @@ type Engine struct {
 	styx                       *StyxBeaconEngine
 	styxCollector              *StyxCollector
 	styxIncidents              []StyxIncident
+	styxEnforceMu              sync.Mutex
+	styxWFP                    styxEnforcer
+	styxDesiredMode            string
+	styxWhitelist              []string
 }
 
 func NewEngine(root, protectionScript, firewallScript, allowScript, denyScript, appControlScript, operationRoot string, ledger *evidence.Ledger) (*Engine, error) {
@@ -132,7 +136,11 @@ func (e *Engine) Run(stop <-chan struct{}) {
 		}
 	}
 	var workers sync.WaitGroup
-	defer func() { cancel(); workers.Wait() }()
+	defer func() {
+		cancel()
+		workers.Wait()
+		e.closeStyxWFP()
+	}()
 	go func() { <-stop; cancel() }()
 	launch := func(run func()) { workers.Add(1); go func() { defer workers.Done(); run() }() }
 	launch(func() { e.intelligenceLoop(stop) })

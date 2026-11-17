@@ -106,6 +106,8 @@ function Get-VgtPathAttributesForDiagnostics {
 $script:VgtSystemSid = 'S-1-5-18'
 $script:VgtAdministratorsSid = 'S-1-5-32-544'
 $script:VgtUsersSid = 'S-1-5-32-545'
+$script:VgtSystemSidObj = [Security.Principal.SecurityIdentifier]::new($script:VgtSystemSid)
+$script:VgtAdminsSidObj = [Security.Principal.SecurityIdentifier]::new($script:VgtAdministratorsSid)
 
 function Resolve-VgtIdentitySid {
     param([Parameter(Mandatory)][object]$Identity)
@@ -152,9 +154,35 @@ function Invoke-VgtIcaclsMutation {
     )
     $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
     if (-not (Test-Path -LiteralPath $icacls -PathType Leaf)) { throw [IO.FileNotFoundException]::new('Windows icacls.exe is unavailable.') }
-    $nativeOutput = (& $icacls $Path @Arguments 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) {
+    $prevEA = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $nativeOutput = (& $icacls $Path @Arguments 2>&1 | ForEach-Object { $_.ToString() } | Out-String).Trim()
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEA
+    }
+    if ($exitCode -ne 0) {
         throw [Security.SecurityException]::new(('ACL {0} failed for {1}: {2}' -f $Operation,$Path,$nativeOutput))
+    }
+}
+
+function Invoke-VgtTakeOwnershipForAdministrators {
+    param([Parameter(Mandatory)][string]$Path)
+    $takeown = Join-Path $env:SystemRoot 'System32\takeown.exe'
+    if (-not (Test-Path -LiteralPath $takeown -PathType Leaf)) {
+        throw [IO.FileNotFoundException]::new('Windows takeown.exe is unavailable.')
+    }
+    $prevEA = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $nativeOutput = (& $takeown /F $Path /A 2>&1 | ForEach-Object { $_.ToString() } | Out-String).Trim()
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEA
+    }
+    if ($exitCode -ne 0) {
+        throw [Security.SecurityException]::new(('takeown failed for {0}: {1}' -f $Path,$nativeOutput))
     }
 }
 
@@ -181,18 +209,34 @@ function Set-VgtRestrictedAcl {
         throw [Security.SecurityException]::new(('ACL file target is a reparse point: {0}' -f $full))
     }
     $inheritFlags = if ($isDirectory) { '(OI)(CI)' } else { '' }
-    Invoke-VgtIcaclsMutation -Path $full -Arguments @('/reset') -Operation 'reset'
-    Invoke-VgtIcaclsMutation -Path $full -Arguments @('/inheritance:r') -Operation 'inheritance-remove'
-    Invoke-VgtIcaclsMutation -Path $full -Arguments @('/grant:r',("*S-1-5-18:{0}F" -f $inheritFlags),("*S-1-5-32-544:{0}F" -f $inheritFlags)) -Operation 'grant-service'
+    try {
+        Invoke-VgtIcaclsMutation -Path $full -Arguments @('/reset') -Operation 'reset'
+    } catch {
+        if ($SkipOwnerHardening) { throw }
+        Invoke-VgtTakeOwnershipForAdministrators -Path $full
+        Invoke-VgtIcaclsMutation -Path $full -Arguments @('/reset') -Operation 'reset'
+    }
+    $grantArgs = @('/inheritance:r','/grant:r',("*S-1-5-18:{0}F" -f $inheritFlags),("*S-1-5-32-544:{0}F" -f $inheritFlags))
     if ($AllowsUsersRead) {
         $userRights = if ($isDirectory) { '(OI)(CI)RX' } else { 'R' }
-        Invoke-VgtIcaclsMutation -Path $full -Arguments @('/grant:r',("*S-1-5-32-545:{0}" -f $userRights)) -Operation 'grant-users-read'
+        $grantArgs += ("*S-1-5-32-545:{0}" -f $userRights)
+    }
+    try {
+        Invoke-VgtIcaclsMutation -Path $full -Arguments $grantArgs -Operation 'grant-service'
+    } catch {
+        if ($SkipOwnerHardening) { throw }
+        Invoke-VgtTakeOwnershipForAdministrators -Path $full
+        Invoke-VgtIcaclsMutation -Path $full -Arguments $grantArgs -Operation 'grant-service'
     }
     if (-not $SkipOwnerHardening) {
         $currentOwner = (Get-Acl -LiteralPath $full).Owner
         $ownerSid = Resolve-VgtIdentitySid -Identity $currentOwner
         if ($ownerSid -ne $script:VgtSystemSid -and $ownerSid -ne $script:VgtAdministratorsSid) {
-            Invoke-VgtIcaclsMutation -Path $full -Arguments @('/setowner','*S-1-5-32-544') -Operation 'setowner'
+            try {
+                Invoke-VgtIcaclsMutation -Path $full -Arguments @('/setowner','*S-1-5-32-544') -Operation 'setowner'
+            } catch {
+                Invoke-VgtTakeOwnershipForAdministrators -Path $full
+            }
             $hardenedOwner = Resolve-VgtIdentitySid -Identity (Get-Acl -LiteralPath $full).Owner
             if ($hardenedOwner -ne $script:VgtAdministratorsSid) {
                 throw [Security.SecurityException]::new(('ACL owner hardening failed for {0}: owner={1}' -f $full,$hardenedOwner))
@@ -206,6 +250,89 @@ function Set-VgtRestrictedAcl {
         throw [Security.SecurityException]::new(('ACL verification failed for {0}: {1}' -f $full,$verification.Detail))
     }
     return $verification
+}
+
+function Test-VgtServiceOnlySecurityInProcess {
+    param(
+        [Parameter(Mandatory)][object]$Acl,
+        [Parameter(Mandatory)][bool]$IsDirectory
+    )
+    if (-not $Acl.AreAccessRulesProtected) { return $false }
+    $ownerSid = try { $Acl.GetOwner([Security.Principal.SecurityIdentifier]).Value } catch { '' }
+    if ($ownerSid -ne $script:VgtSystemSid -and $ownerSid -ne $script:VgtAdministratorsSid) { return $false }
+    $hasSystemFull = $false
+    $hasAdminsFull = $false
+    $requiredInherit = if ($IsDirectory) {
+        [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    } else {
+        [Security.AccessControl.InheritanceFlags]::None
+    }
+    foreach ($rule in @($Acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))) {
+        if ($rule.IsInherited) { return $false }
+        if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+        $sid = $rule.IdentityReference.Value
+        if ($sid -ne $script:VgtSystemSid -and $sid -ne $script:VgtAdministratorsSid) { return $false }
+        $hasFull = (($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq [Security.AccessControl.FileSystemRights]::FullControl)
+        $hasInherit = (-not $IsDirectory) -or (($rule.InheritanceFlags -band $requiredInherit) -eq $requiredInherit)
+        if ($hasFull -and $hasInherit) {
+            if ($sid -eq $script:VgtSystemSid) { $hasSystemFull = $true }
+            elseif ($sid -eq $script:VgtAdministratorsSid) { $hasAdminsFull = $true }
+        }
+    }
+    return ($hasSystemFull -and $hasAdminsFull)
+}
+
+# Repair-VgtRestrictedEntryAcl verifies and, only where needed, enforces the
+# SYSTEM/Administrators-only protected DACL in-process without spawning icacls
+# per file, falling back to Set-VgtRestrictedAcl (with takeown) when the
+# caller lacks WRITE_DAC or owner hardening is required.
+function Repair-VgtRestrictedEntryAcl {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$IsDirectory
+    )
+    $full = Get-VgtNormalizedPath -Path $Path
+    if (Test-VgtReparsePoint -Path $full) {
+        throw [Security.SecurityException]::new(('ACL target is a reparse point: {0}' -f $full))
+    }
+    $dirFlag = [bool]$IsDirectory
+    try {
+        $existingAcl = if ($dirFlag) {
+            [IO.DirectoryInfo]::new($full).GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner)
+        } else {
+            [IO.FileInfo]::new($full).GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner)
+        }
+        if (Test-VgtServiceOnlySecurityInProcess -Acl $existingAcl -IsDirectory $dirFlag) {
+            return [pscustomobject][ordered]@{ Passed = $true; Changed = $false; Detail = 'already restricted' }
+        }
+        $ownerSid = try { $existingAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value } catch { '' }
+        if ($ownerSid -eq $script:VgtSystemSid -or $ownerSid -eq $script:VgtAdministratorsSid) {
+            $newAcl = if ($dirFlag) { [Security.AccessControl.DirectorySecurity]::new() } else { [Security.AccessControl.FileSecurity]::new() }
+            $newAcl.SetAccessRuleProtection($true, $false)
+            $inherit = if ($dirFlag) {
+                [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+            } else {
+                [Security.AccessControl.InheritanceFlags]::None
+            }
+            $prop = [Security.AccessControl.PropagationFlags]::None
+            $newAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($script:VgtSystemSidObj, [Security.AccessControl.FileSystemRights]::FullControl, $inherit, $prop, [Security.AccessControl.AccessControlType]::Allow))
+            $newAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($script:VgtAdminsSidObj, [Security.AccessControl.FileSystemRights]::FullControl, $inherit, $prop, [Security.AccessControl.AccessControlType]::Allow))
+            if ($dirFlag) {
+                [IO.DirectoryInfo]::new($full).SetAccessControl($newAcl)
+                $verifyAcl = [IO.DirectoryInfo]::new($full).GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner)
+            } else {
+                [IO.FileInfo]::new($full).SetAccessControl($newAcl)
+                $verifyAcl = [IO.FileInfo]::new($full).GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner)
+            }
+            if (Test-VgtServiceOnlySecurityInProcess -Acl $verifyAcl -IsDirectory $dirFlag) {
+                return [pscustomobject][ordered]@{ Passed = $true; Changed = $true; Detail = 'restricted in-process' }
+            }
+        }
+    } catch {
+        # Fall back to Set-VgtRestrictedAcl (takeown + icacls + read-back).
+    }
+    $fallback = Set-VgtRestrictedAcl -Path $full -ErrorAction Stop
+    return [pscustomobject][ordered]@{ Passed = [bool]$fallback.Passed; Changed = $true; Detail = $fallback.Detail }
 }
 
 # Remove-VgtSafeTree removes a directory tree without ever recursing through a
@@ -226,4 +353,4 @@ function Remove-VgtSafeTree {
     Remove-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
 }
 
-Export-ModuleMember -Function Test-VgtReparsePoint,Assert-VgtPathWithinRoot,Assert-VgtNoReparseTraversal,New-VgtSafeDirectory,Assert-VgtSafeFileTarget,Get-VgtPathAttributesForDiagnostics,Test-VgtAclObject,Set-VgtRestrictedAcl,Remove-VgtSafeTree
+Export-ModuleMember -Function Test-VgtReparsePoint,Assert-VgtPathWithinRoot,Assert-VgtNoReparseTraversal,New-VgtSafeDirectory,Assert-VgtSafeFileTarget,Get-VgtPathAttributesForDiagnostics,Test-VgtAclObject,Set-VgtRestrictedAcl,Repair-VgtRestrictedEntryAcl,Remove-VgtSafeTree

@@ -80,6 +80,7 @@ const (
 // of keeping a second UI-only copy.
 type v6Config struct {
 	SpywareEnabled bool
+	SpywareMode    string
 	BYOVD          bool
 	Capability     bool
 	Persistence    bool
@@ -87,12 +88,53 @@ type v6Config struct {
 	WitnessEnabled bool
 }
 
+const (
+	v6SpywareModeObserve = "observe"
+	v6SpywareModeActive  = "active"
+)
+
 // defaultV6Config mirrors the catalog defaults. It is used when a section value
 // is absent from a persisted snapshot, exactly like the settings service does.
 func defaultV6Config() v6Config {
 	return v6Config{
-		SpywareEnabled: true, BYOVD: true, Capability: true,
-		Persistence: true, LSASS: true, WitnessEnabled: false,
+		SpywareEnabled: true, SpywareMode: v6SpywareModeObserve,
+		BYOVD: true, Capability: true, Persistence: true, LSASS: true,
+		WitnessEnabled: false,
+	}
+}
+
+func normalizeSpywareMode(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", v6SpywareModeObserve:
+		return v6SpywareModeObserve, nil
+	case v6SpywareModeActive:
+		return v6SpywareModeActive, nil
+	default:
+		return "", errors.New("v6.spywareMode must be observe or active")
+	}
+}
+
+func styxModeFromValues(section map[string]any) string {
+	if raw, ok := section["styxMode"].(string); ok && strings.TrimSpace(raw) != "" {
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
+	return "observe"
+}
+
+func styxWhitelistFromValues(section map[string]any) []string {
+	switch typed := section["styxWhitelist"].(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		return out
+	default:
+		return []string{}
 	}
 }
 
@@ -107,6 +149,11 @@ func v6ConfigFromValues(section map[string]any) v6Config {
 		return fallback
 	}
 	config.SpywareEnabled = read("spywareEnabled", config.SpywareEnabled)
+	if modeRaw, ok := section["spywareMode"].(string); ok {
+		if mode, err := normalizeSpywareMode(modeRaw); err == nil {
+			config.SpywareMode = mode
+		}
+	}
 	config.BYOVD = read("spywareByovd", config.BYOVD)
 	config.Capability = read("spywareCapability", config.Capability)
 	config.Persistence = read("spywarePersistence", config.Persistence)
@@ -157,7 +204,57 @@ func newV6Runtime(root, dataRoot, version string, ledger *evidence.Ledger) *v6Ru
 		lockState:      v6LockUnavailable,
 	}
 	runtime.spyware = newV6SpywareEngine(ledger)
+	runtime.syncSpywareHook(runtime.config)
 	return runtime
+}
+
+// SetSpywareMode switches anti-spyware mode between "observe" and "active".
+func (r *v6Runtime) SetSpywareMode(ctx context.Context, mode string) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("V6 settings apply requires an active request")
+	}
+	normalized, err := normalizeSpywareMode(mode)
+	if err != nil {
+		return err
+	}
+	r.applyMu.Lock()
+	defer r.applyMu.Unlock()
+	r.mu.Lock()
+	cfg := r.config
+	cfg.SpywareMode = normalized
+	r.config = cfg
+	r.mu.Unlock()
+	r.syncSpywareHook(cfg)
+	if r.ledger != nil {
+		_ = r.ledger.Append("v6.spyware.mode", normalized, "operator-updated")
+	}
+	return nil
+}
+
+func (r *v6Runtime) syncSpywareHook(cfg v6Config) {
+	if r == nil || r.spyware == nil {
+		return
+	}
+	mode := cfg.SpywareMode
+	if mode == "" {
+		mode = v6SpywareModeObserve
+	}
+	if !cfg.SpywareEnabled || mode != v6SpywareModeActive {
+		r.spyware.SetFindingResponseHook(nil)
+		return
+	}
+	r.spyware.SetFindingResponseHook(func(f spyware.Finding) string {
+		if f.Severity != spyware.SeverityHigh && f.Severity != spyware.SeverityCritical {
+			return ""
+		}
+		if r.ledger != nil {
+			_ = r.ledger.Append("v6.active_guard", string(f.Source)+":"+f.Asset, f.Title)
+		}
+		if f.Response == "OBSERVE_ONLY" || f.Response == "" {
+			return "ACTIVE_GUARD"
+		}
+		return f.Response + "|ACTIVE_GUARD"
+	})
 }
 
 // Restore applies the persisted configuration at composition time. A witness
@@ -178,6 +275,12 @@ func (r *v6Runtime) Configure(ctx context.Context, config v6Config) error {
 }
 
 func (r *v6Runtime) configure(ctx context.Context, config v6Config, enforce bool) error {
+	mode, err := normalizeSpywareMode(config.SpywareMode)
+	if err != nil {
+		return err
+	}
+	config.SpywareMode = mode
+
 	r.applyMu.Lock()
 	defer r.applyMu.Unlock()
 
@@ -185,6 +288,7 @@ func (r *v6Runtime) configure(ctx context.Context, config v6Config, enforce bool
 	previous := r.config
 	r.config = config
 	r.mu.Unlock()
+	r.syncSpywareHook(config)
 
 	if !config.WitnessEnabled {
 		r.stopWitness()
@@ -337,6 +441,17 @@ func (r *v6Runtime) SpywareStatus() spyware.Status {
 		status = engine.Status()
 	}
 	status.Enabled = config.SpywareEnabled
+	if !config.SpywareEnabled {
+		status.Mode = "disabled"
+		status.ActiveEnforced = false
+	} else {
+		mode := config.SpywareMode
+		if mode == "" {
+			mode = v6SpywareModeObserve
+		}
+		status.Mode = mode
+		status.ActiveEnforced = mode == v6SpywareModeActive
+	}
 	status.BYOVDWatched = config.SpywareEnabled && config.BYOVD
 	status.CapabilityWatch = config.SpywareEnabled && config.Capability
 	status.PersistenceWatch = config.SpywareEnabled && config.Persistence

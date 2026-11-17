@@ -94,7 +94,10 @@ function renderControls(){
 
   push({name:'Microsoft Defender',detail:'Dienst + Echtzeitschutz',value:protection.Defender?'Dienst aktiv':'Dienst nicht bestätigt',valueDetail:protection.DefenderService?'DefenderService erreichbar':'DefenderService nicht bestätigt',tone:protection.Defender&&protection.DefenderService?'good':'bad',action:'hardening'});
   push({name:'Realtime- und Verhaltensschutz',detail:'Defender-Kontrollen',value:`Realtime ${protection.RealTimeProtection?'an':'aus'} · Verhalten ${protection.BehaviorProtection?'an':'aus'}`,tone:protection.RealTimeProtection&&protection.BehaviorProtection?'good':'bad',action:'hardening'});
-  push({name:'Cloud- und Netzwerkschutz',detail:'Defender-Schutzebene',value:`Cloud ${protection.CloudProtection?'an':'aus'}${protection.CloudBlockLevel?` · Stufe ${protection.CloudBlockLevel}`:''} · Netzwerk ${protection.NetworkProtection?'an':'aus'}`,tone:protection.CloudProtection&&protection.NetworkProtection?'good':'bad',action:'hardening'});
+  const cloudParts = [protection.CloudProtection ? 'Cloud an' : 'Cloud aus'];
+  if (protection.CloudBlockLevel) cloudParts.push(`Stufe ${protection.CloudBlockLevel}`);
+  cloudParts.push(protection.NetworkProtection ? 'Netzwerk an' : 'Netzwerk aus');
+  push({name:'Cloud- und Netzwerkschutz',detail:'Defender-Schutzebene',value:cloudParts.join(' · '),tone:protection.CloudProtection&&protection.NetworkProtection?'good':'bad',action:'hardening'});
   const asrRules=Number(protection.AsrRules ?? protection.ASRRules ?? 0);
   const asrBlockRules=Number(protection.AsrBlockRules ?? protection.ASRBlockRules ?? 0);
   push({name:'ASR-Regeln',detail:'Blockmodus',value:`${formatNumber(asrRules)} Regeln · ${formatNumber(asrBlockRules)} blockierend`,tone:asrBlockRules>=11?'good':asrRules>0?'warn':'bad',action:'hardening'});
@@ -112,7 +115,17 @@ function renderControls(){
 
   host.replaceChildren(...rows);
   const source=byId('protectionControlSource');
-  if(source)source.textContent=`Werte aus /api/v1/status${state.components.length?', Hardening-Messung':''}${state.defender?', Defender-Telemetrie':''}. Stand: ${formatTime(state.status?.protection?.TimestampUtc||new Date().toISOString())}. Fehlende Felder werden als nicht verfügbar angezeigt.`;
+  if(source){
+    source.replaceChildren(
+      node('span','','Werte aus /api/v1/status'),
+      ...(state.components.length?[node('span','',', Hardening-Messung')]:[]),
+      ...(state.defender?[node('span','',', Defender-Telemetrie')]:[]),
+      document.createTextNode('. '),
+      node('span','',`Stand: ${formatTime(state.status?.protection?.TimestampUtc||new Date().toISOString())}.`),
+      document.createTextNode(' '),
+      node('span','','Fehlende Felder werden als nicht verfügbar angezeigt.'),
+    );
+  }
 }
 
 function defenderValue(container,...keys){
@@ -206,7 +219,7 @@ function readinessSummary(target){
   if(!result)return {text:'Wird geprüft',tone:'warn'};
   if(result.ready)return {text:'Bereit',tone:'good'};
   const count=Array.isArray(result.blockers)?result.blockers.length:0;
-  return {text:count?`${count} Voraussetzung${count===1?'':'en'} ${count===1?'fehlt':'fehlen'}`:'Nicht bereit',tone:'bad'};
+  return {text:count?(count===1?'1 Voraussetzung fehlt':`${count} Voraussetzungen fehlen`):'Nicht bereit',tone:'bad'};
 }
 
 function renderModes(){
@@ -256,7 +269,16 @@ function renderActiveState(){
   const current=String(mhx.protectionMode||'monitor').toLowerCase();
   const info=MODE_INFO[current]||MODE_INFO.monitor;
   setText('currentMode',info.label);
-  setText('currentModeText',`${info.title}: ${info.summary} ${info.detail}`);
+  const currentModeText = byId('currentModeText');
+  if (currentModeText) {
+    currentModeText.replaceChildren(
+      node('span', '', info.title),
+      document.createTextNode(': '),
+      node('span', '', info.summary),
+      document.createTextNode(' '),
+      node('span', '', info.detail),
+    );
+  }
   setPill('protectionBadge',info.label,current==='sovereign'?'bad':current==='guarded'?'good':'warn');
   const health=String(mhx.protectionHealth||'STARTING');
   setPill('protectionHealth',health,health==='VERIFIED'?'good':'bad');

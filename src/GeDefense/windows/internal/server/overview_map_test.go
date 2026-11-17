@@ -280,3 +280,104 @@ func TestOverviewMapAuthorizationBoundsAndAssetDelivery(t *testing.T) {
 		}
 	}
 }
+
+type mapProgramTestMHX struct {
+	*mapTestMHX
+	programs []mhx.StyxProgramTrafficSummary
+}
+
+func (m *mapProgramTestMHX) StyxWhitelist() []string { return nil }
+func (m *mapProgramTestMHX) SetStyxWhitelist(_ context.Context, e []string) ([]string, error) {
+	return e, nil
+}
+func (m *mapProgramTestMHX) StyxBlockedTargets() []string { return nil }
+func (m *mapProgramTestMHX) StyxProgramTraffic() []mhx.StyxProgramTrafficSummary {
+	return m.programs
+}
+
+func TestOverviewProgramTrafficPaginates10AndProgramMapMode(t *testing.T) {
+	root := t.TempDir()
+	csvPath := filepath.Join(root, "geoip.csv")
+	contents := "network,country_code,country_name,latitude,longitude,asn,as_name\n8.8.8.0/24,US,United States,37,-97,AS15169,Google LLC\n1.1.1.0/24,AU,Australia,-33,151,AS13335,Cloudflare\n"
+	if err := os.WriteFile(csvPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(contents))
+	if err := os.WriteFile(csvPath+".sha256", []byte(fmt.Sprintf("%x  geoip.csv\n", digest)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GEDEFENSE_GEOIP_CSV", csvPath)
+	t.Setenv("GEDEFENSE_MAP_HOST_IP", "1.1.1.1")
+	ledger, err := evidence.Open(filepath.Join(root, "ledger.jsonl"), filepath.Join(root, "ledger.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ledger.Close() })
+
+	now := time.Now().UTC()
+	var progs []mhx.StyxProgramTrafficSummary
+	for i := 1; i <= 13; i++ {
+		progs = append(progs, mhx.StyxProgramTrafficSummary{
+			Process:     fmt.Sprintf("prog%02d.exe", i),
+			ProcessPath: fmt.Sprintf(`C:\Apps\prog%02d.exe`, i),
+			PIDs:        []int{1000 + i},
+			Connections: 1,
+			TxBytes:     uint64(2000 - i*100),
+			RxBytes:     uint64(4000 - i*100),
+			TotalBytes:  uint64(6000 - i*200),
+			LastSeen:    now,
+			Destinations: []mhx.StyxProgramDestination{{
+				IP: "8.8.8.8", Port: 443, TxBytes: uint64(2000 - i*100), RxBytes: uint64(4000 - i*100), Connections: 1, LastSeen: now,
+			}},
+		})
+	}
+	engine := &mapProgramTestMHX{
+		mapTestMHX: &mapTestMHX{fixedMHX: &fixedMHX{mode: "guarded"}},
+		programs:   progs,
+	}
+	handler := New("6.0.0", testMasterToken, fixedEngine{}, fixedAudit{}, fixedXDR{}, engine, &fixedIntegrity{}, ledger)
+
+	p1 := mapRequest(t, handler, "/api/v1/overview/program-traffic?page=1&pageSize=10", true)
+	if p1.Code != http.StatusOK {
+		t.Fatalf("page1 status=%d body=%s", p1.Code, p1.Body.String())
+	}
+	var resp1 struct {
+		Pagination       map[string]int                   `json:"pagination"`
+		CountryBreakdown []programTrafficCountryBreakdown `json:"countryBreakdown"`
+		Programs         []programTrafficItemView         `json:"programs"`
+	}
+	if err := json.Unmarshal(p1.Body.Bytes(), &resp1); err != nil {
+		t.Fatal(err)
+	}
+	if resp1.Pagination["totalPages"] != 2 || len(resp1.Programs) != 10 || len(resp1.CountryBreakdown) == 0 || resp1.CountryBreakdown[0].Code != "US" {
+		t.Fatalf("unexpected page1 payload: %+v", resp1)
+	}
+
+	p2 := mapRequest(t, handler, "/api/v1/overview/program-traffic?page=2&pageSize=10", true)
+	if p2.Code != http.StatusOK {
+		t.Fatalf("page2 status=%d", p2.Code)
+	}
+	var resp2 struct {
+		Programs []programTrafficItemView `json:"programs"`
+	}
+	if err := json.Unmarshal(p2.Body.Bytes(), &resp2); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp2.Programs) != 3 {
+		t.Fatalf("expected 3 programs on page 2, got %d", len(resp2.Programs))
+	}
+
+	progMap := mapRequest(t, handler, "/api/v1/overview/threat-map?mode=programs", true)
+	if progMap.Code != http.StatusOK {
+		t.Fatalf("program mode map status=%d", progMap.Code)
+	}
+	var mapRes struct {
+		Sources []mapSource `json:"sources"`
+	}
+	if err := json.Unmarshal(progMap.Body.Bytes(), &mapRes); err != nil {
+		t.Fatal(err)
+	}
+	if len(mapRes.Sources) != 1 || mapRes.Sources[0].Direction != "outbound" || mapRes.Sources[0].CountryCode != "US" {
+		t.Fatalf("unexpected program map sources: %+v", mapRes.Sources)
+	}
+}

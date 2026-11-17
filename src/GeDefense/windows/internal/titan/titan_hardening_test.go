@@ -358,3 +358,73 @@ func TestVaultRestoreTargetParentReparseIsRejected(t *testing.T) {
 		t.Fatal("restore accepted a target whose parent chain contains a junction")
 	}
 }
+
+func TestCorruptActiveJournalWithVerifiedArchivesPreservesArchiveChainAndClosesCleanly(t *testing.T) {
+	withJournalTestTuning(t, 2048, 4<<20)
+	root := t.TempDir()
+	engine, err := New(root, "6.0.0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 24; index++ {
+		if _, err := engine.journal.Append(Observation{
+			Type:     EventSensorHealth,
+			Severity: SeverityLow,
+			Object:   Object{Kind: ObjectSensor, Path: "titan://rotation", Name: fmt.Sprintf("event-%02d", index)},
+			Source:   "titan-self",
+			Health:   "HEALTHY",
+		}); err != nil {
+			t.Fatalf("append %d: %v", index, err)
+		}
+	}
+	archivedCount := engine.journal.archivedEvents
+	if archivedCount == 0 {
+		t.Fatal("expected at least one rotated archive before corruption test")
+	}
+	lastArchive := engine.journal.archives[len(engine.journal.archives)-1]
+	if err := engine.Close(); err != nil {
+		t.Fatalf("close initial engine: %v", err)
+	}
+
+	// Simulate an ungraceful process kill mid-write on the active events.jsonl
+	// (or a prior sequence-reset bug) while verified archives exist.
+	activePath := filepath.Join(root, "evidence", journalName)
+	if err := os.WriteFile(activePath, []byte(`{"sequence":1,"previousHash":""`), 0o600); err != nil {
+		t.Fatalf("corrupt active journal: %v", err)
+	}
+
+	reopened, err := New(root, "6.0.0", nil)
+	if err != nil {
+		t.Fatalf("reopen engine with corrupt active journal: %v", err)
+	}
+	if reopened.journal.sequence != lastArchive.LastSequence || reopened.journal.lastHash != lastArchive.LastHash {
+		t.Fatalf("journal did not resume from last verified archive: seq=%d want=%d", reopened.journal.sequence, lastArchive.LastSequence)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("close reopened engine failed (checkpoint bug): %v", err)
+	}
+
+	// Subsequent open & append must verify cleanly without looping corruption.
+	clean, err := New(root, "6.0.0", nil)
+	if err != nil {
+		t.Fatalf("open clean engine after quarantine: %v", err)
+	}
+	defer func() { _ = clean.Close() }()
+	appended, err := clean.journal.Append(Observation{
+		Type:     EventSensorHealth,
+		Severity: SeverityLow,
+		Object:   Object{Kind: ObjectSensor, Path: "titan://rotation", Name: "post-recovery"},
+		Source:   "titan-self",
+		Health:   "HEALTHY",
+	})
+	if err != nil {
+		t.Fatalf("append after recovery: %v", err)
+	}
+	if appended.Sequence != lastArchive.LastSequence+1 || appended.PreviousHash != lastArchive.LastHash {
+		t.Fatalf("unexpected continuation sequence/hash: seq=%d prev=%s wantSeq=%d wantPrev=%s",
+			appended.Sequence, appended.PreviousHash, lastArchive.LastSequence+1, lastArchive.LastHash)
+	}
+	if verification := clean.Verify(); !verification.Verified {
+		t.Fatalf("verify after recovery failed: %+v", verification)
+	}
+}

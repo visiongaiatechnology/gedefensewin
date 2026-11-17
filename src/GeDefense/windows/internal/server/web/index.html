@@ -62,7 +62,7 @@
         <div class="brand-copy">
           <strong>GeDefense</strong>
           <small>TITAN // WINDOWS DEFENSE</small>
-          <span class="brand-beta">TITAN 5.3</span>
+          <span class="brand-beta">TITAN 6.0</span>
         </div>
       </div>
 
@@ -217,6 +217,10 @@
               </div>
             </div>
             <div class="overview-threat-badges">
+              <div class="overview-map-mode-switch" role="group" aria-label="Kartenmodus">
+                <button type="button" id="overviewModeThreatsBtn" class="overview-mode-btn" data-map-mode="threats" aria-pressed="true" data-i18n="overview.map.modeThreats">Angriffsvektoren</button>
+                <button type="button" id="overviewModeProgramsBtn" class="overview-mode-btn" data-map-mode="programs" aria-pressed="false" data-i18n="overview.map.modePrograms">Programm-Traffic</button>
+              </div>
               <span class="overview-threat-live" id="overviewMapStatus" role="status" aria-live="polite">TELEMETRIE WIRD GELADEN</span>
               <span class="overview-threat-note" id="overviewMapGeo" title="GeoIP-Matrix"></span>
               <span class="overview-threat-zoom" role="toolbar" aria-label="Kartensteuerung">
@@ -315,6 +319,19 @@
             <svg id="trafficGraph" class="traffic-chart" viewBox="0 0 640 170" preserveAspectRatio="none" role="img" aria-label="Echtzeit-Traffic, Download und Upload der letzten 120 Sekunden"><title>Network Traffic über Zeit</title><path class="traffic-gridline" d="M0 45H640 M0 85H640 M0 125H640"></path><path id="trafficRxPath" class="traffic-rx" d=""></path><path id="trafficTxPath" class="traffic-tx" d=""></path></svg>
           </div>
           <p class="mono muted">● Signal: Empfang · ● Blau: Versand · 2-Sekunden-Samples · nur lokal erfasste Interface-Bytes; keine vollständige Paketinspektion.</p>
+          <div class="program-traffic-section" id="programTrafficSection">
+            <div class="section-head program-traffic-head">
+              <div>
+                <p class="eyebrow">PROGRAMM-TELEMETRIE · LOKALE GEOIP/ASN-CSV</p>
+                <h4>Ausgehender Traffic je Programm (10 pro Seite)</h4>
+                <p class="muted" id="programTrafficMeta">Lade aktive Programm-Verbindungen und Zielverteilung …</p>
+              </div>
+              <span id="programTrafficBadge" class="status-pill info">0 PROGRAMME</span>
+            </div>
+            <div id="programTrafficSummary" class="program-geo-summary"></div>
+            <div id="programTrafficList" class="program-traffic-list"></div>
+            <div id="programTrafficPagination" class="program-pagination" aria-label="Programm-Traffic Seiten"></div>
+          </div>
         </article>
 
         <div class="two-col">
@@ -1320,12 +1337,38 @@
         <div class="page-head">
           <div class="page-head-copy">
             <p class="eyebrow">V6 SOVEREIGN</p>
-            <h2>Anti-Spyware, Externer Witness &amp; StyX Egress-Telemetrie.</h2>
-            <p>Tiefe Telemetrie-Erkennung auf Kernel-, Capability-, Persistenz-, LSASS-, Evidenz-Witness- und Beacon-Ebene. Alle Sensoren melden ausschließlich überprüfbare Evidenz.</p>
+            <h2>Anti-Spyware, Externer Witness &amp; StyX Egress-Schutz.</h2>
+            <p>Tiefe Telemetrie-Erkennung und umschaltbarer Aktiv-Schutz auf Kernel-, Capability-, Persistenz-, LSASS-, Evidenz-Witness- und WFP-Egress-Ebene.</p>
           </div>
-          <button type="button" id="v6Refresh" class="button ghost">V6 Status aktualisieren</button>
+          <div class="titan-hero-actions">
+            <button type="button" id="v6ActivateAllBtn" class="button primary">V6 Schutz aktivieren</button>
+            <button type="button" id="v6Refresh" class="button ghost">V6 Status aktualisieren</button>
+          </div>
         </div>
         <div class="metric-grid" id="v6Metrics"></div>
+        <article class="glass section-card">
+          <div class="section-head">
+            <div><p class="eyebrow">MODUS &amp; DURCHSETZUNG</p><h3>Observe / Aktiv-Umschaltung (persistiert in Einstellungen)</h3></div>
+            <span id="v6ModeSummaryPill" class="status-pill info">OBSERVE</span>
+          </div>
+          <div class="titan-hero-actions">
+            <div>
+              <p class="eyebrow">ANTI-SPYWARE SENSOREN</p>
+              <div class="titan-tabs" role="group" aria-label="Anti-Spyware Modus">
+                <button type="button" id="v6SpyObserveBtn" data-v6-spy="observe">Observe</button>
+                <button type="button" id="v6SpyActiveBtn" data-v6-spy="active">Aktiv (Schutz)</button>
+              </div>
+            </div>
+            <div>
+              <p class="eyebrow">STYX EGRESS / WFP</p>
+              <div class="titan-tabs" role="group" aria-label="StyX Egress Modus">
+                <button type="button" id="v6StyxOffBtn" data-v6-styx="off">Aus</button>
+                <button type="button" id="v6StyxObserveBtn" data-v6-styx="observe">Observe</button>
+                <button type="button" id="v6StyxEnforceBtn" data-v6-styx="enforce">Aktiv (WFP Enforce)</button>
+              </div>
+            </div>
+          </div>
+        </article>
         <article class="glass section-card">
           <div class="section-head">
             <div><p class="eyebrow">SENSOR-ABDECKUNG</p><h3>Aktive Module &amp; Diagnose</h3></div>
@@ -1343,8 +1386,28 @@
           <div class="table-wrap"><table><thead><tr><th>Schweregrad</th><th>Quelle</th><th>Befund</th><th>Asset</th><th>Reaktion</th><th>Zeit UTC</th></tr></thead><tbody id="v6SpywareRows"></tbody></table></div>
         </article>
         <article class="glass table-card">
-          <div class="section-head"><div><p class="eyebrow">STYX</p><h3>Passive Egress- &amp; Beacon-Vorfälle</h3></div><span id="v6StyxCount" class="status-pill info">0</span></div>
-          <div class="table-wrap"><table><thead><tr><th>Schweregrad</th><th>Kategorie</th><th>Score</th><th>Zusammenfassung</th><th>Aktion</th><th>Zeit UTC</th></tr></thead><tbody id="v6StyxRows"></tbody></table></div>
+          <div class="section-head"><div><p class="eyebrow">STYX</p><h3>Passive Egress- &amp; Beacon-Vorfälle (aufklappbare Programmpfad-Analyse)</h3></div><span id="v6StyxCount" class="status-pill info">0</span></div>
+          <div class="table-wrap"><table><thead><tr><th>Schweregrad</th><th>Programm</th><th>Kategorie / Score</th><th>Zusammenfassung</th><th>Aktion</th><th>Zeit UTC</th><th>Details</th></tr></thead><tbody id="v6StyxRows"></tbody></table></div>
+        </article>
+        <article class="glass section-card">
+          <div class="section-head">
+            <div><p class="eyebrow">STYX WHITELIST &amp; WFP-FREIGABEN</p><h3>Programm-Pfade, Apps &amp; Ziel-IPs freigeben</h3><p class="muted">Freigegebene Pfade oder IP-Ziele werden sofort aus aktiven Kernel-WFP-Sperren gelöst und künftig nicht mehr blockiert.</p></div>
+            <span id="v6WhitelistCount" class="status-pill info">0 FREIGABEN</span>
+          </div>
+          <div class="v6-whitelist-form">
+            <input type="text" id="v6WhitelistInput" class="input" placeholder="C:\Program Files\App\app.exe oder 203.0.113.10 oder app.exe" autocomplete="off" spellcheck="false" aria-label="Programmpfad, .exe-Name oder Ziel-IP/CIDR">
+            <button type="button" id="v6WhitelistAddBtn" class="button primary">Zur Whitelist hinzufügen</button>
+          </div>
+          <div class="v6-whitelist-columns">
+            <div>
+              <p class="eyebrow">AKTIVE WHITELIST-EINTRÄGE</p>
+              <div id="v6WhitelistList" class="v6-chip-list"></div>
+            </div>
+            <div>
+              <p class="eyebrow">AKTIVE KERNEL-WFP-SPERREN</p>
+              <div id="v6BlockedTargetsList" class="v6-chip-list"></div>
+            </div>
+          </div>
         </article>
       </section>
 

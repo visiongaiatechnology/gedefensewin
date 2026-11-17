@@ -152,13 +152,21 @@ export function translateText(value) {
   for (const pattern of patternCache.get(current)) {
     const match = pattern.regex.exec(value);
     if (!match) continue;
+    const captured = [];
     const values = {};
+    const hasDuplicateIndices = new Set(pattern.placeholderNumbers).size !== pattern.placeholderNumbers.length;
     for (let index = 0; index < pattern.placeholderNumbers.length; index++) {
       // Captured values are often German labels (page names, enum labels);
       // translate them as well where the dictionary has an exact entry.
-      values[pattern.placeholderNumbers[index]] = lookupExact(match[index + 1]);
+      const translated = lookupExact(match[index + 1]);
+      captured.push(translated);
+      values[pattern.placeholderNumbers[index]] = translated;
     }
+    let seq = 0;
     return pattern.target.replace(/\{(\d+)\}/g, (token, number) => {
+      if (hasDuplicateIndices && seq < captured.length) {
+        return captured[seq++];
+      }
       const key = Number(number);
       return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : token;
     });

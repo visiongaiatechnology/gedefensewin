@@ -100,8 +100,7 @@ func OpenVault(root string) (*Vault, error) {
 		vault.blocked[issue.ID] = issue.Detail
 	}
 	vault.integrityIssues = issues
-	vault.recoverOriginalState()
-	if err := vault.recountUsageLocked(); err != nil {
+	if err := vault.reconcileAndCountLocked(); err != nil {
 		return nil, err
 	}
 	if len(issues) > 0 {
@@ -141,33 +140,10 @@ func (v *Vault) errIfBlocked(id string) error {
 	return nil
 }
 
-// recoverOriginalState repairs the crash window between removing the original
-// file and persisting OriginalGone=true (DP-FIND-015 recovery gap).
-func (v *Vault) recoverOriginalState() {
-	entries, err := os.ReadDir(v.root)
-	if err != nil {
-		return
-	}
-	for _, item := range entries {
-		if item.IsDir() || !strings.HasSuffix(item.Name(), ".json") {
-			continue
-		}
-		id := strings.TrimSuffix(item.Name(), ".json")
-		if !validQuarantineID(id) {
-			continue
-		}
-		entry, readErr := v.readMetadata(id)
-		if readErr != nil || entry.OriginalGone || entry.State == "RESTORED" {
-			continue
-		}
-		if _, statErr := os.Lstat(entry.OriginalPath); errors.Is(statErr, os.ErrNotExist) {
-			entry.OriginalGone = true
-			_ = v.writeMetadata(entry)
-		}
-	}
-}
-
-func (v *Vault) recountUsageLocked() error {
+// reconcileAndCountLocked repairs the crash window between removing the original
+// file and persisting OriginalGone=true (DP-FIND-015 recovery gap) while counting
+// vault usage in a single directory pass.
+func (v *Vault) reconcileAndCountLocked() error {
 	entries, err := os.ReadDir(v.root)
 	if err != nil {
 		return err
@@ -186,12 +162,22 @@ func (v *Vault) recountUsageLocked() error {
 		if readErr != nil {
 			continue
 		}
+		if !entry.OriginalGone && entry.State != "RESTORED" {
+			if _, statErr := os.Lstat(entry.OriginalPath); errors.Is(statErr, os.ErrNotExist) {
+				entry.OriginalGone = true
+				_ = v.writeMetadata(entry)
+			}
+		}
 		count++
 		total += entry.Size
 	}
 	v.usageEntries = count
 	v.usageBytes = total
 	return nil
+}
+
+func (v *Vault) recountUsageLocked() error {
+	return v.reconcileAndCountLocked()
 }
 
 func (v *Vault) metadataMAC(entry QuarantineEntry) (string, error) {

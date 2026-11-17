@@ -192,6 +192,7 @@ func (s *Server) routes() http.Handler {
 	read("/api/v1/notifications", s.notifications)
 	read("/api/v1/mhx/geo", s.kineticGeo)
 	read("/api/v1/overview/threat-map", s.overviewThreatMap)
+	read("/api/v1/overview/program-traffic", s.overviewProgramTraffic)
 	policy("/api/v1/mhx/kinetic/mode", s.kineticSetMode)
 	read("/api/v1/mhx/analyses", s.mhxAnalyses)
 	read("/api/v1/mhx/network", s.mhxNetwork)
@@ -250,9 +251,12 @@ func (s *Server) routes() http.Handler {
 	policy("/api/v5/sentinel/whitelist/add", s.sentinelAddWhitelist)
 	policy("/api/v5/sentinel/whitelist/remove", s.sentinelRemoveWhitelist)
 
-	// V6 Sovereign telemetry & status routes (read-only observations).
+	// V6 Sovereign telemetry & policy routes.
 	read("/api/v1/v6/status", s.v6Status)
 	read("/api/v1/v6/spyware/findings", s.v6SpywareFindings)
 	read("/api/v1/v6/styx/incidents", s.v6StyxIncidents)
+	read("/api/v1/v6/styx/whitelist", s.v6StyxWhitelist)
+	policy("/api/v1/v6/styx/whitelist", s.v6SetStyxWhitelist)
+	policy("/api/v1/v6/mode", s.v6SetMode)
 	return s.headers(mux)
 }
