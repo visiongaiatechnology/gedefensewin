@@ -9,7 +9,7 @@
 [English](README.md) · [Deutsch](README.de.md) · **Русский** · [中文](README.zh.md)
 
 [![Лицензия](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=for-the-badge)](LICENSE)
-[![Версия](https://img.shields.io/badge/Version-6.0.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
+[![Версия](https://img.shields.io/badge/Version-6.1.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases)
 [![Статус](https://img.shields.io/badge/Status-Public_Beta-yellow?style=for-the-badge)](#public-beta-advisory)
 [![Платформа](https://img.shields.io/badge/Platform-Windows_11_x64-lightgrey?style=for-the-badge&logo=windows)](#system-requirements)
 [![Плоскость управления](https://img.shields.io/badge/Control_Plane-Local%2FSovereign-brightgreen?style=for-the-badge)](#local-sovereignty-and-privacy)
@@ -33,7 +33,7 @@
 > [!IMPORTANT]
 > **Обновление установщика (6.0.0):** Прежний самоподписанный PowerShell-bootstrap мог не работать на чистых установках Windows, поскольку сертификат VGT не был доверенным. Теперь выпуск использует брендированный **Inno Setup installer**, который автоматически импортирует бета-сертификат после принятия лицензии — ручные действия с сертификатом больше не нужны.
 >
-> **[Скачать установщик GeDefense Windows 6.0.0](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v6.0.0/GeDefense-Setup-Inno-x64-v6.0.0.exe)**
+> **[Скачать установщик GeDefense Windows 6.1.0](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v6.1.0/GeDefense-Setup-Inno-x64-v6.1.0.exe)**
 
 ## 🌐 Вселенная GeDefense
 
@@ -53,13 +53,13 @@ GeDefense — единая локальная security-fabric для Linux, Wind
 ## ⚠️ Предупреждение о публичной бета-версии
 
 > [!IMPORTANT]
-> **Статус: публичная бета-версия — GeDefense Windows 6.0.0.**
+> **Статус: публичная бета-версия — GeDefense Windows 6.1.0.**
 >
 > GeDefense Titan находится в активной разработке. **Эта бета-версия может содержать ошибки, в том числе дефекты безопасности.** Мы непрерывно работаем над усилением защиты, тестированием и исправлениями и приветствуем каждое воспроизводимое сообщение.
 >
 > - Используйте бета-версию сначала на тестовых системах, сохраняйте резервные копии и не полагайтесь на неё как на единственный механизм безопасности продуктивной среды.
 > - Сообщайте об ошибках, проблемах безопасности и пожеланиях к функциональности через [GitHub Issues](https://github.com/visiongaiatechnology/gedefensewin/issues) или ответственно через [SECURITY.md](SECURITY.md).
-> - Этот выпуск **подписан самоподписанным сертификатом** и **не имеет доверия публичного CA**; пока отсутствуют метка времени RFC 3161, механизм отзыва CRL/OCSP и внешне закреплённый канал защиты от отката. По этим причинам 6.0.0 **не является публично доверенным выпуском**. См. [Проверка и доверие](#verification-and-trust).
+> - Этот выпуск **подписан самоподписанным сертификатом** и **не имеет доверия публичного CA**; пока отсутствуют метка времени RFC 3161, механизм отзыва CRL/OCSP и внешне закреплённый канал защиты от отката. По этим причинам 6.1.0 **не является публично доверенным выпуском**. См. [Проверка и доверие](#verification-and-trust).
 > - Базовая архитектура проверяется автоматическими релизными шлюзами (Go race, Go vet, govulncheck, SBOM, provenance, шлюзы установщика и публикации). Реальную установку и изменения политик безопасности по-прежнему следует выполнять на изолированной тестовой виртуальной машине.
 
 ---
@@ -96,19 +96,17 @@ Titan объединяет:
 ---
 
 
-## Что нового в 6.0.0
+## Что нового в 6.1.0 ([CHANGELOG.md](CHANGELOG.md))
 
-- **Плоскость исполнения Sentinel/Killerdom:** реакция на сигнатуры и поведение в реальном времени, строгая цепочка родитель-потомок, проверка канонических путей System32, контроль целостности буфера сканирования AMSI и параноидальный шлюз с запретом по умолчанию.
-- **Provenance исполнения вместо свободного пропуска:** отобранные системные приложения и записи белого списка проверяются по пути, PE OriginalFilename, подписанту/издателю Authenticode и необязательному SHA-256 pin; белый список никогда не подавляет уничтожение с высокой уверенностью.
-- **Мост Titan → Killerdom:** нарушения целостности Titan нейтрализуют вредоносную персистентность через проверенное завершение PID; каждое действие и каждая ошибка фиксируются в HMAC-цепочке доказательств.
-- **Ghost Mode с реальным принуждением:** исходящие программы и службы телеметрии блокируются правилами Windows Firewall на базе WFP, хосты телеметрии Microsoft перенаправляются в sinkhole, состояние сверяется при загрузке и отображается достоверно (`applied` / `lastError`).
-- **Усиление против ложных срабатываний:** сигнатуры для обфускации PowerShell, base64-блобов и деструктивных шаблонов `cmd /c` уточнены; парсер encoded-command теперь применяется только к хостам PowerShell. Административные/тестовые команды и `govulncheck` больше не завершаются.
-- **Усиление и цепочка поставок:** сеансы со scope, типизированное подтверждение и причина при снижении защиты, записи белого списка с SHA-256/подписантом, неизменяемая самозащита, алиасы API v5, подписанный установщик, SBOM/provenance, ноль сторонних Go-зависимостей и `govulncheck` 0.
-- **UI и локализация:** таблицы Sentinel/Killerdom рендерятся независимо с пустыми состояниями; все четыре языка интерфейса (немецкий, английский, русский, упрощённый китайский) покрывают новую страницу; отступы и раскладка Glass 2100 исправлены.
+- **Microsoft Defender Deep Symbiosis (`GeDefense × Defender`):** двусторонняя корреляция по **16 Operational Event IDs** Defender (ASR `1121`/`1122`, CFA `1123`/`1124`, Network Protection `1125`/`1126`, ошибки лечения `1118`/`1119`, события tamper-защиты `5001`–`5013`) с авто-восстановлением (cooldown 60 с), верифицированным `MpCmdRun.exe`-оракулом для Titan (`ArtifactOracle`) и мостом доверия `FairScorer`.
+- **Обратимое сдерживание деревьев процессов (`NtSuspendProcess`):** заморозка, подтверждённое возобновление (`RESUME CONTAINED PROCESS`) и завершение деревьев процессов с проверкой CreationTime/ImagePath и интерфейсом Glass 2100 в **MHX XDR**.
+- **Офлайн-план `AGENTS.md` в мастере настройки (без удалённого AI API):** экспорт, копирование и стартовый промпт для безопасной настройки Windows-хоста, установленных программ и toolchain локальными ИИ-агентами (`Codex`, `Antigravity`, `Claude Code`) с поддержкой `setupDevRoots` без раскрытия секретов.
+- **Устойчивость и исправление UTF-8 BOM в Inno Setup 7:** фильтрация широких префиксов Spamhaus NDJSON (`< /16`, `< /32`) без срыва фидов, самовосстановление повреждённых JSON App Control, изоляция rate-лимитов `rateLong` по маршрутам и UTF-8 BOM (`EF BB BF`) для всех текстов лицензии установщика.
+- **База V6 Sovereign (из 6.0.0):** сенсоры V6 Anti-Spyware (BYOVD, камера/микрофон/экран/геолокация, персистентность, LSASS), внешний Ed25519-Witness, StyX Egress, Emergency Lockdown, AppContainer ParserCells, нативные ETW/WFP/TPM, 23 исправления VGT-100 и Go `1.26.11`.
 
 ## Для критических сценариев
 
-GeDefense Windows 6.0.0 создан для конечных точек Windows 11, где оператор должен сохранять контроль в изолированных, регулируемых или офлайн-средах: локальная плоскость управления, отсутствие облачной зависимости, проверяемые доказательства, ограниченные ресурсы и явные границы реагирования. Это **не** заявление о полной защите: компрометация ядра/прошивки, вредоносный локальный администратор и полная компрометация цепочки поставок остаются вне границы продукта; сборка самоподписанная и остаётся публичной бетой.
+GeDefense Windows 6.1.0 создан для конечных точек Windows 11, где оператор должен сохранять контроль в изолированных, регулируемых или офлайн-средах: локальная плоскость управления, отсутствие облачной зависимости, проверяемые доказательства, ограниченные ресурсы и явные границы реагирования. Это **не** заявление о полной защите: компрометация ядра/прошивки, вредоносный локальный администратор и полная компрометация цепочки поставок остаются вне границы продукта; сборка самоподписанная и остаётся публичной бетой.
 
 ## Архитектура
 
@@ -149,12 +147,12 @@ VGTGeDefense Windows Service (LocalSystem)     sovereign control plane
 
 ## Установка
 
-1. Скачайте `GeDefense-Setup-Inno-x64-v6.0.0.exe` со [страницы релизов](https://github.com/visiongaiatechnology/gedefensewin/releases).
+1. Скачайте `GeDefense-Setup-Inno-x64-v6.1.0.exe` со [страницы релизов](https://github.com/visiongaiatechnology/gedefensewin/releases).
 2. Измерьте и проверьте артефакт:
 
    ```powershell
-   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-Inno-x64-v6.0.0.exe
-   Get-AuthenticodeSignature .\GeDefense-Setup-Inno-x64-v6.0.0.exe
+   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-Inno-x64-v6.1.0.exe
+   Get-AuthenticodeSignature .\GeDefense-Setup-Inno-x64-v6.1.0.exe
    ```
 
    Установщик сейчас **самоподписанный**. `Get-AuthenticodeSignature` сообщает `Valid` только на хостах, которые уже доверяют сертификату VGT; для всех остальных ожидаемое состояние — `NotTrusted`/`UnknownError`. Измеренный SHA-256 должен совпадать с `SHA256SUMS.txt` и sidecar-файлом `.sha256` этого выпуска.
@@ -249,10 +247,10 @@ VGTGeDefense Windows Service (LocalSystem)     sovereign control plane
 
 ## Сборка из исходного кода
 
-Требования: Windows 11 x64, Windows PowerShell 5.1 x64, Go **1.26.10** (см. `TOOLCHAINS.lock`) и компилятор C, подходящий для детектора гонок Go.
+Требования: Windows 11 x64, Windows PowerShell 5.1 x64, Go **1.26.11** (см. `TOOLCHAINS.lock`) и компилятор C, подходящий для детектора гонок Go.
 
 ```powershell
-$env:GOTOOLCHAIN = 'go1.26.10'
+$env:GOTOOLCHAIN = 'go1.26.11'
 # 1) deterministic source archive + SOURCE-MANIFEST
 & .\build\Build-SourceRelease.ps1
 # 2) full release gate + signed payload/installer + SBOM/provenance/sidecar/SHA256SUMS

@@ -12,6 +12,7 @@ $dataRoot = Join-Path $env:ProgramData 'VGT\GeDefense\mhx'
 $denyFile = Join-Path $dataRoot 'application-denies.json'
 $ruleGroup = 'VGT GeDefense Sovereign Denies'
 $maximumEntries = 64
+$script:databaseNeedsRepair = $false
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -21,13 +22,46 @@ function Assert-Administrator {
     }
 }
 
+function Backup-CorruptDatabase([string]$Path) {
+    try {
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            $backup = "{0}.corrupt-{1}-{2}" -f $Path, [DateTime]::UtcNow.ToString('yyyyMMddHHmmss'), $PID
+            Move-Item -LiteralPath $Path -Destination $backup -Force -ErrorAction Stop
+        }
+    } catch {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Read-Entries {
     if (-not (Test-Path -LiteralPath $denyFile -PathType Leaf)) { return @() }
     $item = Get-Item -LiteralPath $denyFile -Force
-    if ($item.Length -le 0 -or $item.Length -gt 1MB -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    if ($item.Length -gt 1MB -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         throw [Security.SecurityException]::new('Application-deny database boundary validation failed.')
     }
-    $parsed = Get-Content -LiteralPath $denyFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($item.Length -le 0) {
+        Backup-CorruptDatabase -Path $denyFile
+        $script:databaseNeedsRepair = $true
+        return @()
+    }
+    $raw = Get-Content -LiteralPath $denyFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($raw) -or $raw.IndexOf([char]0) -ge 0) {
+        Backup-CorruptDatabase -Path $denyFile
+        $script:databaseNeedsRepair = $true
+        return @()
+    }
+    try {
+        $parsed = $raw | ConvertFrom-Json
+    } catch {
+        Backup-CorruptDatabase -Path $denyFile
+        $script:databaseNeedsRepair = $true
+        return @()
+    }
+    if ($null -eq $parsed -or $null -eq $parsed.PSObject.Properties['entries'] -or $null -eq $parsed.entries) {
+        Backup-CorruptDatabase -Path $denyFile
+        $script:databaseNeedsRepair = $true
+        return @()
+    }
     $entries = @($parsed.entries)
     if ($entries.Count -gt $maximumEntries) {
         throw [Security.SecurityException]::new('Application-deny database exceeds the bounded entry count.')
@@ -69,16 +103,24 @@ function New-DenyEntry([string]$Path) {
 }
 
 function Sync-Rules([array]$Entries) {
-    Get-NetFirewallRule -Group $ruleGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+    $existingRules = @(Get-NetFirewallRule -Group $ruleGroup -ErrorAction SilentlyContinue)
+    if ($Entries.Count -eq 0 -and $existingRules.Count -eq 0) {
+        return @()
+    }
+    if ($existingRules.Count -gt 0) {
+        $existingRules | Remove-NetFirewallRule -ErrorAction Stop
+    }
     $verified = @()
     foreach ($entry in $Entries) {
-        if (-not (Test-Path -LiteralPath $entry.path -PathType Leaf)) { continue }
-        $item = Get-Item -LiteralPath $entry.path -Force
+        if ($null -eq $entry -or $null -eq $entry.PSObject.Properties['path'] -or $null -eq $entry.PSObject.Properties['sha256'] -or $null -eq $entry.PSObject.Properties['rule']) { continue }
+        $entryPath = [string]$entry.path
+        if ([string]::IsNullOrWhiteSpace($entryPath) -or -not (Test-Path -LiteralPath $entryPath -PathType Leaf)) { continue }
+        $item = Get-Item -LiteralPath $entryPath -Force
         if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
-        $hash = (Get-FileHash -LiteralPath $entry.path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $hash = (Get-FileHash -LiteralPath $entryPath -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($hash -ne [string]$entry.sha256) { continue }
-        New-NetFirewallRule -DisplayName ([string]$entry.rule) -Group $ruleGroup -Direction Outbound -Action Block -Program ([string]$entry.path) -Protocol Any | Out-Null
-        New-NetFirewallRule -DisplayName ("{0} Inbound" -f [string]$entry.rule) -Group $ruleGroup -Direction Inbound -Action Block -Program ([string]$entry.path) -Protocol Any | Out-Null
+        New-NetFirewallRule -DisplayName ([string]$entry.rule) -Group $ruleGroup -Direction Outbound -Action Block -Program $entryPath -Protocol Any | Out-Null
+        New-NetFirewallRule -DisplayName ("{0} Inbound" -f [string]$entry.rule) -Group $ruleGroup -Direction Inbound -Action Block -Program $entryPath -Protocol Any | Out-Null
         $verified += $entry
     }
     return @($verified)
@@ -87,20 +129,24 @@ function Sync-Rules([array]$Entries) {
 try {
     Assert-Administrator
     $entries = @(Read-Entries)
+    $initialCount = $entries.Count
     if ($Action -eq 'Add') {
         $resolved = Resolve-Application
         $entry = New-DenyEntry -Path $resolved
-        $entries = @($entries | Where-Object { -not ([string]$_.path).Equals($resolved,[StringComparison]::OrdinalIgnoreCase) }) + @($entry)
+        $entries = @($entries | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties['path'] -and -not ([string]$_.path).Equals($resolved,[StringComparison]::OrdinalIgnoreCase) }) + @($entry)
         if ($entries.Count -gt $maximumEntries) {
             throw [Security.SecurityException]::new('Application-deny entry limit reached.')
         }
     } elseif ($Action -eq 'Remove') {
         $resolvedCandidate = [IO.Path]::GetFullPath($ApplicationPath)
-        $entries = @($entries | Where-Object { -not ([string]$_.path).Equals($resolvedCandidate,[StringComparison]::OrdinalIgnoreCase) })
+        $entries = @($entries | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties['path'] -and -not ([string]$_.path).Equals($resolvedCandidate,[StringComparison]::OrdinalIgnoreCase) })
     }
     if ($Action -in @('Add','Remove','Verify')) {
-        $entries = @(Sync-Rules -Entries $entries)
-        Write-Entries -Entries $entries
+        $verifiedEntries = @(Sync-Rules -Entries $entries)
+        if ($Action -in @('Add','Remove') -or $script:databaseNeedsRepair -or $verifiedEntries.Count -ne $initialCount -or -not (Test-Path -LiteralPath $denyFile -PathType Leaf)) {
+            Write-Entries -Entries $verifiedEntries
+        }
+        $entries = $verifiedEntries
     }
     $result = [ordered]@{
         TimestampUtc=[DateTime]::UtcNow.ToString('o')

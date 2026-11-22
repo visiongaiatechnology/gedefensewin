@@ -95,6 +95,23 @@ func CalculateFairScoreForEvent(event ProcessEvent, isAllowed bool, appName stri
 	return result
 }
 
+// CalculateFairScoreWithSymbiosis adds live Microsoft Defender correlation to
+// the provenance-aware fair score so an allowlisted binary flagged by Defender
+// (malware detection, ASR block, or Controlled Folder Access violation)
+// escalates deterministically instead of retaining an implicit free pass.
+func CalculateFairScoreWithSymbiosis(event ProcessEvent, isAllowed bool, appName string, sigMatched bool, sigID string, amsiPatched bool, lineageBreach bool, threatHit bool, titanCompromised bool, defenderFlagged bool) ThreatScoreResult {
+	result := CalculateFairScoreForEvent(event, isAllowed, appName, sigMatched, sigID, amsiPatched, lineageBreach, threatHit, titanCompromised)
+	if defenderFlagged {
+		result.Score += 60
+		result.Factors = append(result.Factors, "Microsoft Defender Symbiose: Aktive Detection-, ASR- oder Ransomware-Korrelation")
+	}
+	if result.Score > 100 {
+		result.Score = 100
+	}
+	classifyFairScore(&result)
+	return result
+}
+
 func classifyFairScore(result *ThreatScoreResult) {
 	result.Level = "CLEAN"
 	result.Action = "ALLOW"

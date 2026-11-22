@@ -16,13 +16,19 @@ import {
   getEvidenceSnapshot,
   getHardeningCatalog,
   getHardeningComponents,
+  getMhxContainments,
+  getMhxSymbiosis,
   getOverviewProgramTraffic,
   getProtectedNetworks,
   getThreatIntelStatus,
+  reconcileDefenderSymbiosis,
+  resumeContainment,
   rollbackHardening,
   saveHardeningSettings,
+  scanFileWithDefender,
   setIntegrityConfiguration,
   setProtectedNetworks,
+  terminateContainment,
 } from './api.js';
 import {
   byId, clear, emptyRow, emptyState, formatBytes, formatNumber, formatPercent, formatTime,
@@ -499,6 +505,8 @@ export async function loadXdr(options={}){
   ]);
   if(status.status==='fulfilled'){
     renderXdrMetrics(status.value);
+    bindSymbiosisPanel();
+    void loadSymbiosisPanel(status.value.defenderSymbiosis);
     settingsPanelReady();
     bindMhxSettingsPanel();
     if(options.includeSettings!==false){
@@ -596,6 +604,157 @@ function renderXdrMetrics(status){
         ti.state?`Feed-Status ${displayToken(ti.state)}`:'Feed-Status unbekannt',tiTone),
     ]),
   );
+}
+
+let symbiosisPanelBound=false;
+function bindSymbiosisPanel(){
+  if(symbiosisPanelBound)return;
+  symbiosisPanelBound=true;
+  byId('symbiosisScanRun')?.addEventListener('click',()=>{void runSymbiosisScan()});
+  byId('symbiosisReconcile')?.addEventListener('click',()=>{void runSymbiosisReconcile()});
+  byId('symbiosisReload')?.addEventListener('click',()=>{void loadSymbiosisPanel()});
+}
+
+async function loadSymbiosisPanel(fallbackSymbiosis){
+  const [symbRes,contRes]=await Promise.all([getMhxSymbiosis(),getMhxContainments()]);
+  const symb=symbRes.ok?symbRes.data:(fallbackSymbiosis||null);
+  const containments=contRes.ok&&Array.isArray(contRes.data)?contRes.data:[];
+  renderSymbiosisPanel(symb,containments);
+}
+
+function renderSymbiosisPanel(symb,containments){
+  const stats=clear('symbiosisStats');
+  if(!symb){
+    setPill('symbiosisState','NICHT VERFÜGBAR','warn');
+  }else{
+    const oracleReady=Boolean(symb.oracleAvailable);
+    setPill('symbiosisState',oracleReady?'ORACLE & STREAM AKTIV':'STREAM AKTIV (OHNE CLI)',oracleReady?'good':'warn');
+    if(stats){
+      const addStat=(val,lbl)=>{
+        const box=node('div');
+        box.append(node('strong','',String(val)),node('span','',lbl));
+        stats.append(box);
+      };
+      addStat(formatNumber(Array.isArray(symb.subscribedEventIds)?symb.subscribedEventIds.length:0),'Abonnierte Defender-Event-IDs');
+      addStat(`${formatNumber(symb.detectionsObserved||0)} / ${formatNumber(symb.cfaBlocksObserved||0)} / ${formatNumber(symb.asrBlocksObserved||0)}`,'Detections · CFA Ransom · ASR');
+      addStat(`${formatNumber(symb.tamperEventsObserved||0)} / ${formatNumber(symb.autoHealsTriggered||0)}`,'Tamper-Events · Auto-Heals');
+      addStat(`${formatNumber(symb.oracleScansTotal||0)} (${formatNumber(symb.oracleThreatsFound||0)})`,'Oracle-Scans (Treffer)');
+    }
+    const scanStatusEl=byId('symbiosisScanResult');
+    if(scanStatusEl&&symb.lastOracleScan&&!scanStatusEl.textContent){
+      const last=symb.lastOracleScan;
+      scanStatusEl.className=`form-status ${last.threatFound?'bad':'good'}`;
+      scanStatusEl.textContent=`Letzter Oracle-Scan: ${last.targetPath} · ${last.status}${last.threatName?` (${last.threatName})`:''}`;
+    }
+  }
+  const activeCount=containments.filter(item=>item.state==='FROZEN').length;
+  setPill('symbiosisContainmentCount',`${formatNumber(activeCount)} AKTIV`,activeCount?'bad':'info');
+  const host=clear('symbiosisContainments');
+  if(!host)return;
+  if(!containments.length){
+    host.append(node('p','field-hint','Keine eingefrorenen oder eskalierten Prozessbäume. Bei Defender-CFA- (1123), Malware- oder Remediation-Fail-Ereignissen (1118/1119) stoppt GeDefense betroffene Prozessbäume hier reversibel.'));
+    return;
+  }
+  for(const item of containments.slice(0,25)){
+    const row=node('div','app-row');
+    const info=node('div','app-row-main');
+    const procs=Array.isArray(item.processes)?item.processes:[];
+    const titleLine=node('strong','',`${item.rootImage||'Prozess'} (PID ${formatNumber(item.rootPid||0)}) · ${procs.length} Prozess(e)`);
+    const metaLine=node('small','',`${item.source||'symbiosis'} · ${item.reason||item.outcome||''} · ${formatTime(item.updatedUtc||item.createdUtc)}`);
+    info.append(titleLine,metaLine);
+    const actions=node('div','symbiosis-row-actions');
+    const tone=item.state==='FROZEN'?'bad':item.state==='TERMINATED'?'warn':'good';
+    actions.append(pill(String(item.state||'UNKNOWN'),tone));
+    if(item.state==='FROZEN'){
+      const killBtn=node('button','button danger small','Beenden');
+      killBtn.type='button';
+      killBtn.addEventListener('click',()=>{void actOnContainment(item,'terminate')});
+      const resumeBtn=node('button','button quiet small','Freigeben');
+      resumeBtn.type='button';
+      resumeBtn.addEventListener('click',()=>{void actOnContainment(item,'resume')});
+      actions.append(killBtn,resumeBtn);
+    }
+    row.append(info,actions);
+    host.append(row);
+  }
+}
+
+async function runSymbiosisScan(){
+  const input=byId('symbiosisScanPath');
+  const statusEl=byId('symbiosisScanResult');
+  const btn=byId('symbiosisScanRun');
+  const path=String(input?.value||'').trim();
+  if(path.length<3||path.length>1024){
+    if(statusEl){statusEl.className='form-status bad';statusEl.textContent='Bitte einen gültigen absoluten Dateipfad angeben.'}
+    return;
+  }
+  if(btn){btn.disabled=true;btn.textContent='Scanne …'}
+  if(statusEl){statusEl.className='form-status';statusEl.textContent='Signiertes Defender-Oracle prüft Datei …'}
+  const res=await scanFileWithDefender(path);
+  if(btn){btn.disabled=false;btn.textContent='Mit Defender scannen'}
+  if(!res.ok){
+    if(statusEl){statusEl.className='form-status bad';statusEl.textContent=`Scan abgelehnt: ${res.message}`}
+    toast(`Defender-Scan fehlgeschlagen: ${res.message}`,'bad');
+    return;
+  }
+  const d=res.data||{};
+  if(statusEl){
+    statusEl.className=`form-status ${d.threatFound?'bad':'good'}`;
+    statusEl.textContent=`Ergebnis: ${d.status||'CLEAN'} · ${d.detail||d.threatName||'Keine Bedrohung erkannt'} (${formatNumber(d.durationMs||0)} ms)`;
+  }
+  toast(d.threatFound?`Defender-Treffer: ${d.threatName}`:'Datei laut Defender sauber.',d.threatFound?'bad':'good');
+  void loadSymbiosisPanel();
+}
+
+async function runSymbiosisReconcile(){
+  const reason=await requestReason({
+    title:'Defender-Baseline abgleichen',
+    text:'Signierte MHX-/Defender-Schutzbaseline (Echtzeitschutz, PUA, Netzwerk- und ASR-Regeln) sofort überprüfen und wiederherstellen?',
+    label:'Begründung des Abgleichs',
+    confirmLabel:'Baseline abgleichen',
+  });
+  if(!reason)return;
+  const btn=byId('symbiosisReconcile');
+  if(btn){btn.disabled=true;btn.textContent='Prüfe …'}
+  const res=await reconcileDefenderSymbiosis(reason);
+  if(btn){btn.disabled=false;btn.textContent='Baseline abgleichen'}
+  if(!res.ok){
+    toast(`Defender-Abgleich fehlgeschlagen: ${res.message}`,'bad');
+    return;
+  }
+  toast('Defender-Symbiose und Baseline verifiziert.','good');
+  renderSymbiosisPanel(res.data,[]);
+  void loadSymbiosisPanel(res.data);
+}
+
+async function actOnContainment(item,action){
+  if(action==='resume'){
+    const confirmed=await requestConfirm({
+      title:'Eingefrorenen Prozessbaum freigeben?',
+      text:`Prozess „${item.rootImage}“ (PID ${item.rootPid}) wurde durch Defender/Sentinel gestoppt. Das Freigeben setzt die Ausführung aller enthaltenen Prozesse fort.`,
+      confirmLabel:'Weiter zur Begründung',
+      tone:'danger',
+    });
+    if(!confirmed)return;
+  }
+  const reason=await requestReason({
+    title:action==='resume'?'Containment freigeben':'Prozessbaum endgültig beenden',
+    text:action==='resume'
+      ?`Begründung für die Wiederaufnahme von ${item.rootImage} (PID ${item.rootPid}) angeben:`
+      :`Prozessbaum ${item.rootImage} (PID ${item.rootPid}) und alle Nachkommen jetzt dauerhaft beenden?`,
+    confirmLabel:action==='resume'?'Prozesse freigeben':'Prozessbaum beenden',
+    tone:'danger',
+  });
+  if(!reason)return;
+  const res=action==='resume'
+    ?await resumeContainment(item.id,reason)
+    :await terminateContainment(item.id,reason);
+  if(!res.ok){
+    toast(`Aktion fehlgeschlagen: ${res.message}`,'bad');
+    return;
+  }
+  toast(action==='resume'?'Prozessbaum wieder aufgenommen.':'Prozessbaum beendet.','good');
+  void loadSymbiosisPanel();
 }
 
 function renderStories(id,stories){

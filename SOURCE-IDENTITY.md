@@ -6,7 +6,7 @@
 ## 1. Why this document exists
 
 The audited workspace directory is named `5.2.0_Source`, while the files inside
-it declare version `5.3.0` (`VERSION`, `internal/product/version.go`,
+it declare version `6.1.0` (`VERSION`, `internal/product/version.go`,
 `CHANGELOG.md`). A directory name is a filesystem label chosen by the workspace
 owner and is **not** a version. Without a recorded rule this difference is
 indistinguishable from a real release-identity conflict (`FIND-WIN-022` /

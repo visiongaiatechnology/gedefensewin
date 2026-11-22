@@ -89,6 +89,8 @@ type Engine struct {
 
 	bridgeMu        sync.RWMutex
 	killerdomBridge func(KillerdomTarget) error
+	artifactOracle  func(context.Context, string) (bool, string, error)
+	oracleSem       chan struct{}
 }
 
 func New(root, version string, ledger *evidence.Ledger) (*Engine, error) {
@@ -118,6 +120,7 @@ func New(root, version string, ledger *evidence.Ledger) (*Engine, error) {
 	engine := &Engine{
 		root: root, version: version, policy: policy, journal: journal, vault: vault,
 		events: make(chan Observation, maxEventQueue), sensors: make(map[string]SensorStatus),
+		oracleSem:        make(chan struct{}, 2),
 		boot:             BootTrust{Detail: "Noch keine Boot-Messung verfügbar."},
 		notificationSeen: make(map[string]time.Time),
 	}
@@ -308,6 +311,8 @@ func (e *Engine) record(observation Observation) error {
 	}
 	if observation.Authorization.AutoQuarantine {
 		go e.autoQuarantine(event)
+	} else if (observation.Authorization.Status == TrustUnexpected || observation.Authorization.Status == TrustCompromised) && policy.Mode != ModeObserve {
+		e.scheduleArtifactOracle(event)
 	}
 	return nil
 }
@@ -964,4 +969,65 @@ func (e *Engine) SetKillerdomBridge(bridge func(KillerdomTarget) error) {
 	e.bridgeMu.Lock()
 	defer e.bridgeMu.Unlock()
 	e.killerdomBridge = bridge
+}
+
+// SetArtifactOracle registers a bounded secondary inspection callback (for
+// example Microsoft Defender MpCmdRun.exe) to verify unexpected ingress files.
+func (e *Engine) SetArtifactOracle(oracle func(context.Context, string) (bool, string, error)) {
+	e.bridgeMu.Lock()
+	defer e.bridgeMu.Unlock()
+	e.artifactOracle = oracle
+}
+
+func (e *Engine) scheduleArtifactOracle(event Event) {
+	if event.Object.Kind != ObjectFile || strings.TrimSpace(event.Object.Path) == "" {
+		return
+	}
+	switch strings.ToLower(filepath.Ext(event.Object.Path)) {
+	case ".exe", ".dll", ".sys", ".scr", ".msi", ".ps1", ".vbs", ".js", ".bat", ".cmd", ".hta", ".zip":
+	default:
+		return
+	}
+	e.bridgeMu.RLock()
+	oracle := e.artifactOracle
+	e.bridgeMu.RUnlock()
+	if oracle == nil || e.oracleSem == nil {
+		return
+	}
+	select {
+	case e.oracleSem <- struct{}{}:
+	default:
+		// Bounded concurrency: drop excess oracle inspections under burst load.
+		return
+	}
+	go func() {
+		defer func() { <-e.oracleSem }()
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		threatFound, threatName, err := oracle(ctx, event.Object.Path)
+		if err != nil || !threatFound {
+			return
+		}
+		detail := fmt.Sprintf("Microsoft Defender Oracle bestätigte Bedrohung %q in %q", threatName, event.Object.Name)
+		_, _ = e.journal.Append(Observation{
+			Type:     EventFileModified,
+			Severity: SeverityCritical,
+			Object:   event.Object,
+			Actor:    event.Actor,
+			Authorization: Authorization{
+				Status:         TrustCompromised,
+				RiskClass:      event.Authorization.RiskClass,
+				PolicyMode:     e.policy.Current().Mode,
+				AutoQuarantine: e.policy.Current().AutoQuarantine,
+				Reason:         detail,
+			},
+			Response: Response{Action: "DEFENDER_ORACLE_CONFIRMED", State: "RECORDED", Detail: threatName},
+			Source:   "titan-defender-oracle",
+			Health:   "HEALTHY",
+			Detail:   detail,
+		})
+		if e.policy.Current().AutoQuarantine {
+			_, _ = e.quarantineEvent(event.ID, detail, "titan-defender-oracle")
+		}
+	}()
 }

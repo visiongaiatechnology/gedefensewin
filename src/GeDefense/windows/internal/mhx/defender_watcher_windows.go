@@ -30,15 +30,18 @@ const (
 )
 
 // defenderEventIDs are the Defender operational events the engine correlates:
-// detections (1116), remediation actions (1117) and disabled protection
-// controls (5001, 5007, 5010, 5012).
-var defenderEventIDs = []int{1116, 1117, 5001, 5007, 5010, 5012}
+// detections (1116), remediation actions/failures (1117-1119), Attack Surface
+// Reduction blocks/audits (1121-1122), Controlled Folder Access ransomware
+// blocks/audits (1123-1124), Network Protection blocks/audits (1125-1126), and
+// protection/tamper configuration events (5001, 5004, 5007, 5010, 5012, 5013).
+var defenderEventIDs = []int{1116, 1117, 1118, 1119, 1121, 1122, 1123, 1124, 1125, 1126, 5001, 5004, 5007, 5010, 5012, 5013}
 
 type defenderEvent struct {
-	TimestampUTC string `json:"timestampUtc"`
-	EventID      int    `json:"eventId"`
-	RecordID     int64  `json:"recordId"`
-	Message      string `json:"message"`
+	TimestampUTC string            `json:"timestampUtc"`
+	EventID      int               `json:"eventId"`
+	RecordID     int64             `json:"recordId"`
+	Message      string            `json:"message"`
+	Fields       map[string]string `json:"fields,omitempty"`
 }
 
 // defenderEventLogStream is the injectable wevtapi seam. Production uses
@@ -176,11 +179,13 @@ func parseDefenderRecord(record winapi.EventLogRecord) (defenderEvent, error) {
 	if timestamp.IsZero() {
 		timestamp = time.Now()
 	}
+	message, parsedFields := extractDefenderFields(document.EventData.Data)
 	return defenderEvent{
 		TimestampUTC: timestamp.UTC().Format(time.RFC3339Nano),
 		EventID:      document.System.EventID,
 		RecordID:     record.RecordID,
-		Message:      defenderEventMessage(document.EventData.Data),
+		Message:      message,
+		Fields:       parsedFields,
 	}, nil
 }
 
@@ -193,12 +198,20 @@ func defenderEventAllowed(eventID int) bool {
 	return false
 }
 
-// defenderEventMessage assembles at most defenderMaximumMessageChars characters
-// of "Name=Value; ..." evidence. Field names and values are bounded and control
-// characters are stripped; duplicate names keep the first occurrence.
+// defenderEventMessage preserves the bounded string contract for callers/tests.
 func defenderEventMessage(fields []defenderDataField) string {
+	message, _ := extractDefenderFields(fields)
+	return message
+}
+
+// extractDefenderFields assembles at most defenderMaximumMessageChars characters
+// of "Name=Value; ..." evidence along with a normalized key->value map. Field
+// names and values are bounded and control characters are stripped; duplicate
+// names keep the first occurrence.
+func extractDefenderFields(fields []defenderDataField) (string, map[string]string) {
 	var builder strings.Builder
 	seen := make(map[string]struct{}, len(fields))
+	parsed := make(map[string]string, len(fields))
 	written := 0
 	for _, field := range fields {
 		if written >= defenderMaximumMessageFields {
@@ -214,6 +227,7 @@ func defenderEventMessage(fields []defenderDataField) string {
 			continue
 		}
 		seen[key] = struct{}{}
+		parsed[key] = value
 		entry := name + "=" + value
 		if builder.Len() > 0 {
 			if builder.Len()+2 >= defenderMaximumMessageChars {
@@ -228,7 +242,7 @@ func defenderEventMessage(fields []defenderDataField) string {
 			break
 		}
 	}
-	return builder.String()
+	return builder.String(), parsed
 }
 
 // sanitizeDefenderText replaces invalid UTF-8, folds whitespace-like control

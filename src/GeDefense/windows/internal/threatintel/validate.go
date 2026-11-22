@@ -109,6 +109,22 @@ func parseThreatToken(token string) (netip.Prefix, error) {
 	return prefix, nil
 }
 
+// isSyntacticallyValidThreatToken reports whether token parses as an IP address
+// or CIDR prefix within length/character bounds, independent of policy filters
+// such as minimum prefix width or reserved/self-protection vetoes.
+func isSyntacticallyValidThreatToken(token string) bool {
+	token = strings.TrimSpace(token)
+	if len(token) < 3 || len(token) > 49 || !isThreatToken(token) {
+		return false
+	}
+	if strings.IndexByte(token, '/') >= 0 {
+		_, err := netip.ParsePrefix(token)
+		return err == nil
+	}
+	_, err := netip.ParseAddr(token)
+	return err == nil
+}
+
 func isThreatToken(value string) bool {
 	for index := 0; index < len(value); index++ {
 		c := value[index]

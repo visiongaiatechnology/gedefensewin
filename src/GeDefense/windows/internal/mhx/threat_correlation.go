@@ -14,26 +14,7 @@ const (
 // recordThreatHitLocked records that pid contacted threat-intelligence
 // infrastructure. Callers must hold e.mu.
 func (e *Engine) recordThreatHitLocked(pid uint32, at time.Time) {
-	if pid <= 4 {
-		return
-	}
-	if e.threatHits == nil {
-		e.threatHits = make(map[uint32]time.Time, 64)
-	}
-	e.threatHits[pid] = at
-	if len(e.threatHits) > maxThreatHits {
-		cutoff := at.Add(-threatHitTTL)
-		for key, seen := range e.threatHits {
-			if seen.Before(cutoff) {
-				delete(e.threatHits, key)
-			}
-		}
-		if len(e.threatHits) > maxThreatHits {
-			// Bounded emergency reset: correlation is enrichment, not evidence
-			// integrity. Dropping it can only lower the score, never raise it.
-			e.threatHits = make(map[uint32]time.Time, 64)
-		}
-	}
+	recordBoundedPIDHit(&e.threatHits, pid, at)
 }
 
 // pidHasRecentThreatHit reports whether pid produced a network threat hit

@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/visiongaiatechnology/gedefense/windows/internal/evidence/secretfs"
 )
 
 // Signed feed authority (DP-FIND-002)
@@ -67,6 +69,8 @@ const (
 	feedEnforcementVerified         = "VERIFIED_AUTHORITY"
 	feedEnforcementDisabled         = "DISABLED_UNAUTHORIZED"
 	feedAuthorityStateSchemaVersion = 1
+	hostFeedAuthorityKeyFileName    = "feed-authority-host.key"
+	hostFeedAuthorityKeyID          = "vgt-host-sovereign-v1"
 )
 
 // FeedAuthorityAttestation binds one feed generation to a signed document.
@@ -121,6 +125,72 @@ func feedAuthorityKeyringPath(root string) string {
 
 func feedAuthorityStatePath(root string) string {
 	return filepath.Join(root, feedAuthorityStateFileName)
+}
+
+func hostFeedAuthorityKeyPath(root string) string {
+	return filepath.Join(root, "keys", hostFeedAuthorityKeyFileName)
+}
+
+// EnsureHostFeedAuthority provisions the sovereign host Ed25519 feed-authority
+// seed under keys/feed-authority-host.key (protected by secretfs with a
+// SYSTEM/Administrators-only DACL) and writes keys/feed-authority.pubkeys.json
+// when no external trust-anchor key ring has been provisioned yet. If an
+// administrator has provisioned an external key ring, that external anchor takes
+// precedence and is never overwritten.
+func EnsureHostFeedAuthority(root string) error {
+	if !filepath.IsAbs(root) {
+		return errors.New("threat intelligence root must be absolute")
+	}
+	seed, err := secretfs.LoadOrCreateRawKey(hostFeedAuthorityKeyPath(root), ed25519.SeedSize)
+	if err != nil {
+		return fmt.Errorf("host feed authority seed: %w", err)
+	}
+	privateKey := ed25519.NewKeyFromSeed(seed)
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	keyringPath := feedAuthorityKeyringPath(root)
+	if _, statErr := os.Lstat(keyringPath); errors.Is(statErr, os.ErrNotExist) {
+		keyring := feedAuthorityKeyring{
+			SchemaVersion: feedAuthorityKeyringSchema,
+			Keys: []feedAuthorityKey{{
+				KeyID:           hostFeedAuthorityKeyID,
+				PublicKeyBase64: base64.RawStdEncoding.EncodeToString(publicKey),
+			}},
+		}
+		raw, marshalErr := json.Marshal(keyring)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if writeErr := atomicWrite(keyringPath, append(raw, '\n')); writeErr != nil {
+			return fmt.Errorf("host feed authority keyring: %w", writeErr)
+		}
+	}
+	return nil
+}
+
+func loadHostFeedAuthorityKey(root string, pinnedKeys map[string]ed25519.PublicKey) ed25519.PrivateKey {
+	pinnedPublic, ok := pinnedKeys[hostFeedAuthorityKeyID]
+	if !ok || len(pinnedPublic) != ed25519.PublicKeySize {
+		return nil
+	}
+	path := hostFeedAuthorityKeyPath(root)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > 1024 {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	seed, decodeErr := base64.RawStdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if decodeErr != nil || len(seed) != ed25519.SeedSize {
+		return nil
+	}
+	privateKey := ed25519.NewKeyFromSeed(seed)
+	publicKey, _ := privateKey.Public().(ed25519.PublicKey)
+	if !bytes.Equal(publicKey, pinnedPublic) {
+		return nil
+	}
+	return privateKey
 }
 
 // loadFeedAuthorityKeyring loads the pinned Ed25519 public keys. configured is
@@ -219,6 +289,7 @@ func (m *Manager) loadFeedAuthority() {
 	defer m.authorityMu.Unlock()
 	m.authorityKeys = keys
 	m.authorityConfigured = configured
+	m.hostAuthorityKey = nil
 	if err != nil {
 		m.authorityError = "feed authenticity trust anchor rejected: " + err.Error()
 	} else {
@@ -228,9 +299,115 @@ func (m *Manager) loadFeedAuthority() {
 		m.authorityState = feedAuthorityState{}
 		return
 	}
+	if err == nil {
+		m.hostAuthorityKey = loadHostFeedAuthorityKey(m.root, keys)
+	}
 	if state, stateErr := loadFeedAuthorityState(m.root); stateErr == nil {
 		m.authorityState = state
 	}
+}
+
+func (m *Manager) hostAuthorityActive() bool {
+	if m == nil {
+		return false
+	}
+	m.authorityMu.RLock()
+	defer m.authorityMu.RUnlock()
+	return m.authorityConfigured && m.authorityError == "" && len(m.hostAuthorityKey) == ed25519.PrivateKeySize
+}
+
+// signAndPersistHostAuthority issues a monotonic Ed25519-signed authority
+// document when the local sovereign host authority key is active in the pinned
+// key ring. External key rings never match hostFeedAuthorityKeyID, so this path
+// is inactive whenever an external authority is pinned.
+func (m *Manager) signAndPersistHostAuthority(generatedUTC time.Time, snapshots map[string]sourceSnapshot) (*feedAuthorityDocument, error) {
+	m.authorityMu.RLock()
+	active := m.authorityConfigured && m.authorityError == "" && len(m.hostAuthorityKey) == ed25519.PrivateKeySize
+	var privateKey ed25519.PrivateKey
+	if active {
+		privateKey = append(ed25519.PrivateKey(nil), m.hostAuthorityKey...)
+	}
+	state := m.authorityState
+	m.authorityMu.RUnlock()
+	if !active {
+		return nil, errors.New("host feed authority is not active")
+	}
+	if len(snapshots) == 0 {
+		return nil, errors.New("no validated feed snapshots to attest")
+	}
+	nextSeq := state.LastSequence + 1
+	if nextSeq == 0 {
+		nextSeq = 1
+	}
+	if existingDoc, err := loadFeedAuthorityDocument(m.root); err == nil && existingDoc != nil {
+		if existingDoc.Sequence >= nextSeq {
+			nextSeq = existingDoc.Sequence + 1
+		}
+		if existingDoc.GeneratedUTC.After(state.LastGeneratedUTC) {
+			state.LastGeneratedUTC = existingDoc.GeneratedUTC
+		}
+	}
+	now := m.effectiveNowUTC()
+	docGenerated := generatedUTC.UTC()
+	if docGenerated.IsZero() || docGenerated.After(now) {
+		docGenerated = now
+	}
+	if !state.LastGeneratedUTC.IsZero() && docGenerated.Before(state.LastGeneratedUTC) {
+		docGenerated = state.LastGeneratedUTC
+	}
+	validityWindow := m.maxFeedAge()
+	if validityWindow <= 0 || validityWindow > maximumFeedAuthorityValidity {
+		validityWindow = 24 * time.Hour
+	}
+	attestations := make([]FeedAuthorityAttestation, 0, len(snapshots))
+	for _, source := range catalog {
+		snapshot, exists := snapshots[source.Key]
+		if !exists || len(snapshot.Indicators) == 0 {
+			continue
+		}
+		canonical := append([]string(nil), snapshot.Indicators...)
+		sort.Strings(canonical)
+		validUntil := docGenerated.Add(validityWindow)
+		if !snapshot.GeneratedUTC.IsZero() {
+			if candidateUntil := snapshot.GeneratedUTC.UTC().Add(validityWindow); candidateUntil.After(now) && candidateUntil.Sub(docGenerated) <= maximumFeedAuthorityValidity {
+				validUntil = candidateUntil
+			}
+		}
+		attestSeq := nextSeq
+		if snapshot.Authority != nil {
+			if prevAtt, ok := authorityAttestationFor(snapshot.Authority, source.Key); ok && prevAtt.Sequence >= attestSeq {
+				attestSeq = prevAtt.Sequence + 1
+			}
+		}
+		attestations = append(attestations, FeedAuthorityAttestation{
+			FeedKey:       source.Key,
+			Sequence:      attestSeq,
+			ContentSHA256: digestIndicators(source.Key, source.Action, canonical),
+			Action:        source.Action,
+			ValidUntilUTC: validUntil.UTC(),
+		})
+	}
+	if len(attestations) == 0 {
+		return nil, errors.New("no valid feed attestations could be constructed")
+	}
+	sort.Slice(attestations, func(left, right int) bool { return attestations[left].FeedKey < attestations[right].FeedKey })
+	document := feedAuthorityDocument{
+		SchemaVersion: feedAuthoritySchemaVersion,
+		Sequence:      nextSeq,
+		KeyID:         hostFeedAuthorityKeyID,
+		GeneratedUTC:  docGenerated,
+		Feeds:         attestations,
+	}
+	signature := ed25519.Sign(privateKey, feedAuthorityDocumentMessage(document))
+	document.SignatureEd25519 = hex.EncodeToString(signature)
+	raw, err := json.Marshal(document)
+	if err != nil {
+		return nil, err
+	}
+	if err := atomicWrite(feedAuthorityDocPath(m.root), append(raw, '\n')); err != nil {
+		return nil, err
+	}
+	return &document, nil
 }
 
 func loadFeedAuthorityState(root string) (feedAuthorityState, error) {

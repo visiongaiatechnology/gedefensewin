@@ -143,7 +143,7 @@ func (s *Server) protected(mode routeAuthMode, confirmation string, next http.Ha
 		}
 		// Rate budgets are checked before the replay guard so a caller cannot
 		// exhaust the replay table and deny legitimate mutations.
-		if !s.allowRate(s.rateIdentity(auth, r), s.rateClassFor(mode, r)) {
+		if !s.allowRateForPath(s.rateIdentity(auth, r), s.rateClassFor(mode, r), r.URL.Path) {
 			w.Header().Set("Retry-After", "5")
 			s.writeError(w, http.StatusTooManyRequests, "request rate limited")
 			return
@@ -295,6 +295,7 @@ func isLongOperation(method, path string) bool {
 	switch path {
 	case "/api/v1/health/refresh", "/api/v1/audit/run", "/api/v1/xdr/scan",
 		"/api/v1/mhx/feeds/sync", "/api/v1/mhx/policy/reconcile",
+		"/api/v1/mhx/defender/scan-file", "/api/v1/mhx/defender/reconcile",
 		"/api/v1/hardening/enforce", "/api/v1/hardening/rollback",
 		"/api/v1/hardening/settings", "/api/v1/hardening/components",
 		"/api/v1/settings", "/api/v1/settings/profiles",
@@ -354,6 +355,14 @@ func rateLimitFor(class rateClass, identity string) int {
 // credential is rate limited as well (higher budget), never exempted
 // (AN-FIND-006). Windows are one minute and expire lazily.
 func (s *Server) allowRate(identity string, class rateClass) bool {
+	return s.allowRateForPath(identity, class, "")
+}
+
+// allowRateForPath keys long operations per endpoint path inside the same
+// identity bucket so unrelated startup/operator operations (e.g. policy
+// reconcile vs. feed sync vs. health refresh) do not cross-starve each other
+// while each endpoint preserves its tight per-minute limit.
+func (s *Server) allowRateForPath(identity string, class rateClass, path string) bool {
 	now := s.clock()
 	limit := rateLimitFor(class, identity)
 	s.rateMu.Lock()
@@ -368,14 +377,25 @@ func (s *Server) allowRate(identity string, class rateClass) bool {
 		if len(s.rates) >= maxRateEntries {
 			return false
 		}
-		bucket = &rateBucket{started: now, counts: make(map[rateClass]int)}
+		bucket = &rateBucket{started: now, counts: make(map[rateClass]int), longPaths: make(map[string]int)}
 		s.rates[identity] = bucket
 	}
 	if now.Sub(bucket.started) >= time.Minute {
 		bucket.started = now
 		bucket.counts = make(map[rateClass]int)
+		bucket.longPaths = make(map[string]int)
 	}
 	bucket.lastSeen = now
+	if class == rateLong && path != "" {
+		if bucket.longPaths == nil {
+			bucket.longPaths = make(map[string]int)
+		}
+		if bucket.longPaths[path] >= limit {
+			return false
+		}
+		bucket.longPaths[path]++
+		return true
+	}
 	if bucket.counts[class] >= limit {
 		return false
 	}
@@ -429,7 +449,7 @@ func (s *Server) masterAuthorize(next http.HandlerFunc) http.HandlerFunc {
 			s.writeError(w, http.StatusUnauthorized, "authorization required")
 			return
 		}
-		if !s.allowRate("master", s.rateClassFor(authMaster, r)) {
+		if !s.allowRateForPath("master", s.rateClassFor(authMaster, r), r.URL.Path) {
 			w.Header().Set("Retry-After", "5")
 			s.writeError(w, http.StatusTooManyRequests, "request rate limited")
 			return
@@ -461,7 +481,7 @@ func (s *Server) windowAuthorize(next http.HandlerFunc) http.HandlerFunc {
 			s.writeError(w, http.StatusForbidden, "request rejected")
 			return
 		}
-		if !s.allowRate(s.rateIdentity(auth, r), s.rateClassFor(authWindow, r)) {
+		if !s.allowRateForPath(s.rateIdentity(auth, r), s.rateClassFor(authWindow, r), r.URL.Path) {
 			w.Header().Set("Retry-After", "5")
 			s.writeError(w, http.StatusTooManyRequests, "request rate limited")
 			return
@@ -510,7 +530,7 @@ func (s *Server) operatorAuthorize(next http.HandlerFunc) http.HandlerFunc {
 			s.writeError(w, http.StatusForbidden, "request rejected")
 			return
 		}
-		if !s.allowRate(s.rateIdentity(auth, r), s.rateClassFor(authOperate, r)) {
+		if !s.allowRateForPath(s.rateIdentity(auth, r), s.rateClassFor(authOperate, r), r.URL.Path) {
 			w.Header().Set("Retry-After", "5")
 			s.writeError(w, http.StatusTooManyRequests, "request rate limited")
 			return

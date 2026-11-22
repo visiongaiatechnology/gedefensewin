@@ -9,7 +9,7 @@
 **English** · [Deutsch](README.de.md) · [Русский](README.ru.md) · [中文](README.zh.md)
 
 [![License](https://img.shields.io/badge/License-AGPL--3.0--only-blue?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-6.0.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases/tag/v6.0.0)
+[![Version](https://img.shields.io/badge/Version-6.1.0-orange?style=for-the-badge)](https://github.com/visiongaiatechnology/gedefensewin/releases/tag/v6.1.0)
 [![Status](https://img.shields.io/badge/Status-Public_Beta-yellow?style=for-the-badge)](#public-beta-advisory)
 [![Platform](https://img.shields.io/badge/Platform-Windows_11_x64-lightgrey?style=for-the-badge&logo=windows)](#system-requirements)
 [![Control Plane](https://img.shields.io/badge/Control_Plane-Local%2FSovereign-brightgreen?style=for-the-badge)](#local-sovereignty-and-privacy)
@@ -32,9 +32,9 @@
 
 
 > [!IMPORTANT]
-> **GeDefense Windows 6.0.0 (`v6.0.0`):** Adds V6 Sovereign Anti-Spyware sensors (BYOVD, camera/mic/screen/location capability consent, persistence, LSASS), out-of-band Ed25519 evidence witness, StyX passive beacon detection, Emergency Lockdown, AppContainer ParserCells, native ETW/WFP/TPM posture, all 23 VGT-100 security fixes, and Go `1.26.11`. See [CHANGELOG.md](CHANGELOG.md) for full details.
+> **GeDefense Windows 6.1.0 (`v6.1.0`):** Adds Microsoft Defender Deep Symbiosis (16 event IDs, Titan Artifact Oracle, cross-engine `FairScorer` trust bridge), reversible `NtSuspendProcess`-tree containment, Glass 2100 XDR Symbiosis controls, Setup Wizard offline `AGENTS.md` AI-onboarding blueprint (zero remote AI APIs), V6 Sovereign Anti-Spyware, out-of-band Ed25519 witness, and Go `1.26.11`. See [CHANGELOG.md](CHANGELOG.md) for full details.
 >
-> **[Download Inno Setup Installer (v6.0.0, recommended)](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v6.0.0/GeDefense-Setup-Inno-x64-v6.0.0.exe)** · **[Standalone Installer (v6.0.0)](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v6.0.0/GeDefense-Setup-x64-v6.0.0.exe)**
+> **[Download Inno Setup Installer (v6.1.0, recommended)](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v6.1.0/GeDefense-Setup-Inno-x64-v6.1.0.exe)** · **[Standalone Installer (v6.1.0)](https://github.com/visiongaiatechnology/gedefensewin/releases/download/v6.1.0/GeDefense-Setup-x64-v6.1.0.exe)**
 
 ## 🌐 The GeDefense universe
 
@@ -52,13 +52,13 @@ GeDefense is one local-first security fabric — for Linux, Windows, Android and
 ## ⚠️ Public Beta Advisory
 
 > [!IMPORTANT]
-> **Status: Public Beta — GeDefense Windows 6.0.0.**
+> **Status: Public Beta — GeDefense Windows 6.1.0.**
 >
 > GeDefense Titan is under active development. **This beta can contain errors — including security defects.** We work continuously on hardening, testing and fixes, and we welcome every reproducible report.
 >
 > - Please use the beta on test systems first, keep backups and do not rely on it as the only security control of a productive environment.
 > - Report bugs, security issues and feature requests via [GitHub Issues](https://github.com/visiongaiatechnology/gedefensewin/issues) or responsibly via [SECURITY.md](SECURITY.md).
-> - This release is **self-signed** and has **no public CA trust**; there is no RFC 3161 timestamp, CRL/OCSP revocation path or externally anchored anti-rollback channel yet. For these reasons, 6.0.0 is **not a publicly trusted release**. See [Verification and trust](#verification-and-trust).
+> - This release is **self-signed** and has **no public CA trust**; there is no RFC 3161 timestamp, CRL/OCSP revocation path or externally anchored anti-rollback channel yet. For these reasons, 6.1.0 is **not a publicly trusted release**. See [Verification and trust](#verification-and-trust).
 > - The core architecture is verified by automated release gates (Go race, Go vet, govulncheck, SBOM, provenance, installer and publish gates). Live installation and security-policy mutations still belong on an isolated test VM.
 
 ---
@@ -92,18 +92,17 @@ Titan combines:
 
 ---
 
-## What's new in 6.0.0 ([CHANGELOG.md](CHANGELOG.md))
+## What's new in 6.1.0 ([CHANGELOG.md](CHANGELOG.md))
 
-- **V6 Sovereign Anti-Spyware (`internal/spyware`, `V6 Sovereign` UI):** BYOVD vulnerable-driver & `WinVerifyTrust` Authenticode checks, webcam/mic/screen-capture/location capability consent store monitoring, Windows persistence detection (`IFEO`, `SilentProcessExit`, `AppCertDlls`, `AppInit_DLLs`, LSA packages, Print Monitors), and LSASS Event Log (`4656`/`4663`) inspection.
-- **Out-of-Band Evidence Witness (`internal/witness`):** Ed25519-signed ledger checkpoints, AES-256-GCM outbox, SPKI-pinned HTTPS transport, fail-closed rollback/fork detection, and air-gapped `vgtw1:` export.
-- **StyX Passive Egress & Beaconing (`internal/mhx/styx_*`):** IPv4/IPv6 TCP flow telemetry & beacon scoring (`OBSERVE_ONLY`).
-- **Emergency Lockdown (`internal/lockdown`) & Ephemeral Parser Cells (`internal/parsercells`):** AES-256-GCM state with `expected_epoch` Compare-Set, BadUSB composite classifier, PID+CreationTime broker freezer, and zero-capability AppContainer isolation.
-- **Native WinAPI V6 Foundations (`internal/winapi`):** Real-time ETW (`StartTraceW`/`ProcessTrace`/`tdh.dll`), direct WFP transactions (`fwpuclnt.dll`) + `SetTcpEntry`, and TPM 2.0 / WBCL / Secure Boot / HVCI measured boot posture (`tbs.dll` + `ncrypt.dll`).
-- **VGT-100 Security Remediation & Go `1.26.11`:** All 23 VGT-100 audit findings remediated (fail-closed de-elevation, operator broker Authenticode/image binding, signed Titan quarantine integrity, HMAC high-water/clock anchors, `secretfs` pre-write DACLs, release-channel hygiene) and Go updated to `1.26.11` (`GO-2026-6859`).
+- **Microsoft Defender Deep Symbiosis (`GeDefense × Defender`):** Bilateral real-time integration across **16 Defender Operational event IDs** (including ASR `1121`/`1122`, Controlled Folder Access `1123`/`1124`, Network Protection `1125`/`1126`, remediation failures `1118`/`1119`, tamper events `5001`/`5007`/`5010`/`5012`/`5013`) with 60s-cooldown auto-reconcile, Authenticode-verified `MpCmdRun.exe` **Titan Artifact Oracle**, bidirectional `FairScorer` correlation (`CalculateFairScoreWithSymbiosis`), and manual scan/reconcile APIs (`POST /api/v1/mhx/defender/scan-file`, `/defender/reconcile`).
+- **Reversible `NtSuspendProcess`-Tree Containment & XDR Symbiosis UI:** CreationTime-, ImagePath-, Protected-OS- and Self-Protection-verified process-tree freeze/resume/terminate (`GET /api/v1/mhx/containments`, `POST .../resume` requiring `"RESUME CONTAINED PROCESS"`, `POST .../terminate`) with Glass 2100 controls under **MHX XDR**.
+- **Offline `AGENTS.md` Setup Onboarding (Zero Remote AI API):** Export/copy a host-, software-, and toolchain-tailored `AGENTS.md` + starter prompt directly in the First-Run Setup Wizard and **System** view (including optional `setupDevRoots` registration) so local CLI/IDE AI agents can inspect read-only and configure safely without exposing any inbound AI endpoint or tokens.
+- **Live Resilience & Inno UTF-8 BOM Fix:** Individual filtering of over-broad Spamhaus NDJSON prefixes (`< /16`, `< /32`) instead of rejecting feeds, self-healing quarantine/recovery for corrupted App Control JSON files, per-path `rateLong` request budgets, and UTF-8 BOM (`EF BB BF`) encoding for all Inno Setup 7 scripts and localized license/terms files (`de`/`en`/`ru`/`zh`).
+- **V6 Sovereign Base (from 6.0.0):** V6 Anti-Spyware sensors (BYOVD, camera/mic/screen/location, persistence, LSASS), Ed25519 Witness + AES-256-GCM outbox, StyX passive egress & enforcement, Emergency Lockdown, AppContainer ParserCells, native ETW/WFP/TPM posture, 23 VGT-100 security remediations, and Go `1.26.11`.
 
 ## Built for critical scenarios
 
-GeDefense Windows 6.0.0 is designed for Windows 11 endpoints where the operator must keep control in isolated, regulated or offline environments: local-only control plane, no cloud dependency, verifiable evidence, bounded resources and explicit response boundaries. It is **not** a claim of complete protection: kernel/firmware compromise, a malicious local administrator and a full supply-chain compromise remain outside the product boundary; the build is self-signed and still a public beta.
+GeDefense Windows 6.1.0 is designed for Windows 11 endpoints where the operator must keep control in isolated, regulated or offline environments: local-only control plane, no cloud dependency, verifiable evidence, bounded resources and explicit response boundaries. It is **not** a claim of complete protection: kernel/firmware compromise, a malicious local administrator and a full supply-chain compromise remain outside the product boundary; the build is self-signed and still a public beta.
 
 ## Architecture
 
@@ -140,12 +139,12 @@ VGTGeDefense Windows Service (LocalSystem)     sovereign control plane
 
 ## Installation
 
-1. Download `GeDefense-Setup-Inno-x64-v6.0.0.exe` (or standalone `GeDefense-Setup-x64-v6.0.0.exe`) from the [releases page](https://github.com/visiongaiatechnology/gedefensewin/releases/tag/v6.0.0).
+1. Download `GeDefense-Setup-Inno-x64-v6.1.0.exe` (or standalone `GeDefense-Setup-x64-v6.1.0.exe`) from the [releases page](https://github.com/visiongaiatechnology/gedefensewin/releases/tag/v6.1.0).
 2. Measure and inspect the artifact:
 
    ```powershell
-   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-Inno-x64-v6.0.0.exe
-   Get-AuthenticodeSignature .\GeDefense-Setup-Inno-x64-v6.0.0.exe
+   Get-FileHash -Algorithm SHA256 .\GeDefense-Setup-Inno-x64-v6.1.0.exe
+   Get-AuthenticodeSignature .\GeDefense-Setup-Inno-x64-v6.1.0.exe
    ```
 
    The installer is currently **self-signed**. `Get-AuthenticodeSignature` reports `Valid` only on hosts that already trust the VGT certificate; for everyone else the expected state is `NotTrusted`/`UnknownError`. The measured SHA-256 must match `SHA256SUMS.txt` and the `.sha256` sidecar of the release.
@@ -250,10 +249,10 @@ The optional local CSV (`data/geoip.csv`, delivered in the installer payload, no
 
 ## Build from source
 
-Requirements: Windows 11 x64, Windows PowerShell 5.1 x64, Go **1.26.10** (see `TOOLCHAINS.lock`) and a C compiler suitable for the Go race detector.
+Requirements: Windows 11 x64, Windows PowerShell 5.1 x64, Go **1.26.11** (see `TOOLCHAINS.lock`) and a C compiler suitable for the Go race detector.
 
 ```powershell
-$env:GOTOOLCHAIN = 'go1.26.10'
+$env:GOTOOLCHAIN = 'go1.26.11'
 # 1) deterministic source archive + SOURCE-MANIFEST
 & .\build\Build-SourceRelease.ps1
 # 2) full release gate + signed payload/installer + SBOM/provenance/sidecar/SHA256SUMS

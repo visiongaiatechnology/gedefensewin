@@ -26,6 +26,7 @@ const (
 	MBIconInformation uint32 = 0x00000040
 
 	ProcessTerminate               uint32 = 0x0001
+	ProcessSuspendResume           uint32 = 0x0800
 	ProcessQueryLimitedInformation uint32 = 0x1000
 
 	MoveFileReplaceExisting uint32 = 0x00000001
@@ -259,14 +260,21 @@ type ProcessIdentity struct {
 }
 
 func OpenProcessIdentity(pid uint32, terminate bool) (ProcessIdentity, error) {
-	if pid <= 4 {
-		return ProcessIdentity{}, errors.New("protected process boundary")
-	}
 	access := ProcessQueryLimitedInformation
 	if terminate {
 		access |= ProcessTerminate
 	}
-	handle, _, callErr := procOpenProcess.Call(uintptr(access), 0, uintptr(pid))
+	return OpenProcessIdentityAccess(pid, access)
+}
+
+// OpenProcessIdentityAccess opens pid with the requested Windows access rights
+// merged with ProcessQueryLimitedInformation and reads its kernel-verified
+// creation timestamp and full executable image path.
+func OpenProcessIdentityAccess(pid uint32, access uint32) (ProcessIdentity, error) {
+	if pid <= 4 {
+		return ProcessIdentity{}, errors.New("protected process boundary")
+	}
+	handle, _, callErr := procOpenProcess.Call(uintptr(access|ProcessQueryLimitedInformation), 0, uintptr(pid))
 	if handle == 0 {
 		if err := errnoResult(callErr); err != nil {
 			return ProcessIdentity{}, err

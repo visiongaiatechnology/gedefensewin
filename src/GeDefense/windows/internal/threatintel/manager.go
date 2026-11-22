@@ -62,6 +62,7 @@ type Manager struct {
 	authorityConfigured bool
 	authorityError      string
 	authorityState      feedAuthorityState
+	hostAuthorityKey    ed25519.PrivateKey
 
 	// Wall-clock trust anchor (DP-FIND-014 / FIND-WIN-015).
 	clockMu         sync.RWMutex
@@ -226,11 +227,13 @@ func (m *Manager) Sync(ctx context.Context) error {
 	// bounded worker pool so one slow upstream does not serialize all nine feeds,
 	// while the authoritative catalog order and per-feed safety gates stay intact.
 	type fetchResult struct {
-		index    int
-		source   Source
-		snapshot sourceSnapshot
-		state    FeedState
-		err      error
+		index       int
+		source      Source
+		indicators  []string
+		attribution Attribution
+		snapshot    sourceSnapshot
+		state       FeedState
+		err         error
 	}
 	results := make([]fetchResult, len(catalog))
 	var workers sync.WaitGroup
@@ -259,42 +262,73 @@ func (m *Manager) Sync(ctx context.Context) error {
 					indicators = append(indicators, prefix.String())
 				}
 				sort.Strings(indicators)
-				var previousReference *sourceSnapshot
-				if hasPrevious {
-					previousCopy := previous
-					previousReference = &previousCopy
-				}
-				authorityDocument, authorityErr := m.verifyFetchedAuthority(source, indicators, previousReference)
-				if authorityErr != nil {
-					result.err = authorityErr
-					results[index] = result
-					return
-				}
-				snapshot := sourceSnapshot{
-					SchemaVersion:    SchemaVersion,
-					Key:              source.Key,
-					GeneratedUTC:     attempt,
-					Action:           source.Action,
-					Attribution:      attribution,
-					GenerationSHA256: digestIndicators(source.Key, source.Action, indicators),
-					Indicators:       indicators,
-					Authority:        authorityDocument,
-				}
-				if writeErr := writeSourceSnapshot(m.root, snapshot); writeErr != nil {
-					err = writeErr
-				} else {
-					result.snapshot = snapshot
-				}
+				result.indicators = indicators
+				result.attribution = attribution
 			}
 			result.err = err
 			results[index] = result
 		}(index, source, previous, hasPrevious)
 	}
 	workers.Wait()
-	for index := range results {
-		if results[index].err == nil {
-			m.updateFeedAuthorityState(results[index].snapshot.Authority)
+
+	if m.hostAuthorityActive() {
+		toAttest := make(map[string]sourceSnapshot, len(catalog))
+		for key, snapshot := range candidate {
+			toAttest[key] = snapshot
 		}
+		fetchedCount := 0
+		for index := range results {
+			if results[index].err != nil {
+				continue
+			}
+			fetchedCount++
+			source := results[index].source
+			toAttest[source.Key] = sourceSnapshot{
+				SchemaVersion:    SchemaVersion,
+				Key:              source.Key,
+				GeneratedUTC:     attempt,
+				Action:           source.Action,
+				Attribution:      results[index].attribution,
+				GenerationSHA256: digestIndicators(source.Key, source.Action, results[index].indicators),
+				Indicators:       results[index].indicators,
+			}
+		}
+		if fetchedCount > 0 && len(toAttest) > 0 {
+			_, _ = m.signAndPersistHostAuthority(attempt, toAttest)
+		}
+	}
+
+	for index := range results {
+		if results[index].err != nil {
+			continue
+		}
+		source := results[index].source
+		var previousReference *sourceSnapshot
+		if previous, hasPrevious := candidate[source.Key]; hasPrevious {
+			previousCopy := previous
+			previousReference = &previousCopy
+		}
+		authorityDocument, authorityErr := m.verifyFetchedAuthority(source, results[index].indicators, previousReference)
+		if authorityErr != nil {
+			results[index].err = authorityErr
+			continue
+		}
+		snapshot := sourceSnapshot{
+			SchemaVersion:    SchemaVersion,
+			Key:              source.Key,
+			GeneratedUTC:     attempt,
+			Action:           source.Action,
+			Attribution:      results[index].attribution,
+			GenerationSHA256: digestIndicators(source.Key, source.Action, results[index].indicators),
+			Indicators:       results[index].indicators,
+			Authority:        authorityDocument,
+		}
+		if writeErr := writeSourceSnapshot(m.root, snapshot); writeErr != nil {
+			results[index].err = writeErr
+			continue
+		}
+		results[index].snapshot = snapshot
+		m.updateFeedAuthorityState(snapshot.Authority)
 	}
 
 	fresh := 0
@@ -707,6 +741,35 @@ func (m *Manager) loadCached() {
 	blockingTotal := 0
 	aggregate := 0
 	rollback := m.clockRollbackDetected()
+	if !rollback && m.hostAuthorityActive() {
+		now := m.effectiveNowUTC()
+		validCached := make(map[string]sourceSnapshot, len(catalog))
+		_, docStatErr := os.Lstat(feedAuthorityDocPath(m.root))
+		needsHostAttestation := errors.Is(docStatErr, os.ErrNotExist)
+		for _, source := range catalog {
+			snapshot, err := readSourceSnapshot(m.root, source)
+			if err != nil || m.snapshotExpired(snapshot, now) {
+				continue
+			}
+			validCached[source.Key] = snapshot
+			if m.verifyCachedAuthority(&snapshot) != nil {
+				needsHostAttestation = true
+			}
+		}
+		if needsHostAttestation && len(validCached) > 0 {
+			if document, err := m.signAndPersistHostAuthority(now, validCached); err == nil && document != nil {
+				for _, source := range catalog {
+					snapshot, exists := validCached[source.Key]
+					if !exists {
+						continue
+					}
+					snapshot.Authority = document
+					_ = writeSourceSnapshot(m.root, snapshot)
+				}
+				m.updateFeedAuthorityState(document)
+			}
+		}
+	}
 	for _, source := range catalog {
 		effectiveAction := m.effectiveAction(source.Key)
 		if effectiveAction == ActionBlock {

@@ -155,13 +155,13 @@ func TestSentinelStoreAndWhitelist(t *testing.T) {
 	// FIND-WIN-009: the legacy "*antigravity.exe" default wildcard is shipped
 	// disabled because it authorized any binary with that basename, including a
 	// user-writable copy. An owner must add an exact path or a pinned entry.
-	allowed, name, isSys = store.IsAppAllowed(`C:\Users\Masterboard\AppData\Local\Programs\antigravity.exe`)
+	allowed, name, isSys = store.IsAppAllowed(`C:\Users\operator\AppData\Local\Programs\antigravity.exe`)
 	if allowed {
 		t.Fatalf("legacy filename-only wildcard must not authorize antigravity.exe, got allowed=%v name=%s isSys=%v", allowed, name, isSys)
 	}
 
 	// Verify Unknown App
-	allowed, _, _ = store.IsAppAllowed(`C:\Users\Masterboard\AppData\Local\Temp\malware.exe`)
+	allowed, _, _ = store.IsAppAllowed(`C:\Users\operator\AppData\Local\Temp\malware.exe`)
 	if allowed {
 		t.Fatalf("expected malware.exe NOT to be allowed")
 	}

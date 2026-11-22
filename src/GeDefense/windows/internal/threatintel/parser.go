@@ -111,9 +111,15 @@ func parseNDJSON(body []byte, attribution Attribution, requireMetadata bool) ([]
 		if token == "" {
 			continue
 		}
+		if !isSyntacticallyValidThreatToken(token) {
+			return nil, attribution, errors.New("threat feed CIDR validation failed")
+		}
 		prefix, err := parseThreatToken(token)
 		if err != nil {
-			return nil, attribution, errors.New("threat feed CIDR validation failed")
+			// Skip policy-vetoed prefixes (e.g. Spamhaus allocations broader
+			// than /16 IPv4 or /32 IPv6 rejected by FIND-WIN-015) cleanly like
+			// parsePlain instead of failing the entire feed.
+			continue
 		}
 		result = append(result, prefix)
 		if len(result) > maximumSourceIndicators {

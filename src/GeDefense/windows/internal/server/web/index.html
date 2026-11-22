@@ -1090,6 +1090,32 @@
         </div>
         <div class="xdr-status" id="xdrMetrics" aria-live="polite"></div>
 
+        <article class="glass section-card symbiosis-card" id="mhxSymbiosisCard">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">DEFENDER DEEP SYMBIOSIS</p>
+              <h3>Microsoft Defender Symbiose &amp; Prozessbaum-Containment</h3>
+              <p>Korreliert Defender-Events (1116–1126, 5001–5013) mit Echtzeitprozessen, friert Ransomware-Prozessbäume reversibel ein (<code>NtSuspendProcess</code>), heilt Manipulationen automatisch und nutzt das signierte <code>MpCmdRun.exe</code>-Oracle.</p>
+            </div>
+            <div class="symbiosis-head-actions">
+              <span id="symbiosisState" class="status-pill info">SYMBIOSE AKTIV</span>
+              <button type="button" id="symbiosisReconcile" class="button ghost small">Baseline abgleichen</button>
+            </div>
+          </div>
+          <div id="symbiosisStats" class="compact-stats symbiosis-stats" aria-live="polite"></div>
+          <div class="app-add symbiosis-scan-bar">
+            <label><span>Datei mit Defender-Oracle prüfen</span><input id="symbiosisScanPath" type="text" maxlength="1024" autocomplete="off" spellcheck="false" placeholder="C:\Users\Beispiel\Downloads\datei.exe"></label>
+            <button type="button" id="symbiosisScanRun" class="button primary">Mit Defender scannen</button>
+            <button type="button" id="symbiosisReload" class="button ghost">Aktualisieren</button>
+          </div>
+          <div id="symbiosisScanResult" class="form-status" role="status" aria-live="polite"></div>
+          <div class="symbiosis-containment-head">
+            <strong>Reversible Prozessbaum-Containments</strong>
+            <span id="symbiosisContainmentCount" class="status-pill info">0 AKTIV</span>
+          </div>
+          <div id="symbiosisContainments" class="app-list" aria-live="polite"></div>
+        </article>
+
         <article class="glass section-card xdr-policy-card">
           <div class="section-head">
             <div><p class="eyebrow">XDR-RICHTLINIE</p><h3>Aggressivität, Response und Benachrichtigungen</h3><p>Änderungen werden serverseitig validiert. Nicht anwendbare Einstellungen werden abgelehnt, nicht still akzeptiert.</p></div>
@@ -1419,7 +1445,11 @@
             <h2>Lokale GeDefense-Instanz.</h2>
             <p>Keine Cloud-Control-Plane, keine CDN-Abhängigkeiten und keine zusätzlichen Runtime-Module. Version und Bereitschaft stammen direkt aus der lokalen Control Plane.</p>
           </div>
-          <button type="button" id="systemHealthCheck" class="button ghost">Bereitschaftsprüfung öffnen</button>
+          <div class="action-row">
+            <button type="button" id="systemAgentsBlueprint" class="button ghost">AGENTS.md (KI-Agent)</button>
+            <button type="button" id="systemOpenSetupWizard" class="button ghost">Einrichtungsassistent öffnen</button>
+            <button type="button" id="systemHealthCheck" class="button ghost">Bereitschaftsprüfung öffnen</button>
+          </div>
         </div>
         <div class="system-grid">
           <article class="glass system-card"><span>VERSION</span><strong id="systemVersion">---</strong></article>

@@ -65,6 +65,27 @@ func TestSpamhausMetadataIsMandatory(t *testing.T) {
 	}
 }
 
+func TestSpamhausNDJSONSkipsOverBroadPrefixesAndRejectsMalformed(t *testing.T) {
+	v4, _ := sourceByKey("spamhaus_drop_v4")
+	v4Body := []byte("{\"cidr\":\"42.128.0.0/12\"}\n{\"cidr\":\"93.184.216.0/24\"}\n{\"type\":\"metadata\",\"timestamp\":1787822042,\"copyright\":\"Spamhaus\",\"terms\":\"https://www.spamhaus.org/drop/terms/\"}\n")
+	v4Prefixes, _, err := parseSource(v4, v4Body)
+	if err != nil || len(v4Prefixes) != 1 || v4Prefixes[0].String() != "93.184.216.0/24" {
+		t.Fatalf("spamhaus_drop_v4 over-broad filtering failed: err=%v prefixes=%+v", err, v4Prefixes)
+	}
+
+	v6, _ := sourceByKey("spamhaus_drop_v6")
+	v6Body := []byte("{\"cidr\":\"2a00:4c80::/29\"}\n{\"cidr\":\"2001:678:254::/48\"}\n{\"type\":\"metadata\",\"timestamp\":1787822042,\"copyright\":\"Spamhaus\",\"terms\":\"https://www.spamhaus.org/drop/terms/\"}\n")
+	v6Prefixes, _, err := parseSource(v6, v6Body)
+	if err != nil || len(v6Prefixes) != 1 || v6Prefixes[0].String() != "2001:678:254::/48" {
+		t.Fatalf("spamhaus_drop_v6 over-broad filtering failed: err=%v prefixes=%+v", err, v6Prefixes)
+	}
+
+	malformed := []byte("{\"cidr\":\"not-a-cidr\"}\n{\"type\":\"metadata\",\"timestamp\":1787822042,\"copyright\":\"Spamhaus\",\"terms\":\"https://www.spamhaus.org/drop/terms/\"}\n")
+	if _, _, err := parseSource(v4, malformed); err == nil {
+		t.Fatal("malformed CIDR in NDJSON feed was not rejected")
+	}
+}
+
 func TestIndexPreservesSourcesAndHighestAction(t *testing.T) {
 	now := time.Now().UTC()
 	snapshots := map[string]sourceSnapshot{

@@ -2,6 +2,7 @@
 package server
 
 import (
+	"context"
 	"embed"
 	"io/fs"
 	"net/http"
@@ -29,6 +30,7 @@ const (
 	confirmationAddDevelopmentRoot    = "ADD DEVELOPMENT ROOT"
 	confirmationRemoveDevelopmentRoot = "REMOVE DEVELOPMENT ROOT"
 	confirmationOwnerProcessImages    = "UPDATE OWNER PROCESS IMAGES"
+	confirmationResumeContainment     = "RESUME CONTAINED PROCESS"
 	setupConfirmation                 = "COMPLETE SETUP"
 )
 
@@ -73,17 +75,39 @@ func newServerWithV6(version, token string, engine HardeningEngine, auditEngine 
 		windowCommands:       make(chan string, 1), windowStateVal: "normal",
 	}
 	if titanEngine != nil && mhxEngine != nil {
-		// Adapter between the two engine boundaries: Titan hands over full
-		// identity evidence, MHX re-verifies it before any termination. Neither
-		// package imports the other.
+		// Adapter between the three engine boundaries: Titan hands over full
+		// identity evidence, MHX records cross-engine compromise correlation and
+		// executes verified tree termination/freeze, and Defender's scan oracle
+		// inspects unexpected file artifacts asynchronously.
 		titanEngine.SetKillerdomBridge(func(target titan.KillerdomTarget) error {
-			return mhxEngine.TerminateTarget(mhx.TerminationTarget{
+			req := mhx.TerminationTarget{
 				PID:              target.PID,
 				CreationUnixNano: target.CreationUnixNano,
 				ImagePath:        target.ImagePath,
 				Reason:           target.Reason,
-			})
+			}
+			if correlator, ok := mhxEngine.(interface{ RecordTitanCompromise(mhx.TerminationTarget) }); ok {
+				correlator.RecordTitanCompromise(req)
+			}
+			if treeKiller, ok := mhxEngine.(interface {
+				TerminateProcessTree(mhx.TerminationTarget) (int, error)
+			}); ok {
+				if _, err := treeKiller.TerminateProcessTree(req); err == nil {
+					return nil
+				}
+			}
+			return mhxEngine.TerminateTarget(req)
 		})
+		if oracleSetter, ok := titanEngine.(interface {
+			SetArtifactOracle(func(context.Context, string) (bool, string, error))
+		}); ok {
+			if symbiosis, ok := mhxEngine.(mhxSymbiosisProvider); ok {
+				oracleSetter.SetArtifactOracle(func(ctx context.Context, path string) (bool, string, error) {
+					res, err := symbiosis.ScanFileWithDefender(ctx, path)
+					return res.ThreatFound, res.ThreatName, err
+				})
+			}
+		}
 	}
 	return s, s.routes()
 }
@@ -206,6 +230,12 @@ func (s *Server) routes() http.Handler {
 	read("/api/v1/mhx/application-denies", s.mhxApplicationDenies)
 	policy("/api/v1/mhx/application-denies", s.mhxSetApplicationDeny)
 	operate("/api/v1/mhx/policy/reconcile", s.mhxReconcilePolicy)
+	read("/api/v1/mhx/symbiosis", s.mhxSymbiosisStatus)
+	operate("/api/v1/mhx/defender/scan-file", s.mhxDefenderScanFile)
+	policy("/api/v1/mhx/defender/reconcile", s.mhxDefenderReconcile)
+	read("/api/v1/mhx/containments", s.mhxContainments)
+	confirmed("/api/v1/mhx/containments/{id}/resume", confirmationResumeContainment, s.mhxResumeContainment)
+	policy("/api/v1/mhx/containments/{id}/terminate", s.mhxTerminateContainment)
 	read("/api/v1/integrity/status", s.integrityStatus)
 	read("/api/v1/integrity/changes", s.integrityChanges)
 	confirmed("/api/v1/integrity/configuration", confirmationIntegrityMonitoring, s.integrityConfiguration)

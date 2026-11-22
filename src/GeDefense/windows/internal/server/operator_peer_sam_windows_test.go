@@ -316,7 +316,7 @@ func TestSAMOperatorMembershipFailsClosedOnGroupMismatch(t *testing.T) {
 // never authorises through the fallback.
 func TestSAMOperatorMembershipRejectsInvalidPeerSID(t *testing.T) {
 	groupSID := requireLocalOperatorGroup(t)
-	for _, peerSID := range []string{"", "desktop-ggoopka\\masterboard", "S-1-5-21-\x00", strings.Repeat("9", maxSIDTextBytes+1)} {
+	for _, peerSID := range []string{"", "workstation\\operator", "S-1-5-21-\x00", strings.Repeat("9", maxSIDTextBytes+1)} {
 		member, err := samOperatorMembership(groupSID, peerSID)
 		if err == nil {
 			t.Fatalf("invalid peer SID %q accepted", peerSID)

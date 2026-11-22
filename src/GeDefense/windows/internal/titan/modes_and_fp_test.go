@@ -103,7 +103,7 @@ func TestTitanFalsePositiveNormalization(t *testing.T) {
 		Object: Object{
 			Kind: ObjectFile,
 			Name: "Microsoft.Data.SqlClient.resources.dll",
-			Path: `C:\Users\Masterboard\AppData\Local\Temp\fu2kx2yr.smf\resources\de\Microsoft.Data.SqlClient.resources.dll`,
+			Path: `C:\Users\operator\AppData\Local\Temp\fu2kx2yr.smf\resources\de\Microsoft.Data.SqlClient.resources.dll`,
 		},
 		Actor: Actor{
 			Image: "consent.exe",
@@ -162,7 +162,7 @@ func TestTitanFalsePositiveNormalization(t *testing.T) {
 		Object: Object{
 			Kind: ObjectFile,
 			Name: "winapi.test.exe",
-			Path: `C:\Users\Masterboard\AppData\Local\Temp\go-build91238\b001\winapi.test.exe`,
+			Path: `C:\Users\operator\AppData\Local\Temp\go-build91238\b001\winapi.test.exe`,
 		},
 		Actor: Actor{
 			Image:              "go.exe",

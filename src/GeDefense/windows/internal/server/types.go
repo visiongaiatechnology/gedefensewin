@@ -148,9 +148,10 @@ const (
 )
 
 type rateBucket struct {
-	started  time.Time
-	counts   map[rateClass]int
-	lastSeen time.Time
+	started   time.Time
+	counts    map[rateClass]int
+	longPaths map[string]int
+	lastSeen  time.Time
 }
 
 type replayGuard struct {

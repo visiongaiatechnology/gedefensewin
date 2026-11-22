@@ -190,3 +190,57 @@ func TestEnforcementSnapshotWithdrawnWhenAuthorityDisappears(t *testing.T) {
 		t.Fatalf("enforcement projection survived the authority loss: %v", statErr)
 	}
 }
+
+func TestHostFeedAuthorityProvisionsAndAttestsLegacyCachedSnapshots(t *testing.T) {
+	root := t.TempDir()
+	generated := time.Now().UTC().Add(-time.Minute)
+	fixtures := map[string][]string{
+		"feodo":            {"45.155.205.0/24"},
+		"spamhaus_drop_v4": {"46.155.205.0/24"},
+		"spamhaus_drop_v6": {"2a02:1234::/32"},
+		"firehol_l1":       {"47.155.205.0/24"},
+	}
+	for key, indicators := range fixtures {
+		source, _ := sourceByKey(key)
+		writeCachedFeedSnapshot(t, root, source, generated, indicators, nil)
+	}
+	if err := EnsureHostFeedAuthority(root); err != nil {
+		t.Fatalf("EnsureHostFeedAuthority() failed: %v", err)
+	}
+	manager, err := NewManager(root)
+	if err != nil {
+		t.Fatalf("NewManager() failed: %v", err)
+	}
+	status := manager.Status()
+	if status.FeedAuthenticity != feedAuthenticityEnforced || status.FeedEnforcement != feedEnforcementVerified {
+		t.Fatalf("host feed authority was not enforced: %+v", status)
+	}
+	if status.State != "CACHED" || status.BlockingIndicators != 4 || status.BlockingFeedsReady != 4 || status.BlockingFeedsTotal != 4 || len(status.EnforcementGeneration) != 64 {
+		t.Fatalf("host feed authority did not attest cached blocking feeds: %+v", status)
+	}
+	if _, statErr := os.Stat(feedAuthorityDocPath(root)); statErr != nil {
+		t.Fatalf("feed-authority.json was not written: %v", statErr)
+	}
+	if _, statErr := os.Stat(enforcementSnapshotPath(root)); statErr != nil {
+		t.Fatalf("threat-intelligence-enforcement.json was not written: %v", statErr)
+	}
+}
+
+func TestExternalKeyringOverridesHostFeedAuthority(t *testing.T) {
+	root := t.TempDir()
+	if err := EnsureHostFeedAuthority(root); err != nil {
+		t.Fatalf("EnsureHostFeedAuthority() failed: %v", err)
+	}
+	extPub, _ := testAuthorityKeypair(t, "external-enterprise-key")
+	writeAuthorityKeyring(t, root, "external-enterprise-key", extPub)
+	source, _ := sourceByKey("feodo")
+	writeCachedFeedSnapshot(t, root, source, time.Now().UTC().Add(-time.Minute), []string{"45.155.205.0/24"}, nil)
+	manager, err := NewManager(root)
+	if err != nil {
+		t.Fatalf("NewManager() failed: %v", err)
+	}
+	status := manager.Status()
+	if status.BlockingIndicators != 0 || status.EnforcementGeneration != "" {
+		t.Fatalf("local host authority signed despite external pinned keyring: %+v", status)
+	}
+}

@@ -56,7 +56,7 @@ import {
 import {bindTitan, loadTitan} from './titan.js';
 import {bindSentinel, loadSentinel} from './sentinel.js';
 import {bindV6, loadV6} from './v6.js';
-import {initSetupWizard} from './setup-wizard.js';
+import {initSetupWizard, openSetupWizard, downloadAgentsBlueprint} from './setup-wizard.js';
 import {locale} from './i18n.js';
 
 const pages=new Set(['overview','titan','sentinel','v6','protection','threat-intel','xdr','network','kinetic','integrity','hardening','audit','evidence','system']);
@@ -233,6 +233,8 @@ function bindStaticControls(){
   on('reconcilePolicy','click',()=>{void triggerPolicyReconcile()});
 
   for(const id of ['healthRefreshButton','protectionHealthCheck','systemHealthCheck'])on(id,'click',()=>{void startHealthCheck()});
+  on('systemOpenSetupWizard','click',()=>{openSetupWizard()});
+  on('systemAgentsBlueprint','click',()=>{void downloadAgentsBlueprint()});
 
   on('authButton','click',()=>openDialog('authDialog'));
   on('logoutButton','click',async()=>{

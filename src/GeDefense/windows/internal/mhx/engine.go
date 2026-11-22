@@ -89,6 +89,13 @@ type Engine struct {
 	sentinelLogMu              sync.Mutex
 	sentinelLogAt              map[string]time.Time
 	threatHits                 map[uint32]time.Time
+	defenderHits               map[uint32]time.Time
+	titanHits                  map[uint32]time.Time
+	symbiosis                  DefenderSymbiosisStatus
+	lastTamperHealUTC          time.Time
+	defenderOracle             defenderOracleFunc
+	containments               []ContainmentRecord
+	containmentExec            containmentExecutor
 	styx                       *StyxBeaconEngine
 	styxCollector              *StyxCollector
 	styxIncidents              []StyxIncident
@@ -102,7 +109,11 @@ func NewEngine(root, protectionScript, firewallScript, allowScript, denyScript, 
 	if ledger == nil || !filepath.IsAbs(root) {
 		return nil, errors.New("invalid MHX engine configuration")
 	}
-	feeds, err := threatintel.NewManager(filepath.Join(root, "intelligence"))
+	intelRoot := filepath.Join(root, "intelligence")
+	if err := threatintel.EnsureHostFeedAuthority(intelRoot); err != nil {
+		return nil, fmt.Errorf("threat intelligence authority provisioning: %w", err)
+	}
+	feeds, err := threatintel.NewManager(intelRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -270,18 +281,38 @@ func (e *Engine) initializeAppControlStatus(ctx context.Context) {
 
 func (e *Engine) evaluateDefender(event defenderEvent) {
 	timestamp, _ := time.Parse(time.RFC3339Nano, event.TimestampUTC)
+	if timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	}
 	severity, disposition, classification := SeverityMedium, DispositionAudit, "DEFENDER CONFIGURATION"
 	detection := "Microsoft Defender security configuration changed"
-	if event.EventID == 1116 {
+	switch event.EventID {
+	case 1116:
 		severity, disposition, classification, detection = SeverityCritical, DispositionBlock, "DEFENDER DETECTION", "Microsoft Defender detected malware or unwanted software"
-	}
-	if event.EventID == 1117 {
+	case 1117:
 		severity, disposition, classification, detection = SeverityInformational, DispositionAllow, "DEFENDER REMEDIATION", "Microsoft Defender completed a protection action"
-	}
-	if event.EventID == 5001 || event.EventID == 5010 || event.EventID == 5012 {
+	case 1118, 1119:
+		severity, disposition, classification, detection = SeverityCritical, DispositionBlock, "DEFENDER REMEDIATION FAILED", "Microsoft Defender remediation failed; GeDefense containment escalated"
+	case 1121:
+		severity, disposition, classification, detection = SeverityCritical, DispositionBlock, "DEFENDER ASR BLOCK", "Microsoft Defender Attack Surface Reduction blocked execution"
+	case 1122:
+		severity, disposition, classification, detection = SeverityMedium, DispositionAudit, "DEFENDER ASR AUDIT", "Microsoft Defender Attack Surface Reduction audited execution"
+	case 1123:
+		severity, disposition, classification, detection = SeverityCritical, DispositionBlock, "DEFENDER CFA RANSOMWARE BLOCK", "Microsoft Defender Controlled Folder Access blocked protected-folder write"
+	case 1124:
+		severity, disposition, classification, detection = SeverityMedium, DispositionAudit, "DEFENDER CFA AUDIT", "Microsoft Defender Controlled Folder Access audited write"
+	case 1125:
+		severity, disposition, classification, detection = SeverityHigh, DispositionBlock, "DEFENDER NETWORK PROTECTION BLOCK", "Microsoft Defender Network Protection blocked malicious connection"
+	case 1126:
+		severity, disposition, classification, detection = SeverityMedium, DispositionAudit, "DEFENDER NETWORK PROTECTION AUDIT", "Microsoft Defender Network Protection audited connection"
+	case 5001, 5010, 5012:
 		severity, disposition, classification, detection = SeverityCritical, DispositionBlock, "DEFENDER PROTECTION DISABLED", "Microsoft Defender protection control was disabled"
+	case 5004:
+		severity, disposition, classification, detection = SeverityInformational, DispositionAllow, "DEFENDER PROTECTION ENABLED", "Microsoft Defender protection control enabled"
+	case 5013:
+		severity, disposition, classification, detection = SeverityHigh, DispositionAllow, "DEFENDER TAMPER BLOCKED", "Microsoft Defender Tamper Protection blocked an unauthorized change"
 	}
-	analysis := Analysis{ID: analysisID(ProcessEvent{ImagePath: "Microsoft Defender", CommandLine: event.Message}, timestamp), TimestampUTC: timestamp, InitialSeverity: severity, EffectiveSeverity: severity, Disposition: disposition, Detection: detection, Classification: classification, Identified: "Microsoft Defender Antivirus", Purpose: "AMSI, antivirus and platform protection coordination", ConfidenceBasis: 10000, Image: "MsMpEng.exe", Signals: []string{fmt.Sprintf("defender.event.%d", event.EventID)}}
+	analysis := Analysis{ID: analysisID(ProcessEvent{ImagePath: "Microsoft Defender", CommandLine: event.Message}, timestamp), TimestampUTC: timestamp, InitialSeverity: severity, EffectiveSeverity: severity, Disposition: disposition, Detection: detection, Classification: classification, Identified: "Microsoft Defender Antivirus", Purpose: "AMSI, ASR, CFA and platform protection symbiosis", ConfidenceBasis: 10000, Image: "MsMpEng.exe", Signals: []string{fmt.Sprintf("defender.event.%d", event.EventID)}}
 	e.evaluated.Add(1)
 	e.mu.Lock()
 	e.analyses = append(e.analyses, analysis)
@@ -290,6 +321,7 @@ func (e *Engine) evaluateDefender(event defenderEvent) {
 	}
 	e.mu.Unlock()
 	_ = e.ledger.Append("defender.event", detection, fmt.Sprintf("event-%d", event.EventID))
+	e.applyDefenderSymbiosis(event, severity, detection, timestamp)
 	if disposition == DispositionBlock {
 		e.notifyEvent(notificationKindDefender, severity, detection, fmt.Sprintf("Defender event %d", event.EventID))
 	}
@@ -358,15 +390,13 @@ func (e *Engine) evaluate(event ProcessEvent) {
 			}
 		}
 
-		// 5. Fair Behavioral Scoring for Whitelisted / Observed processes.
-		// lineageBreach is false here because an enforced lineage breach already
-		// returned above; threatHit is a real per-PID network correlation from
-		// the threat-intelligence engine. titanCompromised stays false until the
-		// V6 cross-engine correlation bridge feeds it (documented gap: MHX does
-		// not own Titan state).
+		// 5. Fair Behavioral Scoring for Whitelisted / Observed processes with
+		// cross-engine Titan and Microsoft Defender Symbiosis signals.
 		if isAllowed {
 			threatHit := e.pidHasRecentThreatHit(event.PID)
-			scoreRes := CalculateFairScoreForEvent(event, isAllowed, appName, sigMatched, sigID, amsiPatched, false, threatHit, false)
+			titanHit := e.pidHasRecentTitanHit(event.PID)
+			defenderHit := e.pidHasRecentDefenderHit(event.PID)
+			scoreRes := CalculateFairScoreWithSymbiosis(event, isAllowed, appName, sigMatched, sigID, amsiPatched, false, threatHit, titanHit, defenderHit)
 			if scoreRes.StrikeEvent {
 				detection := fmt.Sprintf("FAIR SCORE ESCALATION [%d/100]: %s überschritt Sicherheitsgrenze", scoreRes.Score, appName)
 				e.strikeAndRecord(event, "sentinel.score_escalation", detection, "Sentinel Score Escalation", SeverityCritical)
@@ -509,13 +539,14 @@ func (e *Engine) Status() Status {
 		threatIntelligence = e.feeds.Status()
 	}
 	defenderTelemetry := e.cachedDefenderTelemetry()
+	symbiosisStatus := e.SymbiosisStatus()
 	styxStatus := e.StyxStatus()
 	styxCollectorStatus := e.StyxCollectorStatus()
 	e.mu.RLock()
 	notificationCount := len(e.notifications)
 	styxIncidentCount := len(e.styxIncidents)
 	e.mu.RUnlock()
-	return Status{KineticSources: e.kineticMonitor.SourceSnapshot(250), Traffic: e.trafficMonitor.Snapshot(), KineticArmed: kineticArmed, KineticIncidents: kineticIncidents, KineticThreatCorrelations: e.kineticThreatCorrelations.Load(), KineticBlockedCorrelations: e.kineticBlockedCorrelations.Load(), Kinetic: kineticSnap, KineticReadiness: readiness, UncorrelatedThreatHits: e.networkUncorrelated.Load(), Engine: "VGT MHX 7.1", Realtime: realtime, Telemetry: telemetry, TelemetryHeartbeatUTC: lastTelemetryUTC, Enforcement: enforcement, DefenderBridge: "AMSI + ASR + OPERATIONAL EVENT STREAM", AppControl: appControl, KernelEnforcement: e.kernelEnforcement.Load(), ProtectionMode: mode, ProtectionHealth: protectionHealth, ProtectionVerifiedUTC: protectionVerifiedUTC, EventsEvaluated: e.evaluated.Load(), EventsBlocked: e.blocked.Load(), KnownBenign: e.knownBenign.Load(), ThreatIntelligence: threatIntelligence, ThreatEnforcement: threatEnforcement, NetworkTelemetry: map[bool]string{true: "NATIVE_TCP_OWNER_PID", false: "DEGRADED"}[networkRealtime], NetworkConnections: e.networkObserved.Load(), WFPBlockTelemetry: map[bool]string{true: "POLLING_5157_AUDIT_UNVERIFIED", false: "DEGRADED"}[wfpRealtime], WFPBlockedEvents: e.wfpBlockedObserved.Load(), ThreatNetworkHits: e.networkThreatHits.Load(), AttackStories: uint64(attackStoryCount), KineticSettings: kineticSettings, PolicySettings: policySettings, ThreatIntelPolling: threatIntelPolling, DefenderTelemetry: defenderTelemetry, NotificationCount: notificationCount, Styx: &styxStatus, StyxCollector: &styxCollectorStatus, StyxIncidents: styxIncidentCount}
+	return Status{KineticSources: e.kineticMonitor.SourceSnapshot(250), Traffic: e.trafficMonitor.Snapshot(), KineticArmed: kineticArmed, KineticIncidents: kineticIncidents, KineticThreatCorrelations: e.kineticThreatCorrelations.Load(), KineticBlockedCorrelations: e.kineticBlockedCorrelations.Load(), Kinetic: kineticSnap, KineticReadiness: readiness, UncorrelatedThreatHits: e.networkUncorrelated.Load(), Engine: "VGT MHX 7.1", Realtime: realtime, Telemetry: telemetry, TelemetryHeartbeatUTC: lastTelemetryUTC, Enforcement: enforcement, DefenderBridge: "AMSI + ASR + CFA + ORACLE + SYMBIOSIS STREAM", AppControl: appControl, KernelEnforcement: e.kernelEnforcement.Load(), ProtectionMode: mode, ProtectionHealth: protectionHealth, ProtectionVerifiedUTC: protectionVerifiedUTC, EventsEvaluated: e.evaluated.Load(), EventsBlocked: e.blocked.Load(), KnownBenign: e.knownBenign.Load(), ThreatIntelligence: threatIntelligence, ThreatEnforcement: threatEnforcement, NetworkTelemetry: map[bool]string{true: "NATIVE_TCP_OWNER_PID", false: "DEGRADED"}[networkRealtime], NetworkConnections: e.networkObserved.Load(), WFPBlockTelemetry: map[bool]string{true: "POLLING_5157_AUDIT_UNVERIFIED", false: "DEGRADED"}[wfpRealtime], WFPBlockedEvents: e.wfpBlockedObserved.Load(), ThreatNetworkHits: e.networkThreatHits.Load(), AttackStories: uint64(attackStoryCount), KineticSettings: kineticSettings, PolicySettings: policySettings, ThreatIntelPolling: threatIntelPolling, DefenderTelemetry: defenderTelemetry, DefenderSymbiosis: &symbiosisStatus, NotificationCount: notificationCount, Styx: &styxStatus, StyxCollector: &styxCollectorStatus, StyxIncidents: styxIncidentCount}
 }
 
 func (e *Engine) SentinelStore() *SentinelStore {

@@ -1,6 +1,6 @@
 # GeDefense Inno Setup Installer
 
-Branded Inno Setup 7 installer for GeDefense Windows 5.3.0.
+Branded Inno Setup 7 installer for GeDefense Windows 6.1.0.
 
 ## Why this installer exists
 
@@ -31,9 +31,9 @@ PowerShell. No manual certificate handling is required.
 
 Output:
 
-- `release\GeDefense-Setup-Inno-x64-v5.3.0.exe`
-- `release\GeDefense-Setup-Inno-x64-v5.3.0.exe.sha256`
-- `release\GeDefense-Setup-Inno-x64-v5.3.0.json` (sidecar)
+- `release\GeDefense-Setup-Inno-x64-v6.1.0.exe`
+- `release\GeDefense-Setup-Inno-x64-v6.1.0.exe.sha256`
+- `release\GeDefense-Setup-Inno-x64-v6.1.0.exe.json` (sidecar)
 
 ## Features
 

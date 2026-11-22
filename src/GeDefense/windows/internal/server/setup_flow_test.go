@@ -4,6 +4,7 @@ package server
 import (
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/visiongaiatechnology/gedefense/windows/internal/audit"
@@ -151,5 +152,57 @@ func TestSetupBudgetDoesNotApplyToOtherLongOperations(t *testing.T) {
 		if response.Code != want {
 			t.Fatalf("non-setup long call %d status=%d, want %d: %s", attempt, response.Code, want, response.Body.String())
 		}
+	}
+}
+
+func TestLongOperationRateBudgetsDoNotCrossStarve(t *testing.T) {
+	_, handler := newSecurityTestServer(t)
+	session := mintSession(t, handler, "console-operator", "read", "operate", "policy")
+	for _, path := range []string{"/api/v1/mhx/policy/reconcile", "/api/v1/mhx/feeds/sync", "/api/v1/health/refresh"} {
+		if response := callHandler(handler, http.MethodPost, path, "{}", withBearer(session), withReplayID()); response.Code == http.StatusTooManyRequests {
+			t.Fatalf("%s was starved by unrelated long operation", path)
+		}
+	}
+	// A second sync triggered manually right after startup check must still succeed.
+	if response := callHandler(handler, http.MethodPost, "/api/v1/mhx/feeds/sync", "{}", withBearer(session), withReplayID()); response.Code == http.StatusTooManyRequests {
+		t.Fatalf("manual second feeds/sync was rate limited")
+	}
+	// A third sync on the same endpoint within one minute still trips the per-route limit.
+	if response := callHandler(handler, http.MethodPost, "/api/v1/mhx/feeds/sync", "{}", withBearer(session), withReplayID()); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("third feeds/sync status=%d, want 429", response.Code)
+	}
+}
+
+func TestSetupWizardEmbedsOfflineAgentsBlueprint(t *testing.T) {
+	blueprintRaw, err := assets.ReadFile("web/agents-blueprint.js")
+	if err != nil {
+		t.Fatalf("missing embedded agents-blueprint.js: %v", err)
+	}
+	blueprint := string(blueprintRaw)
+	if !strings.Contains(blueprint, "Zero Remote AI API") || !strings.Contains(blueprint, "127.0.0.1:17831") {
+		t.Fatalf("agents-blueprint.js missing offline local-only invariant")
+	}
+	for _, forbiddenHost := range []string{"api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com"} {
+		if strings.Contains(strings.ToLower(blueprint), forbiddenHost) {
+			t.Fatalf("agents-blueprint.js must never reference remote AI API %s", forbiddenHost)
+		}
+	}
+	wizardRaw, err := assets.ReadFile("web/setup-wizard.js")
+	if err != nil {
+		t.Fatalf("missing embedded setup-wizard.js: %v", err)
+	}
+	wizard := string(wizardRaw)
+	for _, needle := range []string{"./agents-blueprint.js", "buildWindowsAgentsMarkdown", "openSetupWizard", "downloadAgentsBlueprint", "setupDevRoots"} {
+		if !strings.Contains(wizard, needle) {
+			t.Fatalf("setup-wizard.js missing %s", needle)
+		}
+	}
+	indexRaw, err := assets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatalf("missing embedded index.html: %v", err)
+	}
+	idx := string(indexRaw)
+	if !strings.Contains(idx, "systemAgentsBlueprint") || !strings.Contains(idx, "systemOpenSetupWizard") {
+		t.Fatalf("index.html system page missing setup wizard / AGENTS.md controls")
 	}
 }

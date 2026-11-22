@@ -148,12 +148,26 @@ function Save-Baseline {
             DefaultOutboundAction = [string]$_.DefaultOutboundAction
         }
     })
+    $asrIds = @()
+    $asrActions = @()
+    if ($null -ne $preference.AttackSurfaceReductionRules_Ids -and $null -ne $preference.AttackSurfaceReductionRules_Actions) {
+        $rawIds = @($preference.AttackSurfaceReductionRules_Ids)
+        $rawActions = @($preference.AttackSurfaceReductionRules_Actions)
+        $pairCount = [Math]::Min($rawIds.Count, $rawActions.Count)
+        for ($index = 0; $index -lt $pairCount; $index++) {
+            $candidateId = ([string]$rawIds[$index]).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($candidateId)) {
+                $asrIds += $candidateId
+                $asrActions += [int]$rawActions[$index]
+            }
+        }
+    }
     $state = [ordered]@{
         Format = 2
         TimestampUtc = [DateTime]::UtcNow.ToString('o')
         FirewallProfiles = $firewallProfiles
-        AsrIds = @($preference.AttackSurfaceReductionRules_Ids | ForEach-Object { [string]$_ })
-        AsrActions = @($preference.AttackSurfaceReductionRules_Actions | ForEach-Object { [int]$_ })
+        AsrIds = $asrIds
+        AsrActions = $asrActions
     }
     $state['Integrity'] = [ordered]@{
         Algorithm = 'SHA256'
@@ -168,9 +182,17 @@ function Set-AsrRule {
     param([Parameter(Mandatory)][string]$Id,[Parameter(Mandatory)][ValidateSet(0,1,2,6)][int]$Action)
     $preference = Get-MpPreference
     $rules = [ordered]@{}
-    $ids = @($preference.AttackSurfaceReductionRules_Ids)
-    $actions = @($preference.AttackSurfaceReductionRules_Actions)
-    for ($index = 0; $index -lt $ids.Count; $index++) { $rules[[string]$ids[$index]] = [int]$actions[$index] }
+    if ($null -ne $preference.AttackSurfaceReductionRules_Ids -and $null -ne $preference.AttackSurfaceReductionRules_Actions) {
+        $ids = @($preference.AttackSurfaceReductionRules_Ids)
+        $actions = @($preference.AttackSurfaceReductionRules_Actions)
+        $pairCount = [Math]::Min($ids.Count, $actions.Count)
+        for ($index = 0; $index -lt $pairCount; $index++) {
+            $existingId = ([string]$ids[$index]).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($existingId)) {
+                $rules[$existingId] = [int]$actions[$index]
+            }
+        }
+    }
     $rules[$Id] = $Action
     Set-MpPreference -AttackSurfaceReductionRules_Ids @($rules.Keys) -AttackSurfaceReductionRules_Actions @($rules.Values)
 }

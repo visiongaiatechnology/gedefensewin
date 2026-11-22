@@ -125,6 +125,10 @@ export const V5_ENDPOINTS={
   feedPolicy:'/api/v1/mhx/threat-intelligence/feed-policy',
   notifications:'/api/v1/notifications',
   defenderTelemetry:'/api/v1/defender/telemetry',
+  mhxSymbiosis:'/api/v1/mhx/symbiosis',
+  mhxContainments:'/api/v1/mhx/containments',
+  mhxDefenderScanFile:'/api/v1/mhx/defender/scan-file',
+  mhxDefenderReconcile:'/api/v1/mhx/defender/reconcile',
 };
 
 export function getStartupState(signal){
@@ -232,6 +236,38 @@ export function getNotifications(limit=100){
 
 export function getDefenderTelemetry(){
   return optionalApi(V5_ENDPOINTS.defenderTelemetry);
+}
+
+export function getMhxSymbiosis(){
+  return optionalApi(V5_ENDPOINTS.mhxSymbiosis);
+}
+
+export function getMhxContainments(){
+  return optionalApi(V5_ENDPOINTS.mhxContainments);
+}
+
+export function scanFileWithDefender(path){
+  return optionalApi(V5_ENDPOINTS.mhxDefenderScanFile,{method:'POST',json:{path},signal:AbortSignal.timeout(55000)});
+}
+
+export function reconcileDefenderSymbiosis(reason){
+  return optionalApi(V5_ENDPOINTS.mhxDefenderReconcile,{method:'POST',json:{reason},signal:AbortSignal.timeout(250000)});
+}
+
+export function resumeContainment(id,reason){
+  return optionalApi(`/api/v1/mhx/containments/${encodeURIComponent(id)}/resume`,{
+    method:'POST',
+    json:{confirmation:'RESUME CONTAINED PROCESS',reason},
+    signal:AbortSignal.timeout(30000),
+  });
+}
+
+export function terminateContainment(id,reason){
+  return optionalApi(`/api/v1/mhx/containments/${encodeURIComponent(id)}/terminate`,{
+    method:'POST',
+    json:{reason},
+    signal:AbortSignal.timeout(30000),
+  });
 }
 
 /* GeDefense Titan: sovereign endpoint integrity. */

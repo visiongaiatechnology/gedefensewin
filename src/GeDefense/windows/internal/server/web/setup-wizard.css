@@ -120,6 +120,32 @@
 .setup-toolchain-help{margin:4px 0 8px;color:#9fb4ac;font-size:11px;line-height:1.55}
 .setup-toolchain-input{width:100%;min-height:72px;resize:vertical;border-radius:10px;border:1px solid rgba(190,220,210,.2);background:rgba(0,0,0,.28);color:#eaf4ef;padding:9px 10px;font:12px/1.5 ui-monospace,Consolas,monospace}
 .setup-toolchain-input:focus-visible{outline:2px solid #a9d7c5;outline-offset:2px}
+.setup-toolchain-label-spaced{margin-top:12px}
+.setup-agents-card{
+  margin-top:18px;padding:15px 16px;border-radius:16px;
+  border:1px solid rgba(169,215,197,.22);
+  background:linear-gradient(155deg,rgba(169,215,197,.075),rgba(255,255,255,.02));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
+}
+.setup-agents-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.setup-agents-copy{min-width:0;flex:1}
+.setup-agents-kicker{margin:0 0 4px;color:#9fc5b7;font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.setup-agents-title{margin:0 0 6px;font-size:14px;font-weight:620;color:#eef6f2}
+.setup-agents-desc{margin:0;color:#aebeb8;font-size:12px;line-height:1.55;max-width:74ch}
+.setup-agents-badge{
+  flex:none;padding:5px 9px;border-radius:999px;font:600 9px/1.2 ui-monospace,monospace;letter-spacing:.08em;
+  color:#d9f3e7;border:1px solid rgba(169,215,197,.32);background:rgba(169,215,197,.12);
+}
+.setup-agents-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.setup-agents-status{margin:8px 0 0;color:#b9e0cf;font-size:11px}
+.setup-agents-status[hidden]{display:none}
+.setup-agents-preview{margin-top:12px;border-top:1px solid rgba(190,220,210,.1);padding-top:10px}
+.setup-agents-preview summary{cursor:pointer;color:#cfe0d9;font-size:12px;font-weight:560}
+.setup-agents-pre{
+  margin:10px 0 0;padding:12px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+  border-radius:12px;border:1px solid rgba(190,220,210,.14);background:rgba(5,9,12,.72);
+  color:#d6e4de;font:11.5px/1.52 ui-monospace,Consolas,monospace;
+}
 .setup-action-list{list-style:none;margin:0 0 16px;padding:0;display:grid;gap:10px}
 .setup-action{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.055);color:#b9cbc4;font-size:12px;line-height:1.55}
 .setup-action strong{color:#e8f2ed;font-weight:600}
@@ -168,6 +194,6 @@
   .setup-busy::before{animation:none}
 }
 @media (forced-colors:active){
-  .setup-wizard,.setup-panel,.setup-case,.setup-warning,.setup-verify{background:Canvas;border-color:CanvasText}
+  .setup-wizard,.setup-panel,.setup-case,.setup-warning,.setup-verify,.setup-agents-card{background:Canvas;border-color:CanvasText}
   .setup-case[aria-pressed="true"]{outline:2px solid Highlight}
 }

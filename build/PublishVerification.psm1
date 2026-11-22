@@ -92,8 +92,14 @@ function Assert-VgtCleanTag {
     $tagObjectType = (& git -C $ProjectRoot for-each-ref ("refs/tags/{0}" -f $Tag) --format='%(objecttype)' 2>$null | Out-String).Trim()
     if ($tagObjectType -ne 'tag') { throw [Security.SecurityException]::new(('Release tag {0} is not an annotated tag (objecttype={1}).' -f $Tag,$tagObjectType)) }
     $tagSignatureState = 'unsigned-or-unverifiable'
-    $verifyTag = (& git -C $ProjectRoot verify-tag $Tag 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -eq 0) { $tagSignatureState = 'verified' } elseif ($verifyTag -match 'gpg|no public key|not signed|cannot') { $tagSignatureState = 'not-verified' } else { $tagSignatureState = 'not-verified' }
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $verifyTag = (& git -C $ProjectRoot verify-tag $Tag 2>&1 | Out-String).Trim()
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    if ($LASTEXITCODE -eq 0) { $tagSignatureState = 'verified' } elseif ($verifyTag -match 'gpg|no public key|not signed|cannot|no signature') { $tagSignatureState = 'not-verified' } else { $tagSignatureState = 'not-verified' }
     return [pscustomobject][ordered]@{ State = 'verified'; Commit = $commit; Tag = $Tag; TreeClean = $true; TagObjectType = $tagObjectType; TagSignature = $tagSignatureState }
 }
 

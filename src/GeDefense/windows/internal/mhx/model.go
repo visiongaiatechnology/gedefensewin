@@ -150,6 +150,7 @@ type Status struct {
 	PolicySettings     PolicySettings            `json:"policySettings"`
 	ThreatIntelPolling threatintel.PollingConfig `json:"threatIntelPolling"`
 	DefenderTelemetry  *DefenderTelemetry        `json:"defenderTelemetry,omitempty"`
+	DefenderSymbiosis  *DefenderSymbiosisStatus  `json:"defenderSymbiosis,omitempty"`
 	NotificationCount  int                       `json:"notificationCount"`
 
 	// V6 egress/beacon evidence (passive detector; never enforces by itself).

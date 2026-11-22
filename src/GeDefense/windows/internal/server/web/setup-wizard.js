@@ -8,6 +8,8 @@
  * posture. Any unavailable or rejected apply remains visible as an error.
  */
 import {api, optionalApi} from './api.js';
+import {buildAgentStarterPrompt, buildWindowsAgentsMarkdown, sanitizeAgentLines} from './agents-blueprint.js';
+import {toast} from './dom.js';
 import {LANGUAGES, LANGUAGE_EVENT, LANGUAGE_NAMES, language, setLanguage} from './i18n.js';
 
 const CASES = [
@@ -66,6 +68,153 @@ let busy = false;
 let lastVerification = null;
 let previousFocus = null;
 let languageSyncHandler = null;
+let savedOwnerProcessesRaw = '';
+let savedDevRootsRaw = '';
+let liveHostSnapshot = null;
+
+async function refreshLiveHostSnapshot() {
+  try {
+    const res = await optionalApi('/api/v1/status', {signal: AbortSignal.timeout(4000)});
+    if (res?.ok && res.data) {
+      liveHostSnapshot = res.data;
+      refreshAgentsPreview();
+    }
+  } catch {
+    // Offline/unauthenticated fallback: AGENTS.md stays clean and standalone.
+  }
+}
+
+function currentAgentOptions() {
+  const item = caseById(selected);
+  const ownerRaw = overlay?.querySelector('#setupOwnerProcesses')?.value ?? savedOwnerProcessesRaw;
+  const devRaw = overlay?.querySelector('#setupDevRoots')?.value ?? savedDevRootsRaw;
+  const protection = liveHostSnapshot?.protection || {};
+  const mhx = liveHostSnapshot?.mhx || {};
+  return {
+    profile: item.id,
+    profileLabel: item.eyebrow,
+    targetProfile: item.target,
+    titanMode: item.titan,
+    autoQuarantine: item.autoQuarantine,
+    devRoots: sanitizeAgentLines(devRaw),
+    ownerProcesses: sanitizeAgentLines(ownerRaw),
+    version: liveHostSnapshot?.version || undefined,
+    platform: liveHostSnapshot?.platform || undefined,
+    posture: {
+      protectionMode: mhx.protectionMode,
+      protectionHealth: mhx.protectionHealth,
+      defender: Boolean(protection.Defender && protection.RealTimeProtection),
+      cfa: Boolean(protection.ControlledFolderAccess),
+    },
+  };
+}
+
+function downloadMarkdownFile(filename, content) {
+  const blob = new Blob([content], {type: 'text/markdown;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function copyWizardText(text, successMsg, statusNode) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.append(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    if (statusNode) {
+      statusNode.textContent = successMsg;
+      statusNode.hidden = false;
+    }
+    toast(successMsg, 'good');
+  } catch {
+    const errMsg = 'Kopieren nicht möglich – Text aus der Vorschau markieren.';
+    if (statusNode) {
+      statusNode.textContent = errMsg;
+      statusNode.hidden = false;
+    }
+    toast(errMsg, 'warning');
+  }
+}
+
+function refreshAgentsPreview() {
+  const pre = overlay?.querySelector('#setupAgentsPreview');
+  if (!pre) return;
+  pre.textContent = buildWindowsAgentsMarkdown(currentAgentOptions());
+}
+
+function agentsAssistantBox() {
+  const box = el('section', 'setup-agents-card');
+  const head = el('div', 'setup-agents-head');
+  const copy = el('div', 'setup-agents-copy');
+  copy.append(
+    el('p', 'setup-agents-kicker', 'OFFLINE-BLUEPRINT · KEINE ZENTRALE KI-API'),
+    el('h4', 'setup-agents-title', 'Mit lokalem KI-Agenten einrichten (AGENTS.md)'),
+    el('p', 'setup-agents-desc', 'Exportiert eine auf dieses Windows-System, deine installierten Programme und Entwickler-Toolchains zugeschnittene AGENTS.md. Dein eigener lokaler Agent (Codex, Antigravity, Claude Code) prüft zuerst read-only und konfiguriert ohne exponierte KI-Schnittstelle.')
+  );
+  const badge = el('span', 'setup-agents-badge', 'ZERO REMOTE AI API');
+  head.append(copy, badge);
+  box.append(head);
+
+  const feedback = el('p', 'setup-agents-status');
+  feedback.setAttribute('role', 'status');
+  feedback.hidden = true;
+
+  const actions = el('div', 'setup-agents-actions');
+  const dlBtn = el('button', 'button ghost', 'AGENTS.md herunterladen');
+  dlBtn.type = 'button';
+  dlBtn.id = 'setupDownloadAgents';
+  dlBtn.addEventListener('click', () => {
+    const md = buildWindowsAgentsMarkdown(currentAgentOptions());
+    downloadMarkdownFile('AGENTS.md', md);
+    feedback.textContent = 'AGENTS.md heruntergeladen.';
+    feedback.hidden = false;
+    toast('AGENTS.md heruntergeladen.', 'good');
+  });
+
+  const copyDocBtn = el('button', 'button ghost', 'AGENTS.md kopieren');
+  copyDocBtn.type = 'button';
+  copyDocBtn.id = 'setupCopyAgents';
+  copyDocBtn.addEventListener('click', () => {
+    const md = buildWindowsAgentsMarkdown(currentAgentOptions());
+    void copyWizardText(md, 'AGENTS.md in Zwischenablage kopiert.', feedback);
+  });
+
+  const promptBtn = el('button', 'button primary', 'KI-Startprompt kopieren');
+  promptBtn.type = 'button';
+  promptBtn.id = 'setupCopyAgentPrompt';
+  promptBtn.addEventListener('click', () => {
+    const opts = currentAgentOptions();
+    const promptText = buildAgentStarterPrompt({profile: opts.profile, profileTitle: opts.profileLabel, version: opts.version});
+    void copyWizardText(promptText, 'KI-Startprompt kopiert.', feedback);
+  });
+
+  actions.append(dlBtn, copyDocBtn, promptBtn);
+  box.append(actions, feedback);
+
+  const details = el('details', 'setup-agents-preview');
+  details.append(el('summary', '', 'AGENTS.md-Vorschau für dieses Windows-System anzeigen'));
+  const pre = el('pre', 'setup-agents-pre');
+  pre.id = 'setupAgentsPreview';
+  pre.textContent = buildWindowsAgentsMarkdown(currentAgentOptions());
+  details.append(pre);
+  box.append(details);
+  return box;
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -232,10 +381,11 @@ function welcomeStep() {
     card.addEventListener('click', () => {
       selected = item.id;
       grid.querySelectorAll('.setup-case').forEach(other => other.setAttribute('aria-pressed', other.dataset.caseId === selected ? 'true' : 'false'));
+      refreshAgentsPreview();
     });
     grid.append(card);
   });
-  intro.append(grid);
+  intro.append(grid, agentsAssistantBox());
   fragment.append(intro);
   return fragment;
 }
@@ -294,9 +444,33 @@ function recommendationStep() {
     input.rows = 3;
     input.spellcheck = false;
     input.placeholder = 'C:\\Tools\\Dev\\toolchain.exe';
+    input.value = savedOwnerProcessesRaw;
+    input.addEventListener('input', () => {
+      savedOwnerProcessesRaw = input.value;
+      refreshAgentsPreview();
+    });
     toolchain.append(input);
+
+    const rootsLabel = el('label', 'setup-toolchain-label setup-toolchain-label-spaced', 'Entwicklungsbäume / Workspaces (optional)');
+    rootsLabel.setAttribute('for', 'setupDevRoots');
+    toolchain.append(
+      rootsLabel,
+      el('p', 'setup-toolchain-help', 'Absolute Projekt- oder Repository-Ordner, einer pro Zeile (z. B. C:\\Users\\Name\\Projects). Werden bei Aktivierung und in AGENTS.md als Titan Development Roots geführt.')
+    );
+    const rootsInput = el('textarea', 'setup-toolchain-input');
+    rootsInput.id = 'setupDevRoots';
+    rootsInput.rows = 2;
+    rootsInput.spellcheck = false;
+    rootsInput.placeholder = 'C:\\Users\\Dev\\Projects';
+    rootsInput.value = savedDevRootsRaw;
+    rootsInput.addEventListener('input', () => {
+      savedDevRootsRaw = rootsInput.value;
+      refreshAgentsPreview();
+    });
+    toolchain.append(rootsInput);
     section.append(toolchain);
   }
+  section.append(agentsAssistantBox());
   fragment.append(section);
   return fragment;
 }
@@ -409,7 +583,7 @@ function mount() {
 
 function trapFocus(event) {
   if (event.key !== 'Tab') return;
-  const focusable = [...overlay.querySelectorAll('button:not([disabled]), select:not([disabled]), summary, [tabindex="0"]')].filter(node => node.offsetParent !== null);
+  const focusable = [...overlay.querySelectorAll('button:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex="0"]')].filter(node => node.offsetParent !== null);
   if (!focusable.length) return;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
@@ -462,12 +636,23 @@ async function activate() {
       signal: AbortSignal.timeout(60000),
     });
     if (selected === 'developer') {
-      const raw = overlay?.querySelector('#setupOwnerProcesses')?.value || '';
-      const images = raw.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      const raw = overlay?.querySelector('#setupOwnerProcesses')?.value ?? savedOwnerProcessesRaw;
+      savedOwnerProcessesRaw = raw;
+      const images = sanitizeAgentLines(raw);
       if (images.length) {
         await api('/api/v1/titan/owner-process-images', {
           method: 'POST',
           json: {images, reason, confirmation: 'UPDATE OWNER PROCESS IMAGES'},
+          signal: AbortSignal.timeout(60000),
+        });
+      }
+      const rawRoots = overlay?.querySelector('#setupDevRoots')?.value ?? savedDevRootsRaw;
+      savedDevRootsRaw = rawRoots;
+      const roots = sanitizeAgentLines(rawRoots);
+      for (const rootPath of roots) {
+        await api('/api/v1/titan/development-roots', {
+          method: 'POST',
+          json: {path: rootPath, reason, confirmation: 'ADD DEVELOPMENT ROOT'},
           signal: AbortSignal.timeout(60000),
         });
       }
@@ -592,6 +777,20 @@ async function complete() {
   }
 }
 
+export function openSetupWizard() {
+  if (overlay) return;
+  step = 0;
+  mount();
+  void refreshLiveHostSnapshot();
+}
+
+export async function downloadAgentsBlueprint() {
+  if (!liveHostSnapshot) await refreshLiveHostSnapshot();
+  const md = buildWindowsAgentsMarkdown(currentAgentOptions());
+  downloadMarkdownFile('AGENTS.md', md);
+  toast('AGENTS.md heruntergeladen.', 'good');
+}
+
 export async function initSetupWizard() {
   if (overlay) return true;
   let result;
@@ -602,5 +801,6 @@ export async function initSetupWizard() {
   }
   if (!result?.ok || result.data?.complete === true) return false;
   mount();
+  void refreshLiveHostSnapshot();
   return true;
 }

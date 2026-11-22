@@ -3,6 +3,23 @@
 All notable changes to GeDefense Windows are documented here. The project follows a
 versioned release history; `VERSION` is the authoritative version for builds.
 
+## [6.1.0] - 2026-11-22
+
+### Added — Microsoft Defender Deep Symbiosis, Reversible Containment & Agent Onboarding
+
+- **Microsoft Defender Deep Symbiosis (`internal/mhx/defender_*`, `internal/mhx/fair_scorer.go`):** Continuous correlation across 16 Defender operational event IDs (malware detections `1116`–`1117`, remediation failures `1118`–`1119`, ASR `1121`–`1122`, CFA `1123`–`1124`, Network Protection `1125`–`1126`, restore `5004`, tamper/weakening events `5000`–`5001`, `5007`, `5010`–`5013`) with bounded field payloads, 60s-cooldown automatic Defender self-heal reconciliation (`5001`/`5007`/`5010`/`5012`), bilateral `FairScorer` trust modulation (`CalculateFairScoreWithSymbiosis`), Defender artifact scan/oracle verification (`POST /api/v1/mhx/defender/scan-file`), and bidirectional posture reconciliation (`POST /api/v1/mhx/defender/reconcile`).
+- **Reversible `NtSuspendProcess`-Tree Containment (`internal/winapi/process_suspend_windows.go`, `internal/mhx/containment*`):** Pinned PID+CreationTime+image suspension/resume of active threat process trees with bounded containment tracking, automatic containment-safe inspection (`GET /api/v1/mhx/containments`), explicit operator resume (`POST /api/v1/mhx/containments/{id}/resume` requiring `"RESUME CONTAINED PROCESS"`), and explicit termination (`POST /api/v1/mhx/containments/{id}/terminate`).
+- **Titan → Defender Artifact Oracle (`internal/titan/engine.go`):** Bounded background artifact inspection bridging high-risk Titan ingress/persistence detections into Defender intelligence (`SetArtifactOracle`, `oracleSem`).
+- **Glass 2100 XDR Symbiosis & Containment Surface (`internal/server/web/*`):** Live Defender Symbiosis telemetry, containment controls, and one-click verification/reconcile in the MHX XDR dashboard across DE/EN/RU/ZH.
+- **First-Run Setup Wizard & Offline `AGENTS.md` Blueprint (`internal/server/web/agents-blueprint.js`, `setup-wizard.js`, `index.html`):** Guided host-, software-, and toolchain-tailored `AGENTS.md` export, clipboard copy, and starter prompt in the Setup Wizard and System view — 100% local with zero inbound/remote AI APIs or exposed credentials.
+
+### Fixed
+
+- **Inno Setup 7 UTF-8 BOM & Localization Hygiene (`installer/inno/`):** Added UTF-8 BOM (`EF BB BF`) to `GeDefense.iss` and all `terms/*.txt` files so localized umlauts, em-dashes, Cyrillic, and Simplified Chinese render without Windows-1252 mojibake, and updated license headers/messages to `6.1.0`.
+- **Threat-Intel Prefix Parser Resilience (`internal/threatintel/validate.go`, `parser.go`):** Skip over-broad `< /16` or `< /32` feed prefixes gracefully inside `parseNDJSON` instead of aborting the entire Spamhaus feed.
+- **AppControl & AppList Self-Healing (`xdr/Set-VgtMhxApp*.ps1`):** Automatic NUL/corrupt JSON quarantine and clean state recovery without breaking idempotent rule updates.
+- **Per-Path Long-Operation Rate Budgets (`internal/server/middleware.go`):** Isolated `rateLong` request budgets per normalized endpoint path so threat-intel/reconcile calls do not starve setup/hardening transitions.
+
 ## [6.0.0] - 2026-11-16
 
 ### Added — V6 Sovereign Anti-Spyware & Kernel Telemetry

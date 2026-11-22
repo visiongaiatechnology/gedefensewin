@@ -180,6 +180,37 @@ foreach ($downgradeCase in $downgradeCases) {
 }
 Add-Check -Name 'install-uses-prerelease-compare' -Passed ($install.Contains('Compare-VgtVersionParts -Left $newParts -Right $oldParts') -and -not $install.Contains('$olderThanInstalled = ($oldParts[0] -gt $newParts[0])'))
 
+# 8. Inno Setup UTF-8 BOM & version consistency (prevents CP1252 mojibake on localized terms/messages).
+$releaseVersionRaw = (Get-Content -LiteralPath (Join-Path $projectRoot 'VERSION') -Raw -Encoding UTF8).Trim()
+$innoEncodingFiles = @($innoPath) + @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'installer\inno\terms') -Filter '*.txt' -File | Sort-Object Name | ForEach-Object { $_.FullName })
+Add-Check -Name 'inno-terms-files-present' -Passed ($innoEncodingFiles.Count -ge 6) -Detail ("count=$($innoEncodingFiles.Count)")
+$mojibakeNeedles = @(
+    ([string][char]0x00C3 + [char]0x00A4),
+    ([string][char]0x00C3 + [char]0x00B6),
+    ([string][char]0x00C3 + [char]0x00BC),
+    ([string][char]0x00C3 + [char]0x0084),
+    ([string][char]0x00C3 + [char]0x009F),
+    ([string][char]0x00E2 + [char]0x20AC + [char]0x201C),
+    ([string][char]0xFFFD)
+)
+foreach ($encFile in $innoEncodingFiles) {
+    $encName = [IO.Path]::GetFileName($encFile)
+    $rawBytes = [IO.File]::ReadAllBytes($encFile)
+    $hasBom = ($rawBytes.Length -ge 3 -and $rawBytes[0] -eq 0xEF -and $rawBytes[1] -eq 0xBB -and $rawBytes[2] -eq 0xBF)
+    Add-Check -Name ('inno-utf8-bom-' + $encName) -Passed $hasBom -Detail $encFile
+    $utfText = [Text.UTF8Encoding]::new($false, $true).GetString($rawBytes)
+    $hasMojibake = $false
+    foreach ($needle in $mojibakeNeedles) {
+        if ($utfText.Contains($needle)) { $hasMojibake = $true; break }
+    }
+    Add-Check -Name ('inno-no-mojibake-' + $encName) -Passed (-not $hasMojibake) -Detail $encFile
+    if ($encName -eq 'GeDefense.iss') {
+        Add-Check -Name 'inno-script-version-matches-VERSION' -Passed ($utfText.Contains('#define MyAppVersion "' + $releaseVersionRaw + '"') -and $utfText.Contains('VersionInfoVersion=' + $releaseVersionRaw + '.0')) -Detail $releaseVersionRaw
+    } else {
+        Add-Check -Name ('inno-terms-version-' + $encName) -Passed ($utfText.Contains('GEDEFENSE WINDOWS ' + $releaseVersionRaw)) -Detail $releaseVersionRaw
+    }
+}
+
 [pscustomobject][ordered]@{
     Status = 'PASS'
     Mode = 'static-ast'
